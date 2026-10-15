@@ -1,3 +1,4 @@
+mod settings;
 use agentfs_config::{ConfigStore, initialize};
 use agentfs_engine::{Adapters, Engine, EngineConfig};
 use agentfs_local::LocalBackend;
@@ -91,6 +92,10 @@ async fn serve(settings: Arc<ConfigStore>) -> Result<()> {
         },
     )
     .await?;
+    settings.set_applier(Arc::new(settings::StorageSettings {
+        engine: engine.clone(),
+        runtime: tokio::runtime::Handle::current(),
+    }))?;
     let cancellation = CancellationToken::new();
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     let address = listener.local_addr()?;

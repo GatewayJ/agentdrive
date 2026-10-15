@@ -34,9 +34,8 @@ pub struct EngineConfig {
 pub struct Engine {
     pub services: Services,
     pub runtime: Arc<Runtime>,
-    revisions: Arc<RevisionService>,
-    publisher: Arc<ReplicaService>,
-    remote_configured: bool,
+    pub(crate) revisions: Arc<RevisionService>,
+    pub(crate) publisher: Arc<ReplicaService>,
 }
 
 impl Engine {
@@ -46,7 +45,6 @@ impl Engine {
                 "remote object and reference stores must be configured together",
             ));
         }
-        let remote_configured = adapters.remote_objects.is_some();
         let runtime = Runtime::new(adapters.state, adapters.clock).await?;
         let operations = OperationService::new(runtime.clone());
         let content = ContentService::new(
@@ -133,7 +131,6 @@ impl Engine {
             runtime,
             revisions,
             publisher,
-            remote_configured,
         }))
     }
 
@@ -173,7 +170,7 @@ impl Engine {
     }
 
     pub async fn sync_pending(&self) -> Result<()> {
-        if !self.remote_configured {
+        if self.revisions.trees.content.remote().is_none() {
             return Ok(());
         }
         let mut first_error = None;

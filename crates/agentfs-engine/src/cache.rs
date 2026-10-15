@@ -151,7 +151,7 @@ impl CacheApi for CacheService {
                 .await?;
             let (paths, objects) = self.selection(&request).await?;
             let cached = self.inspect(&request, paths.clone(), &objects).await?;
-            let protected = self.trees.content.refs.is_some() && !cached.complete;
+            let protected = self.trees.content.refs().is_some() && !cached.complete;
             if protected {
                 self.trees
                     .content
@@ -254,6 +254,9 @@ impl CacheApi for CacheService {
 
     async fn collect(&self) -> Result<u64> {
         let _exclusive = self.runtime.objects.write().await;
+        if self.trees.content.remote().is_none() {
+            return Ok(0);
+        }
         let snapshot = self.config.load();
         let config = &snapshot.values.cache;
         let mut entries = Vec::new();

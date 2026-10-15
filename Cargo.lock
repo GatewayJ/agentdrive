@@ -41,6 +41,7 @@ dependencies = [
  "agentfs-model",
  "agentfs-ports",
  "agentfs-test-support",
+ "arc-swap",
  "async-trait",
  "bytes",
  "parking_lot",

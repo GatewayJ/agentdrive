@@ -12,10 +12,11 @@ mod revisions;
 mod runtime;
 mod sessions;
 mod snapshots;
+mod storage;
 mod trees;
 mod workspaces;
 
-pub use content::ContentService;
+pub use content::{ContentService, RemoteStorage};
 pub(crate) use operations::OperationService;
 pub use runtime::Runtime;
 pub(crate) use trees::TreeService;

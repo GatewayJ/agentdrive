@@ -64,7 +64,7 @@
               <p class="settings-help">正在使用的内容、工作分支及尚未确认上传的内容受到保护，清理结果可能高于目标容量。</p>
             </section>
             <section class="panel settings-panel" aria-labelledby="storage-title">
-              <div class="settings-heading"><div><h2 id="storage-title">存储设置</h2><p>本地模式保存全部版本内容。S3 模式将版本内容同步到远程存储。</p></div><span class="pill">S3 连接重启后生效</span></div>
+              <div class="settings-heading"><div><h2 id="storage-title">存储设置</h2><p>本地模式保存全部版本内容。S3 模式将版本内容同步到远程存储。切换会补齐历史内容，完成后继续使用当前挂载目录。</p></div><span class="pill">保存后切换</span></div>
               <div class="storage-fields">
                 <label>存储模式<select id="storage-mode"><option value="local">本地存储</option><option value="s3">S3 存储</option></select></label>
                 <label>Endpoint<input id="s3-endpoint" type="url" placeholder="https://s3.example.com" spellcheck="false"></label>

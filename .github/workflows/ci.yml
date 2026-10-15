@@ -59,6 +59,7 @@ jobs:
         run: |
           make -j "$(nproc)" test CARGO_FLAGS='-p agentfs-s3 -- --ignored --nocapture'
           python3 tests/replica_smoke.py
+          python3 tests/storage_smoke.py
       - name: Stop isolated RustFS
         if: always()
         run: docker rm -f agentfs-test-s3 || true

@@ -11,7 +11,7 @@ pub struct ReplicaService {
     trees: Arc<TreeService>,
     content: Arc<ContentService>,
     operations: Arc<OperationService>,
-    publication: Mutex<()>,
+    pub(crate) publication: Mutex<()>,
 }
 
 impl ReplicaService {
@@ -35,7 +35,7 @@ impl ReplicaService {
         workspace: WorkspaceId,
         roots: Vec<ObjectRef>,
     ) -> Result<()> {
-        let remote = self.content.remote.as_ref().ok_or_else(|| {
+        let remote = self.content.remote().ok_or_else(|| {
             Error::new(
                 ErrorCode::RemoteRequired,
                 "remote storage is not configured",
@@ -115,7 +115,7 @@ impl ReplicaService {
     }
 
     async fn publish_job(&self, job: &SyncJob) -> Result<()> {
-        let refs = self.content.refs.as_ref().ok_or_else(|| {
+        let refs = self.content.refs().ok_or_else(|| {
             Error::new(
                 ErrorCode::RemoteRequired,
                 "remote storage is not configured",
@@ -282,7 +282,7 @@ pub(crate) fn decode_branch_ref(
 #[async_trait]
 impl ReplicaPublisher for ReplicaService {
     async fn publish_workspace(&self, workspace: WorkspaceId) -> Result<()> {
-        let refs = self.content.refs.as_ref().ok_or_else(|| {
+        let refs = self.content.refs().ok_or_else(|| {
             Error::new(
                 ErrorCode::RemoteRequired,
                 "remote storage is not configured",
@@ -468,13 +468,13 @@ impl ReplicaPublisher for ReplicaService {
     }
 
     async fn discover(&self, workspace: WorkspaceId) -> Result<Vec<BranchRef>> {
-        let refs = self.content.refs.as_ref().ok_or_else(|| {
+        let _protection = self.runtime.objects.read().await;
+        let refs = self.content.refs().ok_or_else(|| {
             Error::new(
                 ErrorCode::RemoteRequired,
                 "remote storage is not configured",
             )
         })?;
-        let _protection = self.runtime.objects.read().await;
         let mut result = Vec::new();
         for id in refs.list_branches(workspace).await? {
             let Some(value) = refs
@@ -574,7 +574,8 @@ impl ReplicaApi for ReplicaService {
             .await?
             .is_none()
         {
-            let refs = self.content.refs.as_ref().ok_or_else(|| {
+            let _protection = self.runtime.objects.read().await;
+            let refs = self.content.refs().ok_or_else(|| {
                 Error::new(
                     ErrorCode::RemoteRequired,
                     "remote storage is not configured",
@@ -600,7 +601,6 @@ impl ReplicaApi for ReplicaService {
             control
                 .workspace
                 .authorize(&context.principal, None, Permission::Read)?;
-            let _protection = self.runtime.objects.read().await;
             self.content
                 .metadata(request.workspace, &control.initial_revision.root)
                 .await?;

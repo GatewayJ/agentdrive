@@ -9,7 +9,7 @@ use std::{
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
@@ -95,6 +95,16 @@ pub struct SettingsUpdate {
     pub runtime: RuntimeConfig,
 }
 
+/// 配置文件替换与资源切换共用一次操作，准备失败时保留当前配置。
+pub trait ConfigApplier: Send + Sync + std::fmt::Debug {
+    fn apply(
+        &self,
+        previous: &RuntimeConfig,
+        next: &RuntimeConfig,
+        persist: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()>;
+}
+
 /// 写入与文件加载使用同一个锁；业务操作通过 ArcSwap 读取配置。
 #[derive(Debug)]
 pub struct ConfigStore {
@@ -102,6 +112,7 @@ pub struct ConfigStore {
     startup: StartupConfig,
     live: Arc<LiveConfig>,
     writer: Mutex<()>,
+    applier: OnceLock<Arc<dyn ConfigApplier>>,
 }
 
 impl ConfigStore {
@@ -119,7 +130,29 @@ impl ConfigStore {
             startup: config.startup,
             live,
             writer: Mutex::new(()),
+            applier: OnceLock::new(),
         }))
+    }
+
+    pub fn set_applier(&self, applier: Arc<dyn ConfigApplier>) -> Result<()> {
+        self.applier.set(applier).map_err(|_| {
+            Error::new(
+                ErrorCode::Conflict,
+                "configuration applier is already installed",
+            )
+        })
+    }
+
+    fn apply(
+        &self,
+        previous: &RuntimeConfig,
+        next: &RuntimeConfig,
+        persist: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
+        match self.applier.get() {
+            Some(applier) => applier.apply(previous, next, persist),
+            None => persist(),
+        }
     }
 
     pub fn startup(&self) -> &StartupConfig {
@@ -191,6 +224,15 @@ impl ConfigStore {
                     ),
                 ));
             }
+            self.apply(&current.values, &config.runtime(), &mut || {
+                if self::revision(&read(&self.path)?) != revision {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        "configuration changed during reload",
+                    ));
+                }
+                Ok(())
+            })?;
             self.live.0.store(Arc::new(Snapshot {
                 revision,
                 values: config.runtime(),
@@ -255,16 +297,21 @@ impl ConfigStore {
             .set_permissions(fs::metadata(&self.path)?.permissions())?;
         temporary.write_all(&bytes)?;
         temporary.as_file().sync_all()?;
-        // 在替换文件前再次检查外部修改。
-        if revision(&read(&self.path)?) != update.revision {
-            return Err(Error::new(
-                ErrorCode::Conflict,
-                "configuration changed; reload settings before saving",
-            ));
-        }
-        temporary
-            .persist(&self.path)
-            .map_err(|error| Error::from(error.error))?;
+        let mut temporary = Some(temporary);
+        self.apply(&current.values, &config.runtime(), &mut || {
+            if revision(&read(&self.path)?) != update.revision {
+                return Err(Error::new(
+                    ErrorCode::Conflict,
+                    "configuration changed; reload settings before saving",
+                ));
+            }
+            temporary
+                .take()
+                .ok_or_else(|| Error::integrity("configuration was already persisted"))?
+                .persist(&self.path)
+                .map_err(|error| Error::from(error.error))?;
+            Ok(())
+        })?;
         let reload_error = sync_directory(parent)
             .err()
             .map(|error| format!("configuration applied; directory sync failed: {error}"));

@@ -94,6 +94,61 @@ impl S3Backend {
         }))
     }
 
+    /// 使用独立的临时对象检查读取、条件写入和删除权限。
+    pub async fn check_connection(&self) -> Result<()> {
+        let key = Path::from(format!(
+            "{}/.connection-check/{}",
+            self.prefix,
+            OperationId::new()
+        ));
+        let result = async {
+            let created = self
+                .client
+                .put_opts(
+                    &key,
+                    Bytes::from_static(b"agentfs").into(),
+                    object_store::PutOptions {
+                        mode: PutMode::Create,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(store_error)?;
+            let contents = self
+                .client
+                .get(&key)
+                .await
+                .map_err(store_error)?
+                .bytes()
+                .await
+                .map_err(store_error)?;
+            if contents.as_ref() != b"agentfs" {
+                return Err(Error::integrity(
+                    "S3 connection check returned different contents",
+                ));
+            }
+            self.client
+                .put_opts(
+                    &key,
+                    Bytes::from_static(b"checked").into(),
+                    object_store::PutOptions {
+                        mode: PutMode::Update(UpdateVersion {
+                            e_tag: created.e_tag,
+                            version: created.version,
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(store_error)?;
+            Ok(())
+        }
+        .await;
+        let cleanup = self.client.delete(&key).await.map_err(store_error);
+        result?;
+        cleanup
+    }
+
     fn object_key(&self, workspace: WorkspaceId, object: &ObjectId) -> Path {
         Path::from(format!("{}/{workspace}/objects/{object}", self.prefix))
     }

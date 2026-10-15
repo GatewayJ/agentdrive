@@ -40,7 +40,7 @@ impl OwnershipService {
         request: TransferOwnership,
     ) -> Result<OperationRecord> {
         let content = &self.revisions.trees.content;
-        let refs = content.refs.as_ref().ok_or_else(|| {
+        let refs = content.refs().ok_or_else(|| {
             Error::new(
                 ErrorCode::RemoteRequired,
                 "ownership transfer requires remote storage",

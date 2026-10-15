@@ -1,5 +1,6 @@
 use agentfs_model::*;
 use agentfs_ports::*;
+use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
 use bytes::Bytes;
 use parking_lot::Mutex;
@@ -11,17 +12,27 @@ use tokio::{io::AsyncReadExt, sync::Mutex as AsyncMutex};
 
 type DownloadGates = BTreeMap<(WorkspaceId, ObjectId), Weak<AsyncMutex<()>>>;
 
+#[derive(Clone)]
+pub struct RemoteStorage {
+    pub objects: Arc<dyn RemoteObjectStore>,
+    pub refs: Arc<dyn RemoteRefStore>,
+}
+impl std::fmt::Debug for RemoteStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemoteStorage").finish_non_exhaustive()
+    }
+}
+
 pub struct ContentService {
     pub(crate) local: Arc<dyn LocalObjectStore>,
-    pub(crate) remote: Option<Arc<dyn RemoteObjectStore>>,
-    pub(crate) refs: Option<Arc<dyn RemoteRefStore>>,
+    pub(crate) storage: ArcSwapOption<RemoteStorage>,
     downloads: Mutex<DownloadGates>,
 }
 
 impl std::fmt::Debug for ContentService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ContentService")
-            .field("remote", &self.remote.is_some())
+            .field("remote", &self.remote().is_some())
             .finish_non_exhaustive()
     }
 }
@@ -34,10 +45,22 @@ impl ContentService {
     ) -> Arc<Self> {
         Arc::new(Self {
             local,
-            remote,
-            refs,
+            storage: ArcSwapOption::new(
+                remote
+                    .zip(refs)
+                    .map(|(objects, refs)| Arc::new(RemoteStorage { objects, refs })),
+            ),
             downloads: Mutex::new(BTreeMap::new()),
         })
+    }
+
+    pub(crate) fn remote(&self) -> Option<Arc<dyn RemoteObjectStore>> {
+        self.storage
+            .load_full()
+            .map(|storage| storage.objects.clone())
+    }
+    pub(crate) fn refs(&self) -> Option<Arc<dyn RemoteRefStore>> {
+        self.storage.load_full().map(|storage| storage.refs.clone())
     }
 
     pub(crate) async fn control(
@@ -45,7 +68,7 @@ impl ContentService {
         workspace: WorkspaceId,
         mutate: impl Fn(&mut WorkspaceControl) -> Result<bool> + Send,
     ) -> Result<()> {
-        let refs = self.refs.as_ref().ok_or_else(|| {
+        let refs = self.refs().ok_or_else(|| {
             Error::new(
                 ErrorCode::RemoteRequired,
                 "remote storage is not configured",
@@ -128,7 +151,7 @@ impl ContentResolver for ContentService {
             Err(error) if error.code == ErrorCode::NotFound => (),
             Err(error) => return Err(error),
         }
-        let remote = self.remote.as_ref().ok_or_else(|| {
+        let remote = self.remote().ok_or_else(|| {
             Error::new(
                 ErrorCode::Unavailable,
                 "object is not cached and remote storage is unavailable",
@@ -199,7 +222,7 @@ impl ContentResolver for ContentService {
         operation: OperationId,
         roots: Vec<ObjectRef>,
     ) -> Result<()> {
-        if self.refs.is_none() {
+        if self.refs().is_none() {
             return Ok(());
         }
         self.control(workspace, move |control| {
@@ -223,7 +246,7 @@ impl ContentResolver for ContentService {
     }
 
     async fn release_remote(&self, workspace: WorkspaceId, operation: OperationId) -> Result<()> {
-        if self.refs.is_none() {
+        if self.refs().is_none() {
             return Ok(());
         }
         self.control(workspace, move |control| {

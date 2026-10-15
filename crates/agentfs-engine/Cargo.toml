@@ -9,6 +9,7 @@ license.workspace = true
 agentfs-config.workspace = true
 agentfs-model.workspace = true
 agentfs-ports.workspace = true
+arc-swap.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 parking_lot.workspace = true

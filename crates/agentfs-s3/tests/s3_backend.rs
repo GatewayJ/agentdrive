@@ -48,6 +48,7 @@ async fn s3_conditional_refs_and_streaming_objects() {
         allow_http: true,
     })
     .unwrap();
+    backend.check_connection().await.unwrap();
     let workspace = WorkspaceId::new();
     let branch = BranchId::new();
     let key = RefKey::Branch { workspace, branch };

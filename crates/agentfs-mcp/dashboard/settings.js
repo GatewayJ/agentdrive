@@ -9,7 +9,7 @@ export function createSettingsPage({api, element, $}) {
     $('settings-save').disabled = busy || !dirty;
     $('settings-reload').disabled = busy;
     $('settings-fields').disabled = busy;
-    $('settings-state').textContent = busy ? '正在处理…' : dirty ? '有尚未保存的修改' : '当前配置已生效';
+    $('settings-state').textContent = busy ? '正在处理，存储切换期间需要传输历史内容…' : dirty ? '有尚未保存的修改' : '当前配置已生效';
     $('settings-reload').textContent = dirty ? '重新载入并放弃修改' : '重新载入';
   }
   function changed() { dirty = true; message('settings-notice', ''); state(); }
@@ -146,9 +146,9 @@ export function createSettingsPage({api, element, $}) {
       busy = true; state(); message('settings-error', '');
       const data = await api('/api/settings', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(update)});
       if (request !== generation) return;
-      render(data); message('settings-notice', '配置已保存。S3 连接设置重启 daemon 后生效。');
+      render(data); message('settings-notice', '配置已保存并生效。');
     } catch (error) {
-      if (request === generation) message('settings-error', error.status === 409 ? '配置已经更新，保存未覆盖现有内容。请重新载入后修改。' : error.message);
+      if (request === generation) message('settings-error', error.message);
     } finally { if (request === generation) { busy = false; state(); } }
   });
   return {

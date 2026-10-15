@@ -2115,3 +2115,203 @@ async fn cache_and_merge_validation_use_reloaded_configuration() {
         .unwrap();
     assert_eq!(rejected.error.unwrap().code, ErrorCode::NotFound);
 }
+
+#[tokio::test]
+async fn storage_switch_preserves_history_mounts_and_pending_publications() {
+    let remote = Arc::new(MemoryRemote::default());
+    let harness = Harness::new(None).await;
+    let workspace = harness.workspace().await;
+    let (session, fs) = harness.session(workspace.id, "switch", None).await;
+    let file = harness.write_new(&fs, "file", b"old bytes").await;
+    let old = harness.commit(session.branch).await;
+    let object = harness
+        .local
+        .node(session.branch, file.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .inode
+        .content
+        .unwrap();
+    let target = || {
+        Some(RemoteStorage {
+            objects: remote.clone(),
+            refs: remote.clone(),
+        })
+    };
+    let mut persisted = false;
+    remote.set_available(false);
+    assert!(
+        harness
+            .engine
+            .switch_storage(target(), &mut || {
+                persisted = true;
+                Ok(())
+            })
+            .await
+            .is_err()
+    );
+    assert!(!persisted);
+    assert!(
+        !harness
+            .engine
+            .services
+            .workspace
+            .status(&actor(), workspace.id)
+            .await
+            .unwrap()
+            .capabilities
+            .remote_configured
+    );
+    remote.set_available(true);
+    // 配置文件保存失败时，当前适配器继续有效；远程内容可以重复发布。
+    assert!(
+        harness
+            .engine
+            .switch_storage(target(), &mut || Err(Error::new(
+                ErrorCode::Io,
+                "injected configuration write failure"
+            )))
+            .await
+            .is_err()
+    );
+    assert!(
+        !harness
+            .engine
+            .services
+            .workspace
+            .status(&actor(), workspace.id)
+            .await
+            .unwrap()
+            .capabilities
+            .remote_configured
+    );
+    harness
+        .engine
+        .switch_storage(target(), &mut || Ok(()))
+        .await
+        .unwrap();
+    harness.engine.sync_pending().await.unwrap();
+    assert!(
+        harness
+            .local
+            .sync_jobs(workspace.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(remote.contains(workspace.id, &object).await.unwrap());
+    let handle = harness
+        .engine
+        .services
+        .files
+        .open(
+            &fs,
+            file.id,
+            OpenMode {
+                read: true,
+                write: true,
+                append: false,
+            },
+        )
+        .await
+        .unwrap();
+    harness
+        .engine
+        .services
+        .files
+        .write(&fs, handle.id, 0, Bytes::from_static(b"new bytes"))
+        .await
+        .unwrap();
+    harness
+        .engine
+        .services
+        .files
+        .release(&fs, handle.id)
+        .await
+        .unwrap();
+    harness.commit(session.branch).await;
+    harness.engine.sync_pending().await.unwrap();
+    harness.engine.services.cache.collect().await.unwrap();
+    assert!(!harness.local.contains(workspace.id, &object).await.unwrap());
+    remote.set_available(false);
+    assert!(
+        harness
+            .engine
+            .switch_storage(None, &mut || Ok(()))
+            .await
+            .is_err()
+    );
+    assert!(
+        harness
+            .engine
+            .services
+            .workspace
+            .status(&actor(), workspace.id)
+            .await
+            .unwrap()
+            .capabilities
+            .remote_configured
+    );
+    remote.set_available(true);
+    harness
+        .engine
+        .switch_storage(None, &mut || Ok(()))
+        .await
+        .unwrap();
+    remote.set_available(false);
+    assert!(harness.local.contains(workspace.id, &object).await.unwrap());
+    assert_eq!(harness.engine.services.cache.collect().await.unwrap(), 0);
+    let read = harness
+        .engine
+        .services
+        .revisions
+        .read_file(&actor(), workspace.id, old, path("/file"), 0, 100)
+        .await
+        .unwrap();
+    assert_eq!(read.as_ref(), b"old bytes");
+    assert_eq!(
+        harness.local.mount(fs.mount).await.unwrap().unwrap().state,
+        MountState::Ready
+    );
+    harness.write_new(&fs, "after", b"local change").await;
+    harness.commit(session.branch).await;
+    assert!(
+        !harness
+            .local
+            .sync_jobs(workspace.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    remote.set_available(true);
+    harness
+        .engine
+        .switch_storage(target(), &mut || Ok(()))
+        .await
+        .unwrap();
+    harness.engine.sync_pending().await.unwrap();
+    assert!(
+        harness
+            .local
+            .sync_jobs(workspace.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // 另一个存储目标也能接收已经完成同步的历史与分支引用。
+    let other = Arc::new(MemoryRemote::default());
+    harness
+        .engine
+        .switch_storage(
+            Some(RemoteStorage {
+                objects: other.clone(),
+                refs: other.clone(),
+            }),
+            &mut || Ok(()),
+        )
+        .await
+        .unwrap();
+    assert!(other.contains(workspace.id, &object).await.unwrap());
+    assert!(!other.list_branches(workspace.id).await.unwrap().is_empty());
+}

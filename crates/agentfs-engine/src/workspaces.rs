@@ -215,7 +215,7 @@ impl WorkspaceApi for WorkspaceService {
                 ]
                 .map(str::to_owned)
                 .to_vec(),
-                remote_configured: self.revisions.trees.content.remote.is_some(),
+                remote_configured: self.revisions.trees.content.remote().is_some(),
                 automatic_text_merge: false,
                 physical_remote_gc: false,
                 single_location_session: false,

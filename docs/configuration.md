@@ -30,14 +30,15 @@ Token files must be regular files, at most 4096 bytes, containing at least 32 no
 
 ## Runtime updates and dashboard settings
 
-Open **Settings** in the dashboard sidebar, or visit `/settings`. Authenticate with an administrator token. The form edits cache sizes in MiB, S3 connections and credentials, named container validation checks, and allowed HTTP origins. Saved S3 connection changes require a daemon restart. Saving persists the changes to the same `agentfs.json` used to start the daemon and publishes one configuration snapshot. The configuration retains its existing top-level structure; optional defaults remain omitted when saving.
+Open **Settings** in the dashboard sidebar, or visit `/settings`. Authenticate with an administrator token. The form edits cache sizes in MiB, S3 connections and credentials, named container validation checks, and allowed HTTP origins. Saved S3 connection changes are applied while the daemon runs. Saving persists the changes to the same `agentfs.json` used to start the daemon and publishes one configuration snapshot. The configuration retains its existing top-level structure; optional defaults remain omitted when saving.
 
 | Configuration | Effective time |
 | --- | --- |
+| `remote` | After preparing history and the destination connection, without restarting |
 | `cache` | Next cache collection; the background worker runs every 30 seconds |
 | `validation` | Next validation operation; an operation already running retains its configuration |
 | `allowed_origins` | Next HTTP request, including existing MCP sessions |
-| `data_dir`, `listen`, `mount_roots`, `directory_roots`, `remote` | After a daemon restart |
+| `data_dir`, `listen`, `mount_roots`, `directory_roots` | After a daemon restart |
 | `credentials`, token-file contents, `administrators`, `docker`, process environment | After a daemon restart |
 
 Origins use the exact `scheme://host[:port]` form for HTTP or HTTPS, without a path, trailing slash, credentials, wildcard, or an explicit default port. Same-origin dashboard requests and requests without Origin remain supported. Bearer authentication still applies. This setting controls Origin checks and does not enable CORS response headers.
@@ -50,6 +51,14 @@ The authenticated HTTP interface provides:
 - `PUT /api/settings`: `{ "revision": "<revision from GET>", "runtime": { "cache": { ... }, "validation": { ... }, "allowed_origins": [], "remote": null } }`. Supply the complete runtime object returned by GET. A successful response returns the saved settings.
 
 Both endpoints require membership in `administrators`; workspace grants do not grant settings access. Responses contain token-file paths but never token contents or S3 environment credentials. Missing authentication returns 401, insufficient settings access returns 403, and a stale revision or a detected external file edit returns 409. Validation failure preserves the active settings and file. The UI preserves unsaved form values when it detects a newer revision and offers an explicit reload action.
+
+## Switching storage while running
+
+Select local or S3 mode in Settings and save. `remote.enabled: false` retains S3 settings and credentials for later use. Direct configuration-file edits use the same transition.
+
+Enabling S3 checks read, conditional-write and delete access, copies locally known history and branch references, then persists configuration and replaces the connection. Returning to local storage downloads evicted history and disables historical cache eviction. Mounts and working directories remain available; pending publications are retained until S3 is enabled again.
+
+Some operations wait while history is transferred. Missing content, insufficient local space, an advanced destination branch, credential errors or a configuration write failure retain the active connection. The destination may already contain immutable objects and references; retrying continues safely. Complete pending ownership transfers before changing storage. Failed external file edits retain the active runtime settings, display an error, and are retried by the file watcher. The connection check creates and deletes temporary objects beneath `.connection-check/` in the configured namespace.
 
 ## S3 fields
 
