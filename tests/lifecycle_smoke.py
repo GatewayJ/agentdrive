@@ -147,6 +147,13 @@ with tempfile.TemporaryDirectory(prefix='agentfs-lifecycle-') as temporary:
             process.wait(timeout=30)
             assert process.returncode != 0
             assert any(turn['status'] == 'interrupted' for turn in records(workspace)), records(workspace)
+            previous_turns = {turn['turn_id'] for turn in records(workspace)}
+            process, send, wait = spawn(protocol, workspace)
+            send(prompt(10, 'exit-success'))
+            process.wait(timeout=30)
+            assert process.returncode == 0, (root / 'test.log').read_text()
+            interrupted = [turn for turn in records(workspace) if turn['turn_id'] not in previous_turns]
+            assert len(interrupted) == 1 and interrupted[0]['status'] == 'interrupted', interrupted
             process, send, wait = spawn(protocol, workspace)
             send(prompt(7, 'completed'))
             if protocol == 'acp':
@@ -194,6 +201,9 @@ with tempfile.TemporaryDirectory(prefix='agentfs-lifecycle-') as temporary:
             if process.poll() is None:
                 process.kill()
                 process.wait()
+            for stream in (process.stdin, process.stdout):
+                if stream and not stream.closed:
+                    stream.close()
         if daemon and daemon.poll() is None:
             daemon.terminate()
             daemon.wait(timeout=30)

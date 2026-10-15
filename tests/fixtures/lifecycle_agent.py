@@ -47,8 +47,8 @@ for line in sys.stdin:
         if protocol != 'acp':
             send({'method': 'turn/started', 'params': {'threadId': thread, 'turn': {'id': external, 'status': 'inProgress'}}})
             send({'id': request, 'result': {'turn': {'id': external, 'status': 'inProgress'}, **({'reviewThreadId': thread} if method == 'review/start' else {})}})
-        if action == 'exit':
-            os._exit(3)
+        if action in ('exit', 'exit-success'):
+            os._exit(0 if action == 'exit-success' else 3)
         if action == 'hold':
             pending = (request, external)
             send({'method': 'fixture/holding', 'params': {}})

@@ -84,14 +84,16 @@ async fn main() {
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
         )
         .init();
-    match run(Arguments::parse()).await {
-        Ok(true) => {}
-        Ok(false) => std::process::exit(2),
+    let code = match run(Arguments::parse()).await {
+        Ok(true) => 0,
+        Ok(false) => 2,
         Err(error) => {
             eprintln!("{error}");
-            std::process::exit(1);
+            1
         }
-    }
+    };
+    // stdin 的阻塞读取可能仍在等待输入；run 已完成持久化和连接清理。
+    std::process::exit(code);
 }
 fn read_token(path: Option<&Path>) -> Result<String> {
     match path {

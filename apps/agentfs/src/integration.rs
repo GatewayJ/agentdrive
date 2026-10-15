@@ -553,9 +553,10 @@ pub async fn run(endpoint: &str, token: String, options: Options) -> Result<bool
             Ok(())
         }.await;
         drop(child_input);
-        let status = match child.try_wait()? {
-            Some(status) => Some(status),
-            None => { child.kill().await?; child.wait().await?; None },
+        // stdout 关闭和进程退出之间可能存在时间差，等待实际退出状态。
+        let status = match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+            Ok(status) => Some(status?),
+            Err(_) => { child.kill().await?; child.wait().await?; None },
         };
         result?;
         Ok(status.is_none_or(|status| status.success()))
