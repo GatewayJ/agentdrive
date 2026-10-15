@@ -149,7 +149,7 @@ impl Harness {
         };
         (binding, fs)
     }
-    async fn write_new(&self, fs: &FsContext, name: &str, bytes: &'static [u8]) -> Inode {
+    async fn write_new(&self, fs: &FsContext, name: &str, bytes: &[u8]) -> Inode {
         let file = self
             .engine
             .services
@@ -175,7 +175,7 @@ impl Harness {
         self.engine
             .services
             .files
-            .write(fs, handle.id, 0, Bytes::from_static(bytes))
+            .write(fs, handle.id, 0, Bytes::copy_from_slice(bytes))
             .await
             .unwrap();
         self.engine
@@ -240,11 +240,7 @@ async fn open(
         directory,
         remote,
         LiveConfig::new(RuntimeConfig {
-            cache: CacheConfig {
-                max_bytes: 1,
-                target_bytes: 0,
-                min_free_bytes: 0,
-            },
+            cache: CacheConfig { max_bytes: 1 },
             ..Default::default()
         })
         .unwrap(),
@@ -1978,7 +1974,7 @@ async fn branch_switch_preserves_edits_and_waits_for_active_turns_and_handles() 
 }
 
 #[tokio::test]
-async fn cache_uses_reloaded_configuration() {
+async fn cache_uses_reloaded_capacity_and_collects_to_three_quarters() {
     let directory = tempfile::tempdir().unwrap();
     let path = initialize(
         &directory.path().join("configuration"),
@@ -2001,41 +1997,41 @@ async fn cache_uses_reloaded_configuration() {
     };
     let workspace = harness.workspace().await;
     let (source, source_fs) = harness.session(workspace.id, "source", None).await;
-    let old_file = harness.write_new(&source_fs, "old", b"old content").await;
+    let mib = 1024 * 1024;
+    for index in 0..4 {
+        let name = format!("old-{index}");
+        harness
+            .write_new(&source_fs, &name, &vec![index; mib])
+            .await;
+        harness.commit(source.branch).await;
+        harness
+            .engine
+            .services
+            .files
+            .unlink(&source_fs, InodeId::ROOT, &name, false)
+            .await
+            .unwrap();
+    }
+    let current = harness
+        .write_new(&source_fs, "current", &vec![4; mib])
+        .await;
     harness.commit(source.branch).await;
-    let old_object = harness
+    let current_object = harness
         .local
-        .node(source.branch, old_file.id)
+        .node(source.branch, current.id)
         .await
         .unwrap()
         .unwrap()
         .inode
         .content
         .unwrap();
-    harness
-        .engine
-        .services
-        .files
-        .unlink(&source_fs, InodeId::ROOT, "old", false)
-        .await
-        .unwrap();
-    harness.write_new(&source_fs, "new", b"new content").await;
-    harness.commit(source.branch).await;
     harness.sync(workspace.id, SyncDirection::Push).await;
     assert_eq!(harness.engine.services.cache.collect().await.unwrap(), 0);
-    assert!(
-        harness
-            .local
-            .contains(workspace.id, &old_object)
-            .await
-            .unwrap()
-    );
+    assert!(harness.local.stats().await.unwrap().cached_bytes > 5 * mib as u64);
     let initial = config.settings(&actor()).unwrap();
     let mut runtime = initial.runtime;
     runtime.cache = CacheConfig {
-        max_bytes: 1,
-        target_bytes: 0,
-        min_free_bytes: 0,
+        max_bytes: 4 * mib as u64,
     };
     config
         .update(
@@ -2047,10 +2043,14 @@ async fn cache_uses_reloaded_configuration() {
         )
         .unwrap();
     assert!(harness.engine.services.cache.collect().await.unwrap() > 0);
+    let remaining = harness.local.stats().await.unwrap().cached_bytes;
+    assert!(remaining <= 3 * mib as u64, "remaining bytes: {remaining}");
+    assert!(remaining > 2 * mib as u64, "remaining bytes: {remaining}");
+    assert_eq!(harness.engine.services.cache.collect().await.unwrap(), 0);
     assert!(
-        !harness
+        harness
             .local
-            .contains(workspace.id, &old_object)
+            .contains(workspace.id, &current_object)
             .await
             .unwrap()
     );

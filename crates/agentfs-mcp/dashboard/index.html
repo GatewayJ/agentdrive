@@ -54,15 +54,6 @@
         <div id="reload-error" class="error-banner" role="alert" hidden></div>
         <form id="settings-form" hidden>
           <fieldset id="settings-fields">
-            <section class="panel settings-panel" aria-labelledby="cache-title">
-              <div class="settings-heading"><div><h2 id="cache-title">本地缓存</h2><p>S3 模式下，后台任务每 30 秒检查缓存。新设置用于下一次清理。</p></div><span class="pill">保存后生效</span></div>
-              <div class="settings-grid">
-                <label>容量上限 <span class="input-unit"><input id="cache-max" type="number" min="0" step="any" required><span>MiB</span></span><small>超过此容量时，开始清理可回收内容。</small></label>
-                <label>清理目标 <span class="input-unit"><input id="cache-target" type="number" min="0" step="any" required><span>MiB</span></span><small>必须小于容量上限。</small></label>
-                <label>可用空间下限 <span class="input-unit"><input id="cache-free" type="number" min="0" step="any" required><span>MiB</span></span><small>低于此值时，尝试释放缓存空间。</small></label>
-              </div>
-              <p class="settings-help">正在使用的内容、工作分支及尚未确认上传的内容受到保护，清理结果可能高于目标容量。</p>
-            </section>
             <section class="panel settings-panel" aria-labelledby="storage-title">
               <div class="settings-heading"><div><h2 id="storage-title">存储设置</h2><p>本地模式保存全部版本内容。S3 模式将版本内容同步到远程存储。切换会补齐历史内容，完成后继续使用当前挂载目录。</p></div><span class="pill">保存后切换</span></div>
               <div class="storage-fields">
@@ -78,6 +69,11 @@
               </div>
               <label class="storage-check"><input id="s3-http" type="checkbox">允许使用 HTTP Endpoint</label>
               <p class="settings-help">密钥保存在当前配置文件中，请限制该文件的访问权限。页面不会返回已保存的 Secret Access Key 或 Session Token。修改 Session Token 时请同时填写 Secret Access Key。</p>
+            </section>
+            <section id="cache-panel" class="panel settings-panel" aria-labelledby="cache-title" hidden>
+              <div class="settings-heading"><div><h2 id="cache-title">本地缓存</h2><p>后台每 30 秒检查一次。超过容量时，自动清理到设置容量的 75%；磁盘空间不足时也会尝试清理。</p></div><span class="pill">保存后生效</span></div>
+              <label class="cache-capacity">本地缓存容量 <span class="input-unit"><input id="cache-max" type="number" min="0" step="any" aria-describedby="cache-help"><span>GiB</span></span><small>默认 2 GiB，可填写小数。</small></label>
+              <p id="cache-help" class="settings-help">此设置管理可重新下载的版本内容缓存。正在使用、尚未上传或固定保留的内容受到保护，实际占用可能超过设置容量。</p>
             </section>
             <section class="panel settings-panel" aria-labelledby="origins-title">
               <div class="settings-heading"><div><h2 id="origins-title">HTTP 访问来源</h2><p>允许发送请求的额外页面来源，下一次请求使用新设置。</p></div><span class="pill">保存后生效</span></div>

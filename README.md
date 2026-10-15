@@ -73,27 +73,31 @@ The branch owner, epoch, generation, and head are checked for guarded changes. O
 
 `agentfs.json` uses absolute filesystem paths. `mount_roots` permits mount destinations; `directory_roots` permits import and export paths. Imports require a stable source directory and reject symbolic links and incompatible names. Exports create a new directory and preserve file bytes, modification times, and supported permissions.
 
-To enable replication, set `remote` in the generated configuration:
+Enable S3 and save its connection settings and credentials in Dashboard **Settings**, or add `remote` to the generated configuration:
 
 ```json
 {
-  "bucket": "agentfs",
-  "prefix": "agentfs/v1",
-  "region": "us-east-1",
-  "endpoint": "https://s3.example.com",
-  "allow_http": false
+  "remote": {
+    "bucket": "agentfs",
+    "prefix": "agentfs/v1",
+    "region": "us-east-1",
+    "endpoint": "https://s3.example.com",
+    "allow_http": false
+  }
 }
 ```
 
-Supply credentials using the AWS environment/provider configuration supported by `object_store`. The bucket must already exist and support conditional object writes, conditional multipart completion, and strongly consistent reads. Restrict credentials to the selected bucket/prefix. Local development endpoints may explicitly enable `allow_http`.
+Credentials can be saved through Dashboard Settings or supplied through the AWS environment/role providers supported by `object_store`. The bucket must already exist and support conditional object writes, conditional multipart completion, and strongly consistent reads. Restrict credentials to the selected bucket/prefix. Local development endpoints may explicitly enable `allow_http`.
+
+Switching between local and S3 storage takes effect without restarting: enabling S3 copies retained history, and returning to local storage downloads missing history. Preparation or configuration-save failures preserve the active connection. `meta.db` is a local SQLite database and is never uploaded as a file. S3 stores file contents, directory/inode indexes, revision history and branch references; pulling imports the published records into each machine's own database. Session attachments, mounts, cache state and working files stay local.
 
 See [configuration and S3](docs/configuration.md) for every field, AWS S3/RustFS examples, supported credential sources, environment precedence, and multi-machine setup.
 
-The cache defaults to a 2 GiB limit and a 1.5 GiB collection target. Current branch roots, pending publications, merge candidates, and explicit pins remain protected. Historical file content confirmed remotely can be evicted. `cache_status.offline_ready` requires a complete pinned selection. Protected data can exceed the cache target; the workspace capacity limits still apply.
+S3 mode exposes one **Local cache capacity** setting, default 2 GiB (`cache.max_bytes` in the configuration file, in bytes). Collection runs every 30 seconds and, when capacity is exceeded, targets 75% of that capacity. Low disk space also triggers collection. Current branch roots, pending publications, merge candidates, active readers and explicit pins remain protected; usage can exceed the setting. Only remotely confirmed historical objects are eligible. Local mode retains all history and hides the cache setting. This capacity applies to immutable object files; SQLite metadata and working files occupy additional space. `cache_status.offline_ready` requires a complete pinned selection.
 
 ## Validation and scope
 
-CI runs workspace tests on Linux, macOS, and Windows; native mount tests on Linux and Windows; macFUSE callback compilation; CLI/stdio integration; and a real RustFS backend test. The native mount test covers multi-megabyte writes, truncation, append, rename with an open handle, directory enumeration, fsync, historical read-only mounts, and unmount. macOS kernel mounting requires an enabled macFUSE installation and is verified manually with the same test. See [validation](docs/validation.md) for commands and current execution evidence.
+CI runs workspace tests on Linux, macOS, and Windows; native mount tests on Linux and Windows; macFUSE callback compilation; CLI/stdio integration; and a real RustFS backend test. The native mount test covers multi-megabyte writes, truncation, append, rename with an open handle, directory enumeration, fsync, historical read-only mounts, and unmount. Run the same test manually on macOS with an enabled macFUSE installation; macOS kernel mounting has not been verified in the development environment. See [validation](docs/validation.md) for commands and current execution evidence.
 
 File operations cover regular files and directories, atomic branch append, rename, permissions, timestamps, truncate, and fsync. File contents are stored as whole-file immutable objects; edited files are resealed by streaming. Metadata trees are materialized in memory for branch and merge operations. The configurable maximum is one million inodes per workspace; size limits should reflect available memory and disk.
 

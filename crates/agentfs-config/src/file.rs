@@ -46,8 +46,18 @@ pub struct TokenFile {
 }
 impl Config {
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
-        let config: Self =
+        let mut value: serde_json::Value =
             serde_json::from_slice(bytes).map_err(|error| Error::invalid(error.to_string()))?;
+        // 已保存的配置继续使用容量设置，清理阈值由程序管理。
+        if let Some(cache) = value
+            .get_mut("cache")
+            .and_then(|cache| cache.as_object_mut())
+        {
+            cache.remove("target_bytes");
+            cache.remove("min_free_bytes");
+        }
+        let config: Self =
+            serde_json::from_value(value).map_err(|error| Error::invalid(error.to_string()))?;
         config.validate()?;
         Ok(config)
     }

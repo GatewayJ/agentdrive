@@ -23,7 +23,7 @@ Start `agentfsd` using the [CLI guide](cli.md). For clients supporting an `mcpSe
 
 Replace both paths with actual absolute paths; use `agentfs.exe` on Windows. The exact outer configuration format depends on the client. The proxy uses stdin/stdout for MCP and stderr for logs. It connects to an already running daemon and shares that daemon's state with other clients.
 
-For direct Streamable HTTP, use `http://127.0.0.1:7421/mcp` and `Authorization: Bearer <token-file-contents>`. Use an MCP client that performs initialization and preserves the returned session information. The accepted Host values are the bound address and `localhost:<port>`. A supplied Origin must match `allowed_origins`; native CLI/stdio connections omit Origin. The daemon binds only to loopback; access from other machines requires an authenticated TLS proxy preserving an accepted Host value.
+For direct Streamable HTTP, use `http://127.0.0.1:7421/mcp` and `Authorization: Bearer <token-file-contents>`. Use an MCP client that performs initialization and preserves the returned session information. The accepted Host values are the bound address and `localhost:<port>`. A supplied Origin must match the request's own HTTP origin or `allowed_origins`; native CLI/stdio connections omit Origin. The daemon binds only to loopback; access from other machines requires an authenticated TLS proxy preserving an accepted Host value.
 
 The server advertises the MCP `tools` capability. It provides 32 tools, including their input JSON schemas and annotations. Read the connected server's catalog with `tools/list` or:
 
@@ -34,7 +34,7 @@ jq '.tools[] | select(.name == "session_open") | .inputSchema' tools.json
 
 ## Argument forms and results
 
-The 23 command tools in the next table require an envelope. For example, the `arguments` object in a `tools/call` for `workspace_create` is:
+The 21 command tools in the next table require an envelope. For example, the `arguments` object in a `tools/call` for `workspace_create` is:
 
 ```json
 {
@@ -47,7 +47,7 @@ The 23 command tools in the next table require an envelope. For example, the `ar
 
 The equivalent CLI is `agentfs call workspace_create --request-id create-demo-1 --json '{"name":"demo"}'`. `request_id` must be nonempty, contain no control characters, and be at most 256 UTF-8 bytes. Its identity belongs to the authenticated principal and survives process restarts. Retry with the same ID, tool, and arguments; conflicting reuse returns `REQUEST_ID_CONFLICT`.
 
-The nine query tools receive direct argument objects. `operation_cancel` also receives direct arguments and modifies the referenced operation; it does not accept the command envelope. For `operation_by_request`, use:
+The ten query tools receive direct argument objects. `operation_cancel` also receives direct arguments and modifies the referenced operation; it does not accept the command envelope. For `operation_by_request`, use:
 
 ```json
 {
@@ -70,7 +70,7 @@ IDs such as `workspace`, `branch`, `revision`, `merge`, `operation`, and `locati
 | `durability` | `local` by default; `remote` requests remote confirmation. Inspect the receipt if remote publication fails. |
 | `RevisionRange` | Required `workspace`, `revision`; optional nullable `paths`. Omitted/null selects `/`, including all content. A provided list must be nonempty; directory paths include descendants. |
 | `Grant` | Required `principal` and `permissions`; optional nullable `branch`. Permissions are `read`, `write`, `merge`, `manage`; `manage` authorizes every permission. A null branch applies throughout the workspace. |
-| `Resolution` | Required `choice` and `path`. `choice` is `source`, `target`, `delete`, or `replace`. `replace` additionally requires `content` as an array of integer bytes and `mode` as an integer, for example `420` for octal `0644`. |
+| `Resolution` | Required `choice` and `path`. `choice` is `source`, `target`, `delete`, `replace`, or `copy`. `replace` requires `content` as an integer byte array (up to 1 MiB) and `mode`, for example `420` for octal `0644`. `copy` requires `revision` and `source_path` for a file in the same workspace and preserves its contents and attributes. |
 
 ## Command tools
 
@@ -125,12 +125,12 @@ Call `workspace_status` for an existing workspace and inspect `capabilities`:
 | `format_version` | Persisted format version, currently `1`. |
 | `platform_mount` | `linux-fuse`, `windows-winfsp`, `macos-macfuse`, or `macos-macfuse-feature-required`, according to the build. This describes the compiled adapter; a successful mount also needs the OS driver and permissions. |
 | `file_operations` | `lookup`, `getattr`, `readdir`, `create`, `mkdir`, `read`, `write`, `truncate`, `chmod`, `rename`, `unlink`, `rmdir`, `fsync`. These describe mounted filesystem operations. |
-| `remote_configured` | Whether a remote adapter is configured; it does not test connectivity or credentials. |
+| `remote_configured` | Whether S3 is currently enabled; a saved profile with `enabled: false` returns `false`. This flag does not test connectivity or credentials. |
 | `automatic_text_merge` | `false`; conflicts require explicit resolution. |
-| `physical_remote_gc` | `false`; remote object deletion is disabled. |
+| `physical_remote_gc` | `false`; automatic deletion of unreferenced historical objects in S3 is disabled. |
 | `single_location_session` | `false`; global coordination does not enforce a single location for each session. Branch ownership still controls writing. |
 
-File editing normally uses the mounted native path; the MCP tools manage workspaces, versions, and lifecycle. The catalog marks the nine queries `readOnlyHint: true` and `destructiveHint: false`; commands and cancellation use the opposite values. All tools currently advertise `idempotentHint: true` and `openWorldHint: true`. These annotations describe tool behavior; authentication, grants, request identities, and state checks enforce access and retries.
+File editing normally uses the mounted native path; the MCP tools manage workspaces, versions, and lifecycle. The catalog marks the ten queries `readOnlyHint: true` and `destructiveHint: false`; commands and cancellation use the opposite values. All tools currently advertise `idempotentHint: true` and `openWorldHint: true`. These annotations describe tool behavior; authentication, grants, request identities, and state checks enforce access and retries.
 
 Source definitions: [catalog and dispatch](../crates/agentfs-mcp/src/server.rs), [request types](../crates/agentfs-ports/src/api.rs), [shared types](../crates/agentfs-model/src/entities.rs), and [error codes](../crates/agentfs-model/src/error.rs).
 

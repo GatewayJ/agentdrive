@@ -371,6 +371,10 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
         .unwrap();
     assert_eq!(response.headers()["cache-control"], "no-store");
     let initial: Value = response.json().await.unwrap();
+    assert_eq!(
+        initial["runtime"]["cache"],
+        json!({"max_bytes":2147483648u64})
+    );
     let mut update = json!({"revision":initial["revision"],"runtime":initial["runtime"]});
     update["runtime"]["allowed_origins"] = json!(["https://trusted.example"]);
     update["runtime"]["cache"]["max_bytes"] = json!(3221225472u64);
@@ -440,7 +444,7 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
         200
     );
     let mut invalid = json!({"revision":applied["revision"], "runtime":applied["runtime"]});
-    invalid["runtime"]["cache"]["target_bytes"] = json!(9999999999u64);
+    invalid["runtime"]["cache"]["max_bytes"] = json!(0);
     assert_eq!(
         http.put(&settings_url)
             .bearer_auth(owner_token)

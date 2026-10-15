@@ -17,10 +17,10 @@
 | `credentials` | 必填，格式为 `{ "principal": "owner", "token_file": "/absolute/path/token" }` 的数组，至少需要一项凭据。 |
 | `administrators` | 可以读取和修改 daemon 设置的身份列表，默认为 `["owner"]`。与工作区授权分别管理，修改后需要重启。 |
 | `allowed_origins` | HTTP Origin 允许列表，默认 `[]`。CLI 和 stdio 连接不会发送 Origin。 |
-| `cache` | 可选对象，省略的字段使用默认值：`max_bytes: 2147483648`、`target_bytes: 1610612736`、`min_free_bytes: 67108864`。可以单独覆盖任意字段；最终的 `target_bytes` 必须小于 `max_bytes`。 |
+| `cache` | 可选对象，只包含 `max_bytes`：本地不可变对象的缓存容量，以字节为单位，默认为 `2147483648`（2 GiB），必须为正整数。启用 S3 时用于缓存清理。 |
 | `remote` | 下文的 S3 配置。省略或设置为 `null` 时仅使用本地存储。 |
 
-例如，添加 `"cache": { "max_bytes": 3221225472 }` 可以将缓存上限设为 3 GiB，其余字段继续使用默认值。如果上限小于或等于默认的目标容量，需要同时提供更小的 `target_bytes`。
+例如，添加 `"cache": { "max_bytes": 536870912 }` 可以将缓存容量设为 512 MiB。程序自动将清理目标设为容量的 75%，此例对应 384 MiB。
 
 状态目录、允许的根目录和 token 路径必须使用绝对路径。启动前应创建允许的根目录。JSON 字符串不会展开 `~`、`$HOME` 或环境变量。Windows 路径使用转义后的反斜线，例如 `"C:\\Users\\alice\\agentfs\\state"`，也可以使用正斜线。未知的顶层配置字段，以及未知的 `cache` 或 `remote` 字段会被拒绝。配置文件上限为 1 MiB。
 
@@ -28,7 +28,7 @@ token 文件必须是普通文件，最多 4096 字节，去除首尾空白后�
 
 ## 热更新与 Dashboard 设置
 
-在 Dashboard 左侧选择“设置”，或访问 `/settings`，使用管理员 token 认证。页面支持修改以 MiB 为单位的缓存容量、S3 连接与访问凭据，以及 HTTP Origin 允许列表。S3 连接设置保存后，在程序运行期间完成切换。保存会写入 daemon 启动时使用的同一个 `agentfs.json`，并发布完整配置快照。配置文件保持原有顶层结构，保存时仍会省略采用默认值的可选字段。
+在 Dashboard 左侧选择“设置”，或访问 `/settings`，使用管理员 token 认证。页面支持修改 S3 连接与访问凭据、以 GiB 为单位的本地缓存容量，以及 HTTP Origin 允许列表。选择 S3 模式时显示缓存容量；本地模式保留已保存的容量值，供再次启用 S3 时使用。S3 连接设置保存后，在程序运行期间完成切换。保存会写入 daemon 启动时使用的同一个 `agentfs.json`，并发布完整配置快照。配置文件保持原有顶层结构，保存时仍会省略采用默认值的可选字段。
 
 | 配置 | 生效时间 |
 | --- | --- |
@@ -49,6 +49,12 @@ Origin 使用 HTTP 或 HTTPS 的 `scheme://host[:port]` 格式，不包含路径
 
 两个接口都要求身份属于 `administrators`，工作区授权不会授予设置权限。响应包含 token 文件路径，但不会返回 token 内容或 S3 环境凭据。缺少认证返回 401，设置权限不足返回 403，版本过期或检测到外部文件修改返回 409。校验失败时，当前配置和文件保持原有内容。页面检测到新版本时会保留尚未保存的表单内容，由用户选择重新载入。
 
+## 本地缓存容量
+
+`cache.max_bytes` 管理此 daemon 全部工作区的不可变对象缓存。后台每 30 秒检查一次，超过设置容量时清理到容量的 75%，按字节向下取整。程序内部的磁盘剩余空间阈值为 64 MiB：低于此值时也会启动清理，直到同时满足容量目标和剩余空间阈值，或者已经没有可清理的内容。
+
+清理只处理已获得远端确认、没有活动读取者且没有受保护引用的对象。当前分支内容、待发布数据、合并候选内容和固定缓存受到保护。受保护内容较多时，实际占用可能超过设置容量。SQLite 元数据、工作文件和临时文件另外占用磁盘空间。本地模式完整保留历史，不执行缓存清理，Dashboard 隐藏缓存容量输入框。
+
 ## 运行期间切换存储
 
 在设置页面选择本地或 S3 模式，保存即可切换。`remote.enabled: false` 保留 S3 配置和凭据，便于再次启用。直接修改配置文件也使用相同的切换过程。
@@ -56,6 +62,8 @@ Origin 使用 HTTP 或 HTTPS 的 `scheme://host[:port]` 格式，不包含路径
 启用 S3 时检查目标的读取、条件写入与删除权限，复制本地已知的历史内容和分支引用，随后保存配置并更换连接。切换回本地时补齐已被缓存清理的历史内容，并停止清理本地历史文件。工作目录和挂载继续使用；待同步操作保留到下一次启用 S3。
 
 切换期间部分操作会等待历史内容传输完成。内容缺失、存储空间不足、目标分支已更新、凭据错误或配置保存失败时，当前连接继续有效。目标可能已经收到部分不可变对象和分支引用，重复提交会继续处理。拥有尚未完成的分支所有权转移时，需要完成该操作后才能切换。配置文件的外部修改失败时保留原有运行配置，页面显示错误，后续检查继续尝试。S3 连接检查会创建并删除命名空间内的 `.connection-check/` 临时对象。
+
+`<data_dir>/meta.db` 是本地 SQLite 数据库，并使用 WAL 文件。S3 同步上传不可变文件内容、目录和 inode 索引、版本与回合历史、已发布的操作结果、工作区控制记录和分支引用；数据库文件本身不会上传。目标 daemon 通过 `sync` 的 `direction: "pull"` 将已发布记录导入自己的数据库。本机身份、会话关联、挂载、缓存保留设置、尚未完成的工作和配置分别由各台机器管理。存储结构见[架构说明](architecture.zh-CN.md)。
 
 ## S3 字段
 
@@ -138,7 +146,7 @@ jq -n --arg operation "$(jq -r '.id' "$AGENTFS_DIRECTORY/demo-import.json")" '{o
   agentfs call operation_get --json -
 ```
 
-检查原始操作的 `remote_confirmed`。`workspace_status.capabilities.remote_configured` 表示已提供远端配置，`pending_jobs` 表示队列长度。守护进程每三秒重试待同步任务。`local_saved: true` 的结果记录仍然可能包含远端错误；请保留 operation ID，并参考[恢复说明](operations.zh-CN.md)。
+检查原始操作的 `remote_confirmed`。`workspace_status.capabilities.remote_configured` 表示当前是否启用 S3，`pending_jobs` 表示队列长度。保存了 S3 配置但设置 `remote.enabled: false` 时，返回 `remote_configured: false`。启用 S3 后，守护进程每三秒重试待同步任务。`local_saved: true` 的结果记录仍然可能包含远端错误；请保留 operation ID，并参考[恢复说明](operations.zh-CN.md)。
 
 要检查条件写入、并发更新、20 MiB 分段内容和两个守护进程之间的同步，请使用隔离的 [S3/RustFS 测试](validation.zh-CN.md)。这些测试使用独立的测试 bucket，不适合作为生产环境健康检查。
 

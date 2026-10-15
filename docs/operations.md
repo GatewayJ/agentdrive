@@ -40,6 +40,8 @@ Keep the state directory on a local filesystem with correct file flush and atomi
 
 Use `cache_prefetch` to download a revision or selected paths. Use `cache_pin` with `enabled: true` to retain a complete selection for offline use; `cache_status` reports both completeness and pin protection. Unpinning permits later collection after other protection is absent. Cache collection only removes remotely confirmed immutable objects without active readers or protected references.
 
+While S3 is enabled, set the local cache capacity in Dashboard Settings or `cache.max_bytes`. Collection starts above that capacity or below the internal 64 MiB free-space threshold and targets 75% of the configured capacity. Protected content can keep usage above the setting. Local mode retains all history; switching from S3 hydrates missing historical content before disabling the remote connection. See [configuration](configuration.md) for storage switching and the local SQLite database's role.
+
 Ownership transfer is online. Finish active turns and release writable mounts on the old location. Submit `ownership_transfer` with the current `BranchGuard` and the destination `LocationId`. The old location stops branch writes before draining publication and updating the conditional reference. Pull at the new location to adopt confirmed ownership. Retain the original transfer operation during an uncertain remote response.
 
 ## Merging files

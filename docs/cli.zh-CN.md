@@ -13,7 +13,7 @@ agentfsd init --directory "$AGENTFS_DIRECTORY"
 agentfsd serve --config "$AGENTFS_DIRECTORY/agentfs.json"
 ```
 
-新目录只需运行一次 `init`。该命令会输出生成的配置路径，已有配置或 token 时会拒绝执行。`serve` 在前台运行，Ctrl+C 会请求关闭服务。使用[远端配置](configuration.zh-CN.md)时，请在当前终端运行 `serve` 前设置 S3 凭据。
+新目录只需运行一次 `init`。该命令会输出生成的配置路径，已有配置或 token 时会拒绝执行。`serve` 在前台运行，Ctrl+C 会请求关闭服务。S3 凭据可以通过 Dashboard 设置页面保存；选择环境凭据时，在当前终端运行 `serve` 前设置，详见[远端配置](configuration.zh-CN.md)。
 
 | 命令 | 参数 |
 | --- | --- |

@@ -43,6 +43,8 @@ python3 tests/storage_smoke.py
 
 后端测试覆盖竞争条件下的引用创建、过期条件更新、空文件、摘要拒绝，以及 20 MiB 对象的分段发布。两个守护进程的测试会推送导入的版本，在另一个 location 拉取并导出该版本，并通过实际 S3 后端交接分支所有权。
 
+`storage_smoke.py` 验证 daemon PID 保持不变时的本地/S3 切换、凭据保存、切换失败恢复、配置文件修改、历史导出和重启恢复。
+
 ## 执行记录
 
 | 检查 | 已验证环境 |
@@ -65,6 +67,6 @@ python3 tests/lifecycle_smoke.py
 python3 tests/config_smoke.py
 ```
 
-该脚本需要原生挂载支持，覆盖 ACP 和 Codex app-server 协议中的完成、取消、失败、进程中断、重复请求、自动保存、daemon 重启、重连，以及已有挂载上的 CLI 分支切换。常规 Rust 测试还覆盖响应正文丢失后的重试、共享分支的回合互斥、切换时的文件句柄检查、分支选择持久化和 HTTP 权限。浏览器检查覆盖分支树、版本信息、令牌登录和小屏幕布局。本机 Codex app-server 的 initialize 与 thread/start 已验证工作目录指向 OpenCSG Workspace 挂载；完整任务流程通过协议测试程序验证。
+`lifecycle_smoke.py` 需要原生挂载支持，覆盖 ACP 和 Codex app-server 协议中的完成、取消、失败、进程中断、重复请求、自动保存、daemon 重启、重连，以及已有挂载上的 CLI 分支切换。常规 Rust 测试还覆盖响应正文丢失后的重试、共享分支的回合互斥、切换时的文件句柄检查、分支选择持久化和 HTTP 权限。浏览器检查覆盖分支树、版本信息、令牌登录和小屏幕布局。本机 Codex app-server 的 initialize 与 thread/start 已验证工作目录指向 OpenCSG Workspace 挂载；完整任务流程通过协议测试程序验证。
 
-`config_smoke.py` 使用临时目录运行 daemon，验证文件热更新、错误配置保留、启动配置修改提示、HTTP 保存、版本冲突和重启恢复。该脚本无需挂载驱动。
+`config_smoke.py` 使用临时目录运行 daemon，验证文件热更新、错误配置保留、启动配置修改提示、单个缓存容量字段的 HTTP 保存、版本冲突和重启恢复。该脚本无需挂载驱动。配置测试覆盖已有文件的读取和快照一致性；engine 缓存测试验证修改容量后按 75% 目标清理，并保留当前分支内容。

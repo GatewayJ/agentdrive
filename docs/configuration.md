@@ -17,10 +17,10 @@ The generated file contains `data_dir`, `listen`, `mount_roots`, `directory_root
 | `credentials` | Required array of `{ "principal": "owner", "token_file": "/absolute/path/token" }`. At least one credential is required. |
 | `administrators` | Principals allowed to read and change daemon settings, default `["owner"]`. Independent of workspace grants; changes require a restart. |
 | `allowed_origins` | HTTP Origin allowlist, default `[]`. CLI and stdio connections do not send an Origin. |
-| `cache` | Optional object; omitted fields default to `max_bytes: 2147483648`, `target_bytes: 1610612736`, `min_free_bytes: 67108864`. Override individual fields as needed; the resulting `target_bytes` must be below `max_bytes`. |
+| `cache` | Optional object with one setting, `max_bytes`: local immutable-object cache capacity in bytes, default `2147483648` (2 GiB). Must be a positive integer. Used for cache collection while S3 is enabled. |
 | `remote` | S3 configuration below. Omitted or `null` means local storage only. |
 
-For example, adding `"cache": { "max_bytes": 3221225472 }` sets the cache limit to 3 GiB while retaining the default target size and free-space threshold. When selecting a limit at or below the default target, also supply a smaller `target_bytes`.
+For example, `"cache": { "max_bytes": 536870912 }` sets a 512 MiB cache capacity. The collector automatically targets 75% of the configured capacity, which is 384 MiB in this example.
 
 All state, root, and token paths must be absolute. Create allowed roots before starting the daemon. JSON strings do not expand `~`, `$HOME`, or environment variables. Windows paths use escaped backslashes, such as `"C:\\Users\\alice\\agentfs\\state"`, or forward slashes. Unknown top-level configuration fields and unknown `cache` or `remote` fields are rejected. The configuration file is limited to 1 MiB.
 
@@ -28,7 +28,7 @@ Token files must be regular files, at most 4096 bytes, containing at least 32 no
 
 ## Runtime updates and dashboard settings
 
-Open **Settings** in the dashboard sidebar, or visit `/settings`. Authenticate with an administrator token. The form edits cache sizes in MiB, S3 connections and credentials, and allowed HTTP origins. Saved S3 connection changes are applied while the daemon runs. Saving persists the changes to the same `agentfs.json` used to start the daemon and publishes one configuration snapshot. The configuration retains its existing top-level structure; optional defaults remain omitted when saving.
+Open **Settings** in the dashboard sidebar, or visit `/settings`. Authenticate with an administrator token. The form edits S3 connections and credentials, local cache capacity in GiB, and allowed HTTP origins. The cache field appears when S3 mode is selected; local mode retains its saved capacity for future S3 use. Saved S3 connection changes are applied while the daemon runs. Saving persists the changes to the same `agentfs.json` used to start the daemon and publishes one configuration snapshot. The configuration retains its existing top-level structure; optional defaults remain omitted when saving.
 
 | Configuration | Effective time |
 | --- | --- |
@@ -49,6 +49,12 @@ The authenticated HTTP interface provides:
 
 Both endpoints require membership in `administrators`; workspace grants do not grant settings access. Responses contain token-file paths but never token contents or S3 environment credentials. Missing authentication returns 401, insufficient settings access returns 403, and a stale revision or a detected external file edit returns 409. Validation failure preserves the active settings and file. The UI preserves unsaved form values when it detects a newer revision and offers an explicit reload action.
 
+## Local cache capacity
+
+The single `cache.max_bytes` setting applies to cached immutable objects across all workspaces in this daemon. The collector checks every 30 seconds. Usage above the configured capacity starts collection toward 75% of that capacity, rounded down to whole bytes. The internal low-disk threshold is 64 MiB: collection also starts when available disk space is below that amount and continues until both the capacity target and free-space threshold are satisfied, or no eligible objects remain.
+
+Collection removes only remotely confirmed objects without active readers or protected references. Active branch contents, pending publications, merge candidates and explicit cache pins remain protected. Usage can exceed the setting when protected content requires more space. SQLite metadata, working files and staging files consume additional disk space. Local mode retains all history and does not run cache eviction; the Dashboard hides its cache field in that mode.
+
 ## Switching storage while running
 
 Select local or S3 mode in Settings and save. `remote.enabled: false` retains S3 settings and credentials for later use. Direct configuration-file edits use the same transition.
@@ -56,6 +62,8 @@ Select local or S3 mode in Settings and save. `remote.enabled: false` retains S3
 Enabling S3 checks read, conditional-write and delete access, copies locally known history and branch references, then persists configuration and replaces the connection. Returning to local storage downloads evicted history and disables historical cache eviction. Mounts and working directories remain available; pending publications are retained until S3 is enabled again.
 
 Some operations wait while history is transferred. Missing content, insufficient local space, an advanced destination branch, credential errors or a configuration write failure retain the active connection. The destination may already contain immutable objects and references; retrying continues safely. Complete pending ownership transfers before changing storage. Failed external file edits retain the active runtime settings, display an error, and are retried by the file watcher. The connection check creates and deletes temporary objects beneath `.connection-check/` in the configured namespace.
+
+`<data_dir>/meta.db` is a local SQLite database, with its WAL files. S3 synchronization uploads immutable file contents, directory/inode indexes, revision and turn history, published operation receipts, workspace control records and branch references. It never uploads the database file. A destination daemon imports published records into its own database through `sync` with `direction: "pull"`. Local identity, session attachments, mounts, cache pins, pending work and configuration remain specific to each machine. See [architecture](architecture.md) for the storage layout.
 
 ## S3 fields
 
@@ -138,7 +146,7 @@ jq -n --arg operation "$(jq -r '.id' "$AGENTFS_DIRECTORY/demo-import.json")" '{o
   agentfs call operation_get --json -
 ```
 
-Check `remote_confirmed` on the original operation. `workspace_status.capabilities.remote_configured` reports configuration presence, and `pending_jobs` reports the queue length. The daemon retries pending synchronization every three seconds. A `local_saved: true` receipt can still contain a remote error; retain its operation ID and follow [recovery guidance](operations.md).
+Check `remote_confirmed` on the original operation. `workspace_status.capabilities.remote_configured` reports whether S3 is currently enabled, and `pending_jobs` reports the queue length. A saved profile with `remote.enabled: false` reports `remote_configured: false`. The daemon retries pending synchronization every three seconds while S3 is enabled. A `local_saved: true` receipt can still contain a remote error; retain its operation ID and follow [recovery guidance](operations.md).
 
 For a compatibility check covering conditional writes, competing updates, 20 MiB multipart content, and two-daemon replication, use the isolated [S3/RustFS tests](validation.md). Those tests use a separate test bucket and are not a production health check.
 

@@ -3,7 +3,7 @@ export function createSettingsPage({api, element, $}) {
   let dirty = false;
   let busy = false;
   let generation = 0;
-  const mib = 1024 * 1024;
+  const gib = 1024 * 1024 * 1024;
   function message(id, text) { $(id).textContent = text || ''; $(id).hidden = !text; }
   function state() {
     $('settings-save').disabled = busy || !dirty;
@@ -16,9 +16,7 @@ export function createSettingsPage({api, element, $}) {
   function render(data) {
     current = data; dirty = false;
     $('settings-form').hidden = false; $('startup-panel').hidden = false;
-    $('cache-max').value = data.runtime.cache.max_bytes / mib;
-    $('cache-target').value = data.runtime.cache.target_bytes / mib;
-    $('cache-free').value = data.runtime.cache.min_free_bytes / mib;
+    $('cache-max').value = data.runtime.cache.max_bytes / gib;
     $('allowed-origins').value = data.runtime.allowed_origins.join('\n');
     const remote = data.runtime.remote;
     $('storage-mode').value = remote?.enabled !== false && remote ? 's3' : 'local';
@@ -67,14 +65,10 @@ export function createSettingsPage({api, element, $}) {
     } finally { if (request === generation) { busy = false; state(); } }
   }
   function runtime() {
-    function bytes(id) {
-      const value = Number($(id).value) * mib;
-      if (!Number.isSafeInteger(value) || value < 0) throw new Error('容量必须是有效的字节整数。');
-      return value;
-    }
-    const cache = {max_bytes:bytes('cache-max'), target_bytes:bytes('cache-target'), min_free_bytes:bytes('cache-free')};
-    if (cache.target_bytes >= cache.max_bytes) throw new Error('清理目标必须小于容量上限。');
     const enabled = $('storage-mode').value === 's3';
+    const maxBytes = enabled ? Math.round(Number($('cache-max').value) * gib) : current.runtime.cache.max_bytes;
+    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('本地缓存容量必须大于零，且不能超过浏览器支持的整数范围。');
+    const cache = {max_bytes:maxBytes};
     const bucket = $('s3-bucket').value.trim();
     if (enabled && !bucket) throw new Error('请填写 S3 Bucket。');
     const remote = bucket ? {
@@ -89,6 +83,9 @@ export function createSettingsPage({api, element, $}) {
   }
   function storageFields() {
     const enabled = $('storage-mode').value === 's3';
+    $('cache-panel').hidden = !enabled;
+    $('cache-max').disabled = !enabled;
+    $('cache-max').required = enabled;
     $('s3-bucket').required = enabled;
     const saved = $('s3-auth').value === 'saved';
     for (const id of ['s3-access-key', 's3-secret-key', 's3-session-token']) $(id).disabled = !saved;

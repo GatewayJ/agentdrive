@@ -27,14 +27,44 @@ fn file_updates_publish_complete_snapshots_and_preserve_in_flight_readers() {
     assert!(store.reload().unwrap());
     let after = store.live().load();
     assert_eq!(after.values.cache.max_bytes, 3 * 1024 * 1024 * 1024);
-    assert_eq!(
-        after.values.cache.target_bytes,
-        before.values.cache.target_bytes
-    );
+    assert_eq!(before.values.cache.max_bytes, 2 * 1024 * 1024 * 1024);
     assert_eq!(after.values.allowed_origins, vec!["https://example.com"]);
     assert!(before.values.allowed_origins.is_empty());
     assert_ne!(after.revision, before.revision);
     assert!(!store.reload().unwrap());
+}
+
+#[test]
+fn saved_cache_configuration_preserves_capacity_and_writes_one_field() {
+    let (_directory, store) = setup();
+    let settings = store.settings(&owner()).unwrap();
+    let mut config: Value =
+        serde_json::from_slice(&fs::read(&settings.config_path).unwrap()).unwrap();
+    config["cache"] = json!({
+        "max_bytes":134217728,
+        "target_bytes":100663296,
+        "min_free_bytes":33554432
+    });
+    fs::write(&settings.config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    assert!(store.reload().unwrap());
+    let reopened = ConfigStore::open(&settings.config_path).unwrap();
+    let loaded = reopened.settings(&owner()).unwrap();
+    assert_eq!(loaded.runtime.cache.max_bytes, 128 * 1024 * 1024);
+    assert_eq!(
+        serde_json::to_value(&loaded.runtime.cache).unwrap(),
+        json!({"max_bytes":134217728})
+    );
+    reopened
+        .update(
+            &owner(),
+            SettingsUpdate {
+                revision: loaded.revision,
+                runtime: loaded.runtime,
+            },
+        )
+        .unwrap();
+    let saved: Value = serde_json::from_slice(&fs::read(&settings.config_path).unwrap()).unwrap();
+    assert_eq!(saved["cache"], json!({"max_bytes":134217728}));
 }
 
 #[test]
@@ -46,7 +76,7 @@ fn invalid_files_and_startup_changes_retain_all_active_values_until_repaired() {
     let mut unknown = config.clone();
     unknown["unknown_field"] = json!(true);
     let mut cache = config.clone();
-    cache["cache"] = json!({"max_bytes":1});
+    cache["cache"] = json!({"max_bytes":0});
     let mut nested = config.clone();
     nested["cache"] = json!({"unknown_field":1});
     let mut origins = config.clone();
@@ -79,7 +109,7 @@ fn saves_survive_restart_and_reject_stale_or_unloaded_file_edits() {
     let (_directory, store) = setup();
     let settings = store.settings(&owner()).unwrap();
     let mut runtime = settings.runtime.clone();
-    runtime.cache.min_free_bytes = 128 * 1024 * 1024;
+    runtime.cache.max_bytes = 128 * 1024 * 1024;
     let saved = store
         .update(
             &owner(),
@@ -192,7 +222,7 @@ fn concurrent_saves_accept_one_revision_and_readers_never_mix_versions() {
             let revision = initial.revision.clone();
             let mut runtime = initial.runtime.clone();
             runtime.cache.max_bytes = 100 + index;
-            runtime.cache.target_bytes = index;
+            runtime.allowed_origins = vec![format!("https://cache-{}.example", 100 + index)];
             writers.push(scope.spawn(move || {
                 barrier.wait();
                 store.update(&owner(), SettingsUpdate { revision, runtime })
@@ -217,8 +247,11 @@ fn concurrent_saves_accept_one_revision_and_readers_never_mix_versions() {
                 for _ in 0..10000 {
                     let snapshot = live.load();
                     assert_eq!(
-                        snapshot.values.cache.max_bytes - snapshot.values.cache.target_bytes,
-                        100
+                        snapshot.values.allowed_origins,
+                        vec![format!(
+                            "https://cache-{}.example",
+                            snapshot.values.cache.max_bytes
+                        )]
                     );
                 }
             });
@@ -227,7 +260,7 @@ fn concurrent_saves_accept_one_revision_and_readers_never_mix_versions() {
             let settings = store.settings(&owner()).unwrap();
             let mut runtime = settings.runtime;
             runtime.cache.max_bytes = index + 100;
-            runtime.cache.target_bytes = index;
+            runtime.allowed_origins = vec![format!("https://cache-{}.example", index + 100)];
             store
                 .update(
                     &owner(),

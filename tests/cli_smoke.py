@@ -33,7 +33,7 @@ with tempfile.TemporaryDirectory(prefix='agentfs-cli-') as temporary:
     config = json.loads(config_path.read_text())
     assert not {'allowed_origins', 'cache', 'remote'} & config.keys(), config
     for cache, expected in [
-        ({'max_bytes': 1024, 'target_bytes': 1024}, 'cache target must be below its limit'),
+        ({'max_bytes': 0}, 'cache capacity must be greater than zero'),
         ({'max_byte': 1024}, 'unknown field'),
     ]:
         config['cache'] = cache
@@ -173,7 +173,7 @@ with tempfile.TemporaryDirectory(prefix='agentfs-cli-') as temporary:
         # The process restart also exercises WAL recovery and stable operation identities.
         daemon.terminate()
         daemon.wait(timeout=30)
-        config['cache'] = {'max_bytes': 3 * 1024 ** 3, 'target_bytes': 1536 * 1024 ** 2, 'min_free_bytes': 64 * 1024 ** 2}
+        config['cache'] = {'max_bytes': 3 * 1024 ** 3}
         config.update(allowed_origins=[], remote=None)
         config_path.write_text(json.dumps(config))
         daemon = start()

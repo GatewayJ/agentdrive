@@ -54,6 +54,8 @@ Settings administration uses the startup `administrators` list, default `["owner
 
 Each daemon state directory contains `engine.lock`, `meta.db`, SQLite WAL files, `objects/`, `staging/`, and `working/`. A process lock permits one writer. SQLite uses WAL and `synchronous=FULL`. Persisted format versions are checked before schema changes. Storage errors propagate as typed errors.
 
+`meta.db` and its WAL files remain local in both storage modes. S3 receives immutable objects and the control/branch references described below. Pulling imports published history into the receiving daemon's database; local identity, session attachments, mount bindings, cache pins and pending work remain local state. Cache capacity covers immutable object files only. In S3 mode, the collector uses `cache.max_bytes`, a derived 75% collection target, and an internal 64 MiB minimum-free-space threshold. Local mode retains all historical content.
+
 Object IDs hash a domain separator, format version, object kind, and bytes with SHA-256. Publication verifies the digest and size, flushes the temporary file, publishes its immutable name, and registers it. Unix directories are flushed after publication; Windows uses a write-through file move. A metadata transaction references installed immutable objects. Reader leases protect open content from cache eviction.
 
 A `TreeRoot` refers to bounded directory and inode indexes. Index pages contain at most 128 entries and metadata objects are bounded by 2 MiB. File content is streamed with bounded buffers. Directory entry names are NFC normalized and compared using Unicode case folding. Portable-name checks reject traversal, reserved Windows names, trailing dots/spaces, and nonportable characters.
@@ -72,7 +74,7 @@ Pull imports remote history and references without changing an active local bran
 
 ## Merge
 
-Merge preparation selects a common ancestor or validates an explicit one, compares path changes, and produces an immutable candidate. Changes to the same path require explicit resolution. Resolution creates a new candidate. Apply requires clean target state, current ownership/generation/head, resolved conflicts, and mount quiescence. The resulting revision retains source and target parents.
+Merge preparation selects a common ancestor or validates an explicit one, compares path changes, and produces an immutable candidate. AI can list candidate files, select source or target contents, delete paths, submit replacement bytes, or copy files from an existing revision. Each edit creates a new candidate. Apply requires clean target state, current ownership/generation/head, resolved conflicts, and mount quiescence. The resulting revision retains source and target parents.
 
 
 ## Authentication boundary

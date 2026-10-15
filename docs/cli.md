@@ -13,7 +13,7 @@ agentfsd init --directory "$AGENTFS_DIRECTORY"
 agentfsd serve --config "$AGENTFS_DIRECTORY/agentfs.json"
 ```
 
-Run `init` once for a new directory. It prints the generated configuration path and rejects an existing configuration or token. `serve` runs in the foreground; Ctrl+C requests shutdown. Set S3 credentials in this terminal before `serve` when using a [remote configuration](configuration.md).
+Run `init` once for a new directory. It prints the generated configuration path and rejects an existing configuration or token. `serve` runs in the foreground; Ctrl+C requests shutdown. S3 credentials can be saved through Dashboard Settings. When using environment credentials, set them in this terminal before `serve`; see [remote configuration](configuration.md).
 
 | Command | Arguments |
 | --- | --- |

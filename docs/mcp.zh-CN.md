@@ -23,7 +23,7 @@
 
 请将两个路径替换为实际绝对路径，Windows 使用 `agentfs.exe`。外层配置格式取决于客户端。代理通过 stdin/stdout 传输 MCP，通过 stderr 输出日志。代理连接已经运行的守护进程，并与其他客户端共享该守护进程的状态。
 
-直接连接 Streamable HTTP 时，使用 `http://127.0.0.1:7421/mcp`，并提供 `Authorization: Bearer <token-file-contents>`。MCP 客户端需要完成初始化并保留返回的会话信息。允许的 Host 为监听地址和 `localhost:<port>`。请求携带 Origin 时，需要匹配 `allowed_origins`；原生 CLI/stdio 连接省略 Origin。守护进程仅监听本机回环地址；其他机器访问时，需要使用经过身份验证的 TLS 代理，并保留允许的 Host 值。
+直接连接 Streamable HTTP 时，使用 `http://127.0.0.1:7421/mcp`，并提供 `Authorization: Bearer <token-file-contents>`。MCP 客户端需要完成初始化并保留返回的会话信息。允许的 Host 为监听地址和 `localhost:<port>`。请求携带 Origin 时，需要与请求地址同源，或匹配 `allowed_origins`；原生 CLI/stdio 连接省略 Origin。守护进程仅监听本机回环地址；其他机器访问时，需要使用经过身份验证的 TLS 代理，并保留允许的 Host 值。
 
 服务声明支持 MCP `tools` 能力，提供 32 个工具及其输入 JSON schema 和 annotations。可以通过 `tools/list` 读取已连接服务的工具目录，或者运行：
 
@@ -34,7 +34,7 @@ jq '.tools[] | select(.name == "session_open") | .inputSchema' tools.json
 
 ## 参数形式与结果
 
-下表中的 23 个命令工具需要外层请求结构。例如，调用 `workspace_create` 时，`tools/call` 中的 `arguments` 对象为：
+下表中的 21 个命令工具需要外层请求结构。例如，调用 `workspace_create` 时，`tools/call` 中的 `arguments` 对象为：
 
 ```json
 {
@@ -47,7 +47,7 @@ jq '.tools[] | select(.name == "session_open") | .inputSchema' tools.json
 
 对应 CLI 为 `agentfs call workspace_create --request-id create-demo-1 --json '{"name":"demo"}'`。`request_id` 必须非空、不含控制字符，且最多为 256 个 UTF-8 字节。请求身份属于当前通过身份验证的 principal，并在进程重启后保留。重试需要使用相同 ID、工具和参数；冲突复用会返回 `REQUEST_ID_CONFLICT`。
 
-九个查询工具直接接收参数对象。`operation_cancel` 也直接接收参数，并修改指定操作的状态，不接受命令工具的外层结构。调用 `operation_by_request` 时使用：
+十个查询工具直接接收参数对象。`operation_cancel` 也直接接收参数，并修改指定操作的状态，不接受命令工具的外层结构。调用 `operation_by_request` 时使用：
 
 ```json
 {
@@ -70,7 +70,7 @@ jq '.tools[] | select(.name == "session_open") | .inputSchema' tools.json
 | `durability` | 默认 `local`；`remote` 请求远端确认。远端发布失败时检查操作结果记录。 |
 | `RevisionRange` | 必填 `workspace`、`revision`；可选且允许为空的 `paths`。省略或设置为 `null` 时选择 `/`，包含全部内容。提供路径列表时不能为空，目录路径包含其后代。 |
 | `Grant` | 必填 `principal` 和 `permissions`；可选且允许为空的 `branch`。权限为 `read`、`write`、`merge`、`manage`；`manage` 允许全部权限。branch 为空时，授权适用于整个工作区。 |
-| `Resolution` | 必填 `choice` 和 `path`。`choice` 为 `source`、`target`、`delete` 或 `replace`。`replace` 还需要整数字节数组 `content` 和整数 `mode`，例如使用 `420` 表示八进制 `0644`。 |
+| `Resolution` | 必填 `choice` 和 `path`。`choice` 为 `source`、`target`、`delete`、`replace` 或 `copy`。`replace` 需要最多 1 MiB 的整数字节数组 `content` 和整数 `mode`，例如使用 `420` 表示八进制 `0644`。`copy` 需要 `revision` 和 `source_path`，复制同一工作区版本中的文件，保留内容和属性。 |
 
 ## 命令工具
 
@@ -125,12 +125,12 @@ jq '.tools[] | select(.name == "session_open") | .inputSchema' tools.json
 | `format_version` | 持久化格式版本，当前为 `1`。 |
 | `platform_mount` | 根据构建结果返回 `linux-fuse`、`windows-winfsp`、`macos-macfuse` 或 `macos-macfuse-feature-required`。该值表示已编译的适配器；挂载成功还需要操作系统驱动和权限。 |
 | `file_operations` | `lookup`、`getattr`、`readdir`、`create`、`mkdir`、`read`、`write`、`truncate`、`chmod`、`rename`、`unlink`、`rmdir`、`fsync`，表示挂载文件系统支持的操作。 |
-| `remote_configured` | 是否已配置远端适配器，不会测试连接或凭据。 |
+| `remote_configured` | 当前是否启用 S3；保存的配置为 `enabled: false` 时返回 `false`。此字段不会测试连接或凭据。 |
 | `automatic_text_merge` | `false`，冲突需要明确解决。 |
-| `physical_remote_gc` | `false`，远端对象删除功能已禁用。 |
+| `physical_remote_gc` | `false`，自动删除 S3 中不再被引用的历史对象的功能已禁用。 |
 | `single_location_session` | `false`，全局协调不会强制每个会话只能位于一个 location。分支所有权仍然控制写入。 |
 
-文件编辑通常通过挂载后的原生路径完成，MCP 工具负责工作区、版本和生命周期管理。工具目录将九个查询标记为 `readOnlyHint: true`、`destructiveHint: false`；命令和取消操作使用相反的值。全部工具当前声明 `idempotentHint: true` 和 `openWorldHint: true`。这些 annotations 描述工具行为，访问和重试由身份验证、授权、请求身份和状态检查控制。
+文件编辑通常通过挂载后的原生路径完成，MCP 工具负责工作区、版本和生命周期管理。工具目录将十个查询标记为 `readOnlyHint: true`、`destructiveHint: false`；命令和取消操作使用相反的值。全部工具当前声明 `idempotentHint: true` 和 `openWorldHint: true`。这些 annotations 描述工具行为，访问和重试由身份验证、授权、请求身份和状态检查控制。
 
 源代码定义见[工具目录与调用分发](../crates/agentfs-mcp/src/server.rs)、[请求类型](../crates/agentfs-ports/src/api.rs)、[公共类型](../crates/agentfs-model/src/entities.rs)和[错误代码](../crates/agentfs-model/src/error.rs)。
 

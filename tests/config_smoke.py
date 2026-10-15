@@ -84,12 +84,13 @@ with tempfile.TemporaryDirectory(prefix='agentfs-config-') as temporary:
         replace_config(configured)
         recovered = wait_for(lambda data: data['reload_error'] is None)
         runtime = recovered['runtime']
-        runtime['cache']['min_free_bytes'] = 128 * 1024 ** 2
+        runtime['cache'] = {'max_bytes': 128 * 1024 ** 2}
         update = {'revision': recovered['revision'], 'runtime': runtime}
         status, saved = request('PUT', update)
         assert status == 200, saved
         assert request('PUT', update)[0] == 409
-        assert json.loads(path.read_text())['cache']['min_free_bytes'] == 128 * 1024 ** 2
+        assert saved['runtime']['cache'] == runtime['cache']
+        assert json.loads(path.read_text())['cache'] == runtime['cache']
         assert daemon.poll() is None
         daemon.terminate()
         daemon.wait(timeout=15)

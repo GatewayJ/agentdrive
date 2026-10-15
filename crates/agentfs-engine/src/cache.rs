@@ -5,6 +5,8 @@ use agentfs_ports::*;
 use async_trait::async_trait;
 use std::{collections::BTreeSet, sync::Arc};
 
+const MIN_FREE_BYTES: u64 = 64 * 1024 * 1024;
+
 #[derive(Debug)]
 pub struct CacheService {
     runtime: Arc<Runtime>,
@@ -306,13 +308,14 @@ impl CacheApi for CacheService {
             .ok_or_else(|| Error::integrity("cache size overflow"))?;
         let initial = self.trees.content.local.stats().await?;
         let mut free = initial.available_bytes;
-        if total <= config.max_bytes && free >= config.min_free_bytes {
+        if total <= config.max_bytes && free >= MIN_FREE_BYTES {
             return Ok(0);
         }
+        let target = config.max_bytes - config.max_bytes.div_ceil(4);
         entries.sort_by_key(|entry| entry.last_access_ns);
         let mut freed = 0u64;
         for entry in entries {
-            if total <= config.target_bytes && free >= config.min_free_bytes {
+            if total <= target && free >= MIN_FREE_BYTES {
                 break;
             }
             if entry.remote_confirmed

@@ -77,27 +77,31 @@ agentfs dashboard --open
 
 `agentfs.json` 使用绝对文件系统路径。`mount_roots` 指定允许的挂载目标；`directory_roots` 指定允许的导入和导出路径。导入期间源目录需要保持稳定，导入操作会拒绝 symbolic link 和不兼容的文件名称。导出操作会创建新目录，并保留文件内容、修改时间和支持的权限。
 
-要启用远端同步，请在生成的配置中设置 `remote`：
+在 Dashboard“设置”中启用 S3，填写并保存连接和凭据，也可以在生成的配置中添加 `remote`：
 
 ```json
 {
-  "bucket": "agentfs",
-  "prefix": "agentfs/v1",
-  "region": "us-east-1",
-  "endpoint": "https://s3.example.com",
-  "allow_http": false
+  "remote": {
+    "bucket": "agentfs",
+    "prefix": "agentfs/v1",
+    "region": "us-east-1",
+    "endpoint": "https://s3.example.com",
+    "allow_http": false
+  }
 }
 ```
 
-通过 `object_store` 支持的 AWS 环境变量或凭据提供程序配置凭据。bucket 必须已经存在，并支持条件对象写入、带条件的分段上传完成操作，以及强一致读取。凭据权限应限制在选定的 bucket/prefix 内。本地开发 endpoint 可以明确启用 `allow_http`。
+凭据可以通过 Dashboard 保存，也可以通过 `object_store` 支持的 AWS 环境变量或角色凭据提供程序配置。bucket 必须已经存在，并支持条件对象写入、带条件的分段上传完成操作，以及强一致读取。凭据权限应限制在选定的 bucket/prefix 内。本地开发 endpoint 可以明确启用 `allow_http`。
+
+本地与 S3 存储可以在运行期间切换：启用 S3 时复制已保留的历史，返回本地模式时下载缺少的历史内容。准备或保存配置失败时，当前连接继续有效。`meta.db` 是本地 SQLite 数据库，不会作为文件上传。S3 保存文件内容、目录和 inode 索引、版本历史及分支引用；拉取时将已发布的记录导入每台机器自己的数据库。会话关联、挂载、缓存状态和工作文件保存在本地。
 
 全部配置字段、AWS S3/RustFS 示例、支持的凭据来源、环境变量优先级和多台机器配置见[配置与 S3](docs/configuration.zh-CN.md)。
 
-缓存默认上限为 2 GiB，回收目标为 1.5 GiB。当前分支根对象、等待发布的数据、合并候选结果和明确指定保留的缓存会受到保护。已经获得远端确认的历史文件内容可以从本地缓存清除。`cache_status.offline_ready` 要求指定保留的数据范围已完整缓存在本地。受保护的数据可能超过缓存目标，工作区容量限制仍然适用。
+S3 模式只需设置“本地缓存容量”，默认为 2 GiB，配置文件使用以字节为单位的 `cache.max_bytes`。后台每 30 秒检查一次，超过容量时自动清理到设置值的 75%；磁盘剩余空间不足时也会清理。当前分支、等待发布的数据、合并候选内容、活动读取者和固定缓存受到保护，实际占用可能超过设置容量。清理只处理已获得远端确认的历史对象。本地模式完整保留历史，页面隐藏缓存设置。容量统计针对不可变对象文件，SQLite 元数据和工作文件另外占用空间。`cache_status.offline_ready` 要求指定保留的数据范围已完整缓存在本地。
 
 ## 验证与功能范围
 
-CI 会在 Linux、macOS 和 Windows 上运行 workspace 测试，并执行 Linux/Windows 原生挂载测试、macFUSE 回调编译检查、CLI/stdio 集成测试，以及连接实际 RustFS 服务的后端测试。原生挂载测试覆盖数 MiB 的文件写入、截断、追加、持有打开句柄时重命名、目录枚举、fsync、历史版本只读挂载和卸载。macOS 内核挂载需要已启用的 macFUSE 安装环境，并通过同一项测试手动验证。测试命令和当前验证记录见[验证文档](docs/validation.zh-CN.md)。
+CI 会在 Linux、macOS 和 Windows 上运行 workspace 测试，并执行 Linux/Windows 原生挂载测试、macFUSE 回调编译检查、CLI/stdio 集成测试，以及连接实际 RustFS 服务的后端测试。原生挂载测试覆盖数 MiB 的文件写入、截断、追加、持有打开句柄时重命名、目录枚举、fsync、历史版本只读挂载和卸载。macOS 需要在已启用 macFUSE 的环境手动运行同一项测试；开发环境尚未执行 macOS 内核挂载验证。测试命令和当前验证记录见[验证文档](docs/validation.zh-CN.md)。
 
 文件操作支持普通文件和目录、分支内原子追加、重命名、权限、时间戳、截断和 fsync。文件内容以整个文件为单位保存为不可变对象；编辑后的文件通过流式处理重新生成对象。分支和合并操作会在内存中构建元数据树。每个工作区可配置的 inode 数量上限为一百万；容量限制应根据可用内存和磁盘空间设置。
 

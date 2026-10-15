@@ -43,6 +43,8 @@ python3 tests/storage_smoke.py
 
 Backend tests exercise competing conditional reference creation, stale conditional updates, empty files, digest rejection, and 20 MiB multipart object publication. The two-daemon test pushes an imported revision, pulls and exports it at another location, and transfers branch ownership through the real S3 backend.
 
+`storage_smoke.py` verifies live local/S3 transitions without changing the daemon PID, persisted credentials, failed-transition recovery, file-based changes, historical export, and restart recovery.
+
 ## Execution evidence
 
 | Check | Verified environment |
@@ -65,6 +67,6 @@ python3 tests/lifecycle_smoke.py
 python3 tests/config_smoke.py
 ```
 
-This script requires native mounting and covers ACP and Codex app-server completion, cancellation, failures, process interruption, duplicate requests, autosave, daemon restart, reconnect, and CLI branch switching with an existing mount. Rust tests cover lost response bodies, shared-branch turn exclusion, handle checks, persistent selection, and HTTP authorization. Browser checks cover ancestry, revision details, token login, and narrow layouts. The installed Codex app-server initialize and thread/start handshake verified the OpenCSG Workspace working directory; complete turn scenarios use protocol fixtures.
+`lifecycle_smoke.py` requires native mounting and covers ACP and Codex app-server completion, cancellation, failures, process interruption, duplicate requests, autosave, daemon restart, reconnect, and CLI branch switching with an existing mount. Rust tests cover lost response bodies, shared-branch turn exclusion, handle checks, persistent selection, and HTTP authorization. Browser checks cover ancestry, revision details, token login, and narrow layouts. The installed Codex app-server initialize and thread/start handshake verified the OpenCSG Workspace working directory; complete turn scenarios use protocol fixtures.
 
-`config_smoke.py` runs the daemon with a temporary directory and verifies file reload, invalid configuration retention, startup-change reporting, HTTP saves, revision conflicts, and restart recovery. It does not require a mount driver.
+`config_smoke.py` runs the daemon with a temporary directory and verifies file reload, invalid configuration retention, startup-change reporting, HTTP saves of the single cache-capacity field, revision conflicts, and restart recovery. It does not require a mount driver. Configuration tests cover existing-file loading and consistent snapshots; the engine cache test verifies that changing capacity starts collection toward 75% while retaining current branch contents.
