@@ -30,7 +30,7 @@ token 文件必须是普通文件，最多 4096 字节，去除首尾空白后�
 
 ## 热更新与 Dashboard 设置
 
-在 Dashboard 左侧选择“设置”，或访问 `/settings`，使用管理员 token 认证。页面支持修改以 MiB 为单位的缓存容量、具有名称的容器验证任务，以及 HTTP Origin 允许列表。保存会写入 daemon 启动时使用的同一个 `agentfs.json`，并发布完整配置快照。配置文件保持原有顶层结构，保存时仍会省略采用默认值的可选字段。
+在 Dashboard 左侧选择“设置”，或访问 `/settings`，使用管理员 token 认证。页面支持修改以 MiB 为单位的缓存容量、S3 连接与访问凭据、具有名称的容器验证任务，以及 HTTP Origin 允许列表。S3 连接设置保存后需要重启 daemon。保存会写入 daemon 启动时使用的同一个 `agentfs.json`，并发布完整配置快照。配置文件保持原有顶层结构，保存时仍会省略采用默认值的可选字段。
 
 | 配置 | 生效时间 |
 | --- | --- |
@@ -47,7 +47,7 @@ Origin 使用 HTTP 或 HTTPS 的 `scheme://host[:port]` 格式，不包含路径
 带身份验证的 HTTP 接口：
 
 - `GET /api/settings`：返回当前 `runtime`、只读 `startup` 字段、`config_path`、配置版本 `revision` 和 `reload_error`。
-- `PUT /api/settings`：提交 `{ "revision": "<GET 返回的版本>", "runtime": { "cache": { ... }, "validation": { ... }, "allowed_origins": [] } }`。需要提供 GET 返回的完整运行配置，成功后返回保存的设置。
+- `PUT /api/settings`：提交 `{ "revision": "<GET 返回的版本>", "runtime": { "cache": { ... }, "validation": { ... }, "allowed_origins": [], "remote": null } }`。需要提供 GET 返回的完整运行配置，成功后返回保存的设置。
 
 两个接口都要求身份属于 `administrators`，工作区授权不会授予设置权限。响应包含 token 文件路径，但不会返回 token 内容或 S3 环境凭据。缺少认证返回 401，设置权限不足返回 403，版本过期或检测到外部文件修改返回 409。校验失败时，当前配置和文件保持原有内容。页面检测到新版本时会保留尚未保存的表单内容，由用户选择重新载入。
 
@@ -71,6 +71,8 @@ Origin 使用 HTTP 或 HTTPS 的 `scheme://host[:port]` 格式，不包含路径
 
 | `remote` 字段 | 必填要求 / 默认值 | 行为 |
 | --- | --- | --- |
+| `enabled` | `true` | 设置为 `false` 使用本地模式，并保留 S3 配置。 |
+| `credentials` | 省略或 `null` | 使用服务环境或 IAM 角色；也可以填写 `access_key_id`、`secret_access_key` 和可选的 `session_token`。 |
 | `bucket` | 必填，非空字符串 | 已存在的 bucket 名称。守护进程不会创建 bucket。 |
 | `prefix` | `agentfs/v1` | bucket 内共享的命名空间；首尾 `/` 会被移除，结果必须是有效且非空的对象路径。 |
 | `region` | `us-east-1` | 签名使用的 region；AWS S3 应填写 bucket 所在的 region。 |
@@ -91,6 +93,8 @@ Origin 使用 HTTP 或 HTTPS 的 `scheme://host[:port]` 格式，不包含路径
 ```
 
 ## 凭据与环境变量优先级
+
+Dashboard 可以编辑并保存 S3 凭据到配置文件，Unix 保存权限为 `0600`。GET 设置接口会清空 `secret_access_key` 和 `session_token`；PUT 中同一个 Access Key ID 的空密钥表示保留已有凭据。修改 Session Token 时同时填写 Secret Access Key；将 `credentials` 设为 `null` 使用环境凭据。配置中的凭据优先于环境凭据。
 
 S3 凭据由**守护进程**读取。请在启动 `agentfsd serve` 的终端或服务环境中设置变量。`AGENTFS_TOKEN_FILE` 用于 CLI 访问 OpenCSG Workspace 的身份验证。
 
@@ -113,7 +117,7 @@ PowerShell 使用 `$env:AWS_ACCESS_KEY_ID = 'your-access-key-id'` 和 `$env:AWS_
 
 当前适配器不会读取 `~/.aws/credentials`、`AWS_PROFILE` 或 AWS CLI SSO 会话。请导出有效凭据，或者使用支持的角色凭据来源。静态环境变量凭据在启动时读取，替换后需要重新启动守护进程。
 
-OpenCSG Workspace 调用 `AmazonS3Builder::from_env()` 后应用自身配置。配置中的 `bucket`、`region` 和 `allow_http`，包括默认值，都会覆盖对应的 AWS 环境变量。配置中的 `endpoint` 会覆盖 `AWS_ENDPOINT`。依赖库中的 `AWS_ENDPOINT_URL_S3` 优先于这两个设置。通过 `agentfs.json` 选择 endpoint 时，请移除不需要的 `AWS_ENDPOINT_URL_S3`；使用默认 AWS regional endpoint 时，也需要移除 `AWS_ENDPOINT`。适配器会选择 path-style 请求和基于 ETag 的条件写入。
+OpenCSG Workspace 调用 `AmazonS3Builder::from_env()` 后应用自身配置。配置中的 `bucket`、`region` 和 `allow_http`，包括默认值，都会覆盖对应的 AWS 环境变量。配置中的 `endpoint` 会覆盖 `AWS_ENDPOINT` 和 `AWS_ENDPOINT_URL_S3`。省略 `endpoint` 时沿用环境设置；使用默认 AWS regional endpoint 时，需要移除这两个环境变量。适配器会选择 path-style 请求和基于 ETag 的条件写入。
 
 ## 存储要求与验证
 

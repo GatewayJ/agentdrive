@@ -62,7 +62,15 @@ async fn serve(settings: Arc<ConfigStore>) -> Result<()> {
     let credentials = config.credentials()?;
     let local = Arc::new(LocalBackend::open(&config.data_dir)?);
     let driver = NativeMountDriver::new(config.mount_roots.clone())?;
-    let remote = config.remote.clone().map(S3Backend::new).transpose()?;
+    let remote = settings
+        .live()
+        .load()
+        .values
+        .remote
+        .clone()
+        .filter(|remote| remote.enabled)
+        .map(S3Backend::new)
+        .transpose()?;
     let engine = Engine::open(
         Adapters {
             state: local.clone(),

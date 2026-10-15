@@ -51,6 +51,17 @@ export function createSettingsPage({api, element, $}) {
     $('allowed-origins').value = data.runtime.allowed_origins.join('\n');
     $('validation-list').replaceChildren(); $('validation-empty').hidden = false;
     for (const [name, config] of Object.entries(data.runtime.validation)) addValidation(name, config);
+    const remote = data.runtime.remote;
+    $('storage-mode').value = remote?.enabled !== false && remote ? 's3' : 'local';
+    $('s3-endpoint').value = remote?.endpoint || '';
+    $('s3-bucket').value = remote?.bucket || '';
+    $('s3-region').value = remote?.region || 'us-east-1';
+    $('s3-prefix').value = remote?.prefix || 'agentfs/v1';
+    $('s3-http').checked = remote?.allow_http || false;
+    $('s3-auth').value = remote?.credentials ? 'saved' : 'environment';
+    $('s3-access-key').value = remote?.credentials?.access_key_id || '';
+    $('s3-secret-key').value = ''; $('s3-session-token').value = '';
+    storageFields();
     const values = $('startup-values'); values.replaceChildren();
     const startup = data.startup;
     const fields = [
@@ -58,7 +69,6 @@ export function createSettingsPage({api, element, $}) {
       ['挂载目录', startup.mount_roots.join('\n') || '未配置'], ['导入导出目录', (startup.directory_roots || []).join('\n') || '未配置'],
       ['认证身份', startup.credentials.map(value => value.principal).join('、')],
       ['设置管理员', (startup.administrators || ['owner']).join('、') || '未配置'], ['Docker 程序', startup.docker || 'docker'],
-      ['远程存储', startup.remote ? `${startup.remote.endpoint || 'AWS S3'}\n${startup.remote.bucket} / ${startup.remote.prefix}` : '本地存储'],
     ];
     for (const [label, value] of fields) values.append(element('dt', '', label), element('dd', '', value));
     $('settings-version').textContent = `配置版本 ${data.revision.slice(0, 12)}`;
@@ -102,8 +112,28 @@ export function createSettingsPage({api, element, $}) {
       if (!name || Object.hasOwn(validation, name)) throw new Error('验证任务名称不能为空或重复。');
       validation[name] = {image:fields.image.trim(), program:fields.program.trim(), arguments:fields.arguments === '' ? [] : fields.arguments.split('\n'), timeout_seconds:Number(fields.timeout_seconds), max_output_bytes:Number(fields.max_output_bytes)};
     }
-    return {cache, validation, allowed_origins:[...new Set($('allowed-origins').value.split('\n').map(value => value.trim()).filter(Boolean))]};
+    const enabled = $('storage-mode').value === 's3';
+    const bucket = $('s3-bucket').value.trim();
+    if (enabled && !bucket) throw new Error('请填写 S3 Bucket。');
+    const remote = bucket ? {
+      enabled, bucket, endpoint:$('s3-endpoint').value.trim() || null,
+      region:$('s3-region').value.trim(), prefix:$('s3-prefix').value.trim(), allow_http:$('s3-http').checked,
+      credentials:$('s3-auth').value === 'saved' ? {
+        access_key_id:$('s3-access-key').value.trim(), secret_access_key:$('s3-secret-key').value,
+        session_token:$('s3-session-token').value || null,
+      } : null,
+    } : null;
+    return {cache, validation, remote, allowed_origins:[...new Set($('allowed-origins').value.split('\n').map(value => value.trim()).filter(Boolean))]};
   }
+  function storageFields() {
+    const enabled = $('storage-mode').value === 's3';
+    $('s3-bucket').required = enabled;
+    const saved = $('s3-auth').value === 'saved';
+    for (const id of ['s3-access-key', 's3-secret-key', 's3-session-token']) $(id).disabled = !saved;
+    $('s3-access-key').required = saved && enabled;
+  }
+  $('storage-mode').addEventListener('change', storageFields);
+  $('s3-auth').addEventListener('change', storageFields);
   $('settings-form').addEventListener('input', changed);
   $('add-validation').addEventListener('click', () => { addValidation().focus(); changed(); });
   $('settings-reload').addEventListener('click', () => load(true));
@@ -116,7 +146,7 @@ export function createSettingsPage({api, element, $}) {
       busy = true; state(); message('settings-error', '');
       const data = await api('/api/settings', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(update)});
       if (request !== generation) return;
-      render(data); message('settings-notice', '配置已保存并生效。');
+      render(data); message('settings-notice', '配置已保存。S3 连接设置重启 daemon 后生效。');
     } catch (error) {
       if (request === generation) message('settings-error', error.status === 409 ? '配置已经更新，保存未覆盖现有内容。请重新载入后修改。' : error.message);
     } finally { if (request === generation) { busy = false; state(); } }

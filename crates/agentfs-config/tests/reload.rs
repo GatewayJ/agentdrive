@@ -242,3 +242,66 @@ fn concurrent_saves_accept_one_revision_and_readers_never_mix_versions() {
         }
     });
 }
+
+#[test]
+fn s3_settings_persist_secrets_without_returning_them_and_preserve_blank_passwords() {
+    let (_directory, store) = setup();
+    let settings = store.settings(&owner()).unwrap();
+    let mut runtime = settings.runtime;
+    runtime.remote = Some(serde_json::from_value(json!({
+        "bucket":"agentfs-test", "endpoint":"https://s3.example.com",
+        "credentials":{"access_key_id":"test-access", "secret_access_key":"test-secret", "session_token":"test-session"}
+    })).unwrap());
+    let saved = store
+        .update(
+            &owner(),
+            SettingsUpdate {
+                revision: settings.revision,
+                runtime,
+            },
+        )
+        .unwrap();
+    let response = serde_json::to_string(&saved).unwrap();
+    assert!(!response.contains("test-secret"));
+    assert!(!response.contains("test-session"));
+    assert!(!format!("{:?}", store.live().load()).contains("test-secret"));
+    let mut runtime = saved.runtime;
+    runtime.remote.as_mut().unwrap().region = "eu-west-1".into();
+    let saved = store
+        .update(
+            &owner(),
+            SettingsUpdate {
+                revision: saved.revision,
+                runtime,
+            },
+        )
+        .unwrap();
+    let restarted = ConfigStore::open(&saved.config_path).unwrap();
+    let snapshot = restarted.live().load();
+    let credentials = snapshot
+        .values
+        .remote
+        .as_ref()
+        .unwrap()
+        .credentials
+        .as_ref()
+        .unwrap();
+    assert_eq!(credentials.secret_access_key, "test-secret");
+    assert_eq!(credentials.session_token.as_deref(), Some("test-session"));
+    let mut runtime = saved.runtime;
+    runtime.remote.as_mut().unwrap().credentials = None;
+    store
+        .update(
+            &owner(),
+            SettingsUpdate {
+                revision: saved.revision,
+                runtime,
+            },
+        )
+        .unwrap();
+    assert!(
+        !fs::read_to_string(&saved.config_path)
+            .unwrap()
+            .contains("test-secret")
+    );
+}

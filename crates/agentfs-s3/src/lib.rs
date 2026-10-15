@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::TryStreamExt;
 use object_store::{
-    ObjectStore, ObjectStoreExt, PutMode, UpdateVersion,
-    aws::{AmazonS3, AmazonS3Builder, S3ConditionalPut},
+    ObjectStore, ObjectStoreExt, PutMode, StaticCredentialProvider, UpdateVersion,
+    aws::{AmazonS3, AmazonS3Builder, AmazonS3ConfigKey, AwsCredential, S3ConditionalPut},
     multipart::{MultipartStore, PartId},
     path::Path,
     signer::{HeaderName, HeaderValue, Method, SignedUrlOptions, Signer},
@@ -42,6 +42,7 @@ struct Version {
 
 impl S3Backend {
     pub fn new(config: S3Config) -> Result<Arc<Self>> {
+        config.validate()?;
         if config.bucket.is_empty() {
             return Err(Error::invalid("S3 bucket is required"));
         }
@@ -69,7 +70,15 @@ impl S3Backend {
                     "S3 endpoint must not contain credentials, a query or a fragment",
                 ));
             }
-            builder = builder.with_endpoint(endpoint);
+            builder = builder.with_config(AmazonS3ConfigKey::S3Endpoint, endpoint);
+        }
+        if let Some(credentials) = config.credentials {
+            builder =
+                builder.with_credentials(Arc::new(StaticCredentialProvider::new(AwsCredential {
+                    key_id: credentials.access_key_id,
+                    secret_key: credentials.secret_access_key,
+                    token: credentials.session_token,
+                })));
         }
         let client = builder.build().map_err(store_error)?;
         let http = reqwest::Client::builder()

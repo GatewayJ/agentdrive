@@ -39,6 +39,8 @@ async fn s3_conditional_refs_and_streaming_objects() {
         created.status()
     );
     let backend = S3Backend::new(S3Config {
+        credentials: None,
+        enabled: true,
         bucket: bucket.into(),
         prefix: format!("tests/{}", uuid::Uuid::new_v4()),
         region: "us-east-1".into(),

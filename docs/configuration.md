@@ -30,7 +30,7 @@ Token files must be regular files, at most 4096 bytes, containing at least 32 no
 
 ## Runtime updates and dashboard settings
 
-Open **Settings** in the dashboard sidebar, or visit `/settings`. Authenticate with an administrator token. The form edits cache sizes in MiB, named container validation checks, and allowed HTTP origins. Saving persists the changes to the same `agentfs.json` used to start the daemon and publishes one configuration snapshot. The configuration retains its existing top-level structure; optional defaults remain omitted when saving.
+Open **Settings** in the dashboard sidebar, or visit `/settings`. Authenticate with an administrator token. The form edits cache sizes in MiB, S3 connections and credentials, named container validation checks, and allowed HTTP origins. Saved S3 connection changes require a daemon restart. Saving persists the changes to the same `agentfs.json` used to start the daemon and publishes one configuration snapshot. The configuration retains its existing top-level structure; optional defaults remain omitted when saving.
 
 | Configuration | Effective time |
 | --- | --- |
@@ -47,7 +47,7 @@ External file edits are checked once per second. Each candidate is validated bef
 The authenticated HTTP interface provides:
 
 - `GET /api/settings`: active `runtime`, read-only `startup` fields, `config_path`, a `revision`, and `reload_error`.
-- `PUT /api/settings`: `{ "revision": "<revision from GET>", "runtime": { "cache": { ... }, "validation": { ... }, "allowed_origins": [] } }`. Supply the complete runtime object returned by GET. A successful response returns the saved settings.
+- `PUT /api/settings`: `{ "revision": "<revision from GET>", "runtime": { "cache": { ... }, "validation": { ... }, "allowed_origins": [], "remote": null } }`. Supply the complete runtime object returned by GET. A successful response returns the saved settings.
 
 Both endpoints require membership in `administrators`; workspace grants do not grant settings access. Responses contain token-file paths but never token contents or S3 environment credentials. Missing authentication returns 401, insufficient settings access returns 403, and a stale revision or a detected external file edit returns 409. Validation failure preserves the active settings and file. The UI preserves unsaved form values when it detects a newer revision and offers an explicit reload action.
 
@@ -71,6 +71,8 @@ This is a configuration fragment for a local RustFS S3 API endpoint. Keep the ot
 
 | `remote` field | Required / default | Behavior |
 | --- | --- | --- |
+| `enabled` | `true` | Use `false` for local mode while retaining S3 settings. |
+| `credentials` | Omitted or `null` | Use the service environment or IAM role, or supply `access_key_id`, `secret_access_key`, and optional `session_token`. |
 | `bucket` | Required, nonempty string | Existing bucket name. The daemon does not create buckets. |
 | `prefix` | `agentfs/v1` | Shared namespace within the bucket; leading/trailing `/` are removed and the result must be a valid, nonempty object path. |
 | `region` | `us-east-1` | Signing region; use the bucket's region for AWS S3. |
@@ -91,6 +93,8 @@ For AWS S3, replace the bucket and region, and omit a custom endpoint:
 ```
 
 ## Credentials and environment precedence
+
+The dashboard can persist S3 credentials in the configuration file, using Unix mode `0600`. GET settings blanks `secret_access_key` and `session_token`; a PUT with the same Access Key ID and a blank secret retains the existing credentials. Supply the secret again when changing a session token. Set `credentials` to `null` to use environment credentials. Configured credentials override environment credentials.
 
 The **daemon process** reads S3 credentials. Set these variables in the shell or service environment that starts `agentfsd serve`. `AGENTFS_TOKEN_FILE` authenticates the CLI to OpenCSG Workspace separately.
 
@@ -113,7 +117,7 @@ The locked `object_store` dependency supports the following credential sources, 
 
 The current adapter does not load `~/.aws/credentials`, `AWS_PROFILE`, or AWS CLI SSO sessions. Export resolved credentials or use one of the supported role providers. Static environment credentials are loaded at startup; restart the daemon after replacing them.
 
-OpenCSG Workspace calls `AmazonS3Builder::from_env()` and then applies its configuration. The configured `bucket`, `region`, and `allow_http` values, including their defaults, override the corresponding AWS environment settings. A configured `endpoint` overrides `AWS_ENDPOINT`. The dependency's `AWS_ENDPOINT_URL_S3` takes precedence over both. When selecting the endpoint through `agentfs.json`, remove any unintended `AWS_ENDPOINT_URL_S3`; also remove `AWS_ENDPOINT` when using the default AWS regional endpoint. Path-style requests and ETag conditional writes are selected by the adapter.
+OpenCSG Workspace calls `AmazonS3Builder::from_env()` and then applies its configuration. The configured `bucket`, `region`, and `allow_http` values, including their defaults, override the corresponding AWS environment settings. A configured `endpoint` overrides both `AWS_ENDPOINT` and `AWS_ENDPOINT_URL_S3`. When `endpoint` is omitted, environment settings remain effective; remove both environment variables to use the default AWS regional endpoint. Path-style requests and ETag conditional writes are selected by the adapter.
 
 ## Storage requirements and verification
 

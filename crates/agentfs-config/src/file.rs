@@ -12,6 +12,8 @@ use std::{
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<S3Config>,
     #[serde(flatten)]
     pub startup: StartupConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -37,8 +39,6 @@ pub struct StartupConfig {
     pub administrators: Vec<Principal>,
     #[serde(default = "docker", skip_serializing_if = "is_default_docker")]
     pub docker: PathBuf,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub remote: Option<S3Config>,
 }
 fn docker() -> PathBuf {
     "docker".into()
@@ -64,6 +64,7 @@ impl Config {
     }
     pub fn runtime(&self) -> RuntimeConfig {
         RuntimeConfig {
+            remote: self.remote.clone(),
             cache: self.cache.clone(),
             validation: self.validation.clone(),
             allowed_origins: self.allowed_origins.clone(),
@@ -71,6 +72,7 @@ impl Config {
     }
     pub(crate) fn with_runtime(startup: StartupConfig, runtime: RuntimeConfig) -> Self {
         Self {
+            remote: runtime.remote,
             startup,
             cache: runtime.cache,
             validation: runtime.validation,
@@ -179,6 +181,7 @@ pub fn initialize(directory: &Path, listen: SocketAddr) -> Result<PathBuf> {
     );
     create_file(&token_file, token.as_bytes())?;
     let config = Config {
+        remote: None,
         startup: StartupConfig {
             data_dir: directory.join("state"),
             listen,
@@ -190,7 +193,6 @@ pub fn initialize(directory: &Path, listen: SocketAddr) -> Result<PathBuf> {
             }],
             administrators: administrators(),
             docker: docker(),
-            remote: None,
         },
         allowed_origins: vec![],
         cache: CacheConfig::default(),

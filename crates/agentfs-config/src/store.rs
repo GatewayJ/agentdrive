@@ -1,4 +1,4 @@
-use crate::{CacheConfig, Config, StartupConfig, ValidationConfig};
+use crate::{CacheConfig, Config, S3Config, StartupConfig, ValidationConfig};
 use agentfs_model::{Error, ErrorCode, Principal, Result};
 use arc_swap::ArcSwap;
 use parking_lot::Mutex;
@@ -17,6 +17,8 @@ const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
+    #[serde(default)]
+    pub remote: Option<S3Config>,
     pub cache: CacheConfig,
     pub validation: BTreeMap<String, ValidationConfig>,
     pub allowed_origins: Vec<String>,
@@ -25,6 +27,9 @@ pub struct RuntimeConfig {
 impl RuntimeConfig {
     pub fn validate(&self) -> Result<()> {
         self.cache.validate()?;
+        if let Some(remote) = &self.remote {
+            remote.validate()?;
+        }
         for (name, config) in &self.validation {
             if name.trim().is_empty() || name.len() > 128 {
                 return Err(Error::invalid(
@@ -142,10 +147,14 @@ impl ConfigStore {
 
     fn view(&self) -> Settings {
         let snapshot = self.live.load();
+        let mut runtime = snapshot.values.clone();
+        if let Some(remote) = &mut runtime.remote {
+            remote.redact();
+        }
         Settings {
             config_path: self.path.clone(),
             revision: snapshot.revision.clone(),
-            runtime: snapshot.values.clone(),
+            runtime,
             startup: self.startup.clone(),
             reload_error: snapshot.reload_error.clone(),
         }
@@ -200,9 +209,8 @@ impl ConfigStore {
         result
     }
 
-    pub fn update(&self, actor: &Principal, update: SettingsUpdate) -> Result<Settings> {
+    pub fn update(&self, actor: &Principal, mut update: SettingsUpdate) -> Result<Settings> {
         self.authorize(actor)?;
-        update.runtime.validate()?;
         let _writer = self.writer.lock();
         let current = self.live.load();
         if current.revision != update.revision || revision(&read(&self.path)?) != update.revision {
@@ -211,6 +219,22 @@ impl ConfigStore {
                 "configuration changed; reload settings before saving",
             ));
         }
+        if let Some(remote) = &mut update.runtime.remote
+            && let Some(credentials) = &mut remote.credentials
+            && credentials.secret_access_key.is_empty()
+        {
+            let saved = current
+                .values
+                .remote
+                .as_ref()
+                .and_then(|value| value.credentials.as_ref())
+                .filter(|saved| saved.access_key_id == credentials.access_key_id)
+                .ok_or_else(|| {
+                    Error::invalid("provide the secret key for the selected access key")
+                })?;
+            *credentials = saved.clone();
+        }
+        update.runtime.validate()?;
         let config = Config::with_runtime(self.startup.clone(), update.runtime);
         let bytes = serde_json::to_vec_pretty(&config)?;
         if bytes.len() > MAX_CONFIG_BYTES {
@@ -218,6 +242,14 @@ impl ConfigStore {
         }
         let parent = self.path.parent().expect("absolute configuration path");
         let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            temporary
+                .as_file()
+                .set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
+        #[cfg(not(unix))]
         temporary
             .as_file()
             .set_permissions(fs::metadata(&self.path)?.permissions())?;
