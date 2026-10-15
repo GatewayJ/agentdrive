@@ -249,6 +249,77 @@ impl MountService {
             .ok_or_else(|| Error::invalid("operation has no pending mount action"))?;
         let result = async {
             match pending {
+                PendingAction::BranchSwitch {
+                    selection,
+                    previous,
+                    old,
+                    new,
+                } => {
+                    let selected = self
+                        .runtime
+                        .state
+                        .selected_branch(selection.workspace)
+                        .await?;
+                    if selected.is_some_and(|id| id != previous) {
+                        return Err(Error::new(
+                            ErrorCode::TargetMoved,
+                            "workspace selection changed",
+                        ));
+                    }
+                    let branch = self.runtime.branch(selection.branch).await?;
+                    branch.check_write(self.runtime.location, branch.authority_epoch)?;
+                    let mut sessions = self.runtime.state.sessions(selection.workspace).await?;
+                    if sessions.iter().any(|session| {
+                        (session.branch == previous || session.branch == branch.id)
+                            && session.active_turn.is_some()
+                    }) {
+                        return Err(Error::new(
+                            ErrorCode::BranchBusy,
+                            "finish active turns before switching branches",
+                        ));
+                    }
+                    if new
+                        .as_ref()
+                        .is_some_and(|new| new.generation != branch.generation)
+                    {
+                        return Err(Error::new(
+                            ErrorCode::TargetMoved,
+                            "target branch generation changed",
+                        ));
+                    }
+                    if let Some(old) = &old {
+                        self.remove_old(old).await?;
+                    }
+                    let binding = match &new {
+                        Some(new) => Some(self.install_new(new).await?),
+                        None => None,
+                    };
+                    sessions.retain(|session| {
+                        session.branch == previous && session.state != SessionState::Closed
+                    });
+                    for session in &mut sessions {
+                        session.branch = branch.id;
+                        if session.mount == old.as_ref().map(|mount| mount.id) {
+                            session.mount = binding.as_ref().map(|mount| mount.id);
+                        }
+                    }
+                    operation.pending = None;
+                    operation.phase = OperationPhase::Complete;
+                    operation.local_saved = true;
+                    operation.mount_ready = binding.as_ref().map(|_| true);
+                    operation.error = None;
+                    operation.result = Some(CommandResult::Branch { branch });
+                    self.runtime
+                        .state
+                        .commit(LocalCommit {
+                            selections: vec![selection],
+                            sessions,
+                            operations: vec![operation.clone()],
+                            ..Default::default()
+                        })
+                        .await?;
+                    Ok(operation.clone())
+                }
                 PendingAction::MountChange { old, new, session } => {
                     if let Some(old) = &old {
                         self.remove_old(old).await?;
@@ -451,6 +522,7 @@ impl MountService {
             .save_locked(
                 OperationContext { operation },
                 SaveRevision {
+                    message: None,
                     guard: target,
                     kind: RevisionKind::Commit,
                     parents,
@@ -467,6 +539,156 @@ impl MountService {
 
 #[async_trait]
 impl MountApi for MountService {
+    async fn switch_branch(
+        &self,
+        context: RequestContext,
+        request: SwitchBranch,
+    ) -> Result<OperationRecord> {
+        let _lifecycle = self.runtime.lifecycle.lock().await;
+        self.runtime
+            .authorize(
+                &context.principal,
+                request.workspace,
+                Some(request.branch),
+                Permission::Manage,
+            )
+            .await?;
+        let operation = match self
+            .operations
+            .start(
+                context,
+                "branch_switch",
+                &request,
+                Some(request.workspace),
+                Some(request.branch),
+            )
+            .await?
+        {
+            OperationStart::Existing(record) => return Ok(record),
+            OperationStart::New(context) => context,
+        };
+        let result = async {
+            let branch = self.runtime.branch(request.branch).await?;
+            branch.check_write(self.runtime.location, branch.authority_epoch)?;
+            let selected = self
+                .runtime
+                .state
+                .selected_branch(request.workspace)
+                .await?;
+            let previous = selected.unwrap_or(request.branch);
+            if self
+                .runtime
+                .state
+                .operations(request.workspace)
+                .await?
+                .iter()
+                .any(|record| matches!(record.pending, Some(PendingAction::BranchSwitch { .. })))
+            {
+                return Err(Error::new(
+                    ErrorCode::Busy,
+                    "workspace has a pending branch switch",
+                ));
+            }
+            if selected == Some(request.branch) {
+                return self
+                    .operations
+                    .finish(
+                        operation.clone(),
+                        CommandResult::Branch { branch },
+                        LocalCommit::default(),
+                    )
+                    .await;
+            }
+            if self
+                .runtime
+                .state
+                .sessions(request.workspace)
+                .await?
+                .iter()
+                .any(|session| {
+                    (session.branch == previous || session.branch == request.branch)
+                        && session.active_turn.is_some()
+                })
+            {
+                return Err(Error::new(
+                    ErrorCode::BranchBusy,
+                    "finish active turns before switching branches",
+                ));
+            }
+            let old = self
+                .runtime
+                .state
+                .mounts()
+                .await?
+                .into_iter()
+                .find(|mount| {
+                    mount.branch == previous
+                        && mount.access == AccessMode::ReadWrite
+                        && mount.state != MountState::Released
+                });
+            let (old, new) = if let Some(old) = old {
+                let (old, new) = self
+                    .plan(
+                        &operation.operation.principal,
+                        &PrepareMount {
+                            workspace: request.workspace,
+                            branch: request.branch,
+                            revision: None,
+                            path: old.path,
+                            access: AccessMode::ReadWrite,
+                            durability: old.durability,
+                        },
+                        branch.generation,
+                    )
+                    .await?;
+                (old, Some(new))
+            } else {
+                (None, None)
+            };
+            {
+                let _gate = self.runtime.lock_branch(previous).await;
+                let _protection = self.runtime.objects.read().await;
+                let previous_branch = self.runtime.branch(previous).await?;
+                self.revisions
+                    .preserve_working_locked(&previous_branch, &operation.operation.principal)
+                    .await?;
+            }
+            let mut record = operation.operation.clone();
+            record.pending = Some(PendingAction::BranchSwitch {
+                selection: WorkspaceSelection {
+                    workspace: request.workspace,
+                    branch: request.branch,
+                },
+                previous,
+                old: old.clone(),
+                new,
+            });
+            record.phase = if old.is_some() {
+                OperationPhase::WaitingForQuiesce
+            } else {
+                OperationPhase::Saving
+            };
+            record.mount_ready = old.as_ref().map(|_| false);
+            self.runtime
+                .state
+                .commit(LocalCommit {
+                    operations: vec![record.clone()],
+                    ..Default::default()
+                })
+                .await?;
+            if old.is_some() {
+                Ok(record)
+            } else {
+                self.execute(record).await
+            }
+        }
+        .await;
+        match result {
+            Ok(record) => Ok(record),
+            Err(error) => self.operations.fail(&operation, error).await,
+        }
+    }
+
     async fn prepare(
         &self,
         context: RequestContext,
@@ -575,7 +797,10 @@ impl MountApi for MountService {
         };
         let result = async {
             let old = match &target.pending {
-                Some(PendingAction::MountChange { old, .. }) => old.as_ref(),
+                Some(
+                    PendingAction::MountChange { old, .. }
+                    | PendingAction::BranchSwitch { old, .. },
+                ) => old.as_ref(),
                 Some(PendingAction::ApplyRevision { mount, .. }) => mount.as_ref(),
                 Some(PendingAction::Transfer { .. }) => {
                     return Err(Error::invalid("operation is an ownership transfer"));

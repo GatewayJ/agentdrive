@@ -64,7 +64,7 @@ For AWS S3, replace the bucket and region, and omit a custom endpoint:
 
 ## Credentials and environment precedence
 
-The **daemon process** reads S3 credentials. Set these variables in the shell or service environment that starts `agentfsd serve`. `AGENTFS_TOKEN_FILE` authenticates the CLI to AgentFS separately.
+The **daemon process** reads S3 credentials. Set these variables in the shell or service environment that starts `agentfsd serve`. `AGENTFS_TOKEN_FILE` authenticates the CLI to OpenCSG Workspace separately.
 
 ```sh
 export AWS_ACCESS_KEY_ID='your-access-key-id'
@@ -85,11 +85,11 @@ The locked `object_store` dependency supports the following credential sources, 
 
 The current adapter does not load `~/.aws/credentials`, `AWS_PROFILE`, or AWS CLI SSO sessions. Export resolved credentials or use one of the supported role providers. Static environment credentials are loaded at startup; restart the daemon after replacing them.
 
-AgentFS calls `AmazonS3Builder::from_env()` and then applies its configuration. The configured `bucket`, `region`, and `allow_http` values, including their defaults, override the corresponding AWS environment settings. A configured `endpoint` overrides `AWS_ENDPOINT`. The dependency's `AWS_ENDPOINT_URL_S3` takes precedence over both. When selecting the endpoint through `agentfs.json`, remove any unintended `AWS_ENDPOINT_URL_S3`; also remove `AWS_ENDPOINT` when using the default AWS regional endpoint. Path-style requests and ETag conditional writes are selected by the adapter.
+OpenCSG Workspace calls `AmazonS3Builder::from_env()` and then applies its configuration. The configured `bucket`, `region`, and `allow_http` values, including their defaults, override the corresponding AWS environment settings. A configured `endpoint` overrides `AWS_ENDPOINT`. The dependency's `AWS_ENDPOINT_URL_S3` takes precedence over both. When selecting the endpoint through `agentfs.json`, remove any unintended `AWS_ENDPOINT_URL_S3`; also remove `AWS_ENDPOINT` when using the default AWS regional endpoint. Path-style requests and ETag conditional writes are selected by the adapter.
 
 ## Storage requirements and verification
 
-The storage service must support GET/HEAD, listing by prefix, object writes, multipart upload and abort, and strongly consistent reads. AgentFS creates immutable objects with `If-None-Match: *`, completes multipart uploads with the same condition, and updates references using `If-Match` with the previous ETag. Conditional write behavior is described in the [AWS S3 documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html). Files larger than 8 MiB use multipart upload; part sizes range from 8 to 64 MiB according to file size. Restrict storage credentials to the selected bucket and namespace.
+The storage service must support GET/HEAD, listing by prefix, object writes, multipart upload and abort, and strongly consistent reads. OpenCSG Workspace creates immutable objects with `If-None-Match: *`, completes multipart uploads with the same condition, and updates references using `If-Match` with the previous ETag. Conditional write behavior is described in the [AWS S3 documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html). Files larger than 8 MiB use multipart upload; part sizes range from 8 to 64 MiB according to file size. Restrict storage credentials to the selected bucket and namespace.
 
 Daemon startup constructs the S3 client; it does not prove that the bucket or credentials work. After importing content using the [CLI example](cli.md), explicitly push and inspect the original import receipt:
 
@@ -108,6 +108,6 @@ For a compatibility check covering conditional writes, competing updates, 20 MiB
 
 Configure each daemon with the same S3 endpoint, bucket, prefix, and signing region. Each machine needs its own initialized state directory and `LocationId`; share the workspace ID returned by the source daemon. The destination's authenticated principal must be the workspace owner or have suitable grants. Tokens can differ between machines.
 
-Push on the source, then call `sync` with `direction: "pull"` and the same workspace ID on the destination. Pull imports history and remote branch references. Use a retained revision to create a local branch or session, or complete an online `ownership_transfer` before adopting an existing writable branch. See [operations](operations.md) and the [MCP reference](mcp.md).
+Push on the source, then call `sync` with `direction: "pull"` and the same workspace ID on the destination. Pull imports history and remote branch references. Use a retained revision to create a local branch, or complete an online `ownership_transfer` before adopting an existing writable branch. See [operations](operations.md) and the [MCP reference](mcp.md).
 
 Configuration definitions: [daemon](../apps/agentfsd/src/config.rs), [S3 adapter](../crates/agentfs-s3/src/lib.rs), and dependency version in [Cargo.lock](../Cargo.lock).

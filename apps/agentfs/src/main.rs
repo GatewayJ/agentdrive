@@ -1,5 +1,6 @@
+mod integration;
 use agentfs_mcp::{Client, stdio_proxy};
-use agentfs_model::{Error, Result};
+use agentfs_model::{BranchId, Error, OperationId, Result, RevisionId, WorkspaceId};
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 use std::{io::Read, path::PathBuf};
@@ -32,6 +33,45 @@ enum Command {
     },
     /// Forward MCP over standard input/output to the long-running daemon.
     Mcp,
+    /// Run an ACP or Codex app-server process with automatic persistence.
+    Integrate(integration::Options),
+    /// Manage workspace branches.
+    Branch {
+        #[command(subcommand)]
+        command: BranchCommand,
+    },
+    /// Print the dashboard address or open it in the system browser.
+    Dashboard {
+        #[arg(long)]
+        open: bool,
+    },
+}
+#[derive(Debug, Subcommand)]
+enum BranchCommand {
+    List {
+        #[arg(long)]
+        workspace: WorkspaceId,
+    },
+    Create {
+        #[arg(long)]
+        workspace: WorkspaceId,
+        #[arg(long)]
+        name: String,
+        #[arg(long, conflicts_with = "source_branch")]
+        source: Option<RevisionId>,
+        #[arg(long)]
+        source_branch: Option<BranchId>,
+        #[arg(long)]
+        request_id: Option<String>,
+    },
+    Switch {
+        #[arg(long)]
+        workspace: WorkspaceId,
+        #[arg(long)]
+        branch: BranchId,
+        #[arg(long)]
+        request_id: Option<String>,
+    },
 }
 #[tokio::main]
 async fn main() {
@@ -57,9 +97,39 @@ async fn run(arguments: Arguments) -> Result<bool> {
             Error::invalid("set AGENTFS_TOKEN_FILE, --token-file, or AGENTFS_TOKEN")
         })?,
     };
+    let command = match arguments.command {
+        Command::Integrate(options) => {
+            return integration::run(&arguments.endpoint, token, options).await;
+        }
+        Command::Dashboard { open } => {
+            let mut url = integration::base_url(&arguments.endpoint)?;
+            println!("{url}");
+            if open {
+                let mut fragment = reqwest::Url::parse("http://localhost/")
+                    .map_err(|error| Error::invalid(error.to_string()))?;
+                fragment.query_pairs_mut().append_pair("token", &token);
+                url.set_fragment(fragment.query());
+                #[cfg(target_os = "linux")]
+                let mut opener = std::process::Command::new("xdg-open");
+                #[cfg(target_os = "macos")]
+                let mut opener = std::process::Command::new("open");
+                #[cfg(windows)]
+                let mut opener = {
+                    let mut command = std::process::Command::new("rundll32");
+                    command.arg("url.dll,FileProtocolHandler");
+                    command
+                };
+                if !opener.arg(url.as_str()).status()?.success() {
+                    return Err(Error::invalid("browser could not be opened"));
+                }
+            }
+            return Ok(true);
+        }
+        command => command,
+    };
     let client = Client::connect(&arguments.endpoint, token).await?;
     let result = async {
-        match arguments.command {
+        match command {
             Command::Tools => println!("{}", serde_json::to_string_pretty(&client.tools().await?)?),
             Command::Call {
                 tool,
@@ -94,6 +164,31 @@ async fn run(arguments: Arguments) -> Result<bool> {
                 return Ok(success);
             }
             Command::Mcp => stdio_proxy(client.clone()).await?,
+            Command::Branch { command } => {
+                let (tool, input) = match command {
+                    BranchCommand::List { workspace } => ("workspace_status", json!({"workspace": workspace})),
+                    BranchCommand::Create { workspace, name, source, source_branch, request_id } => ("branch_create", json!({"request_id": request_id.unwrap_or_else(|| OperationId::new().to_string()), "request": {"workspace":workspace,"name":name,"source":source,"source_branch":source_branch}})),
+                    BranchCommand::Switch { workspace, branch, request_id } => ("branch_switch", json!({"request_id": request_id.unwrap_or_else(|| OperationId::new().to_string()), "request": {"workspace":workspace,"branch":branch}})),
+                };
+                let mut result = client.call(tool.into(), input).await?;
+                if tool == "branch_switch"
+                    && let Some(record) = &result.structured_content
+                    && record["phase"] == "waiting_for_quiesce"
+                {
+                    let operation = record["id"].clone();
+                    let generation = record["pending"]["old"]["generation"].clone();
+                    let released = client.call("mount_release".into(), json!({
+                        "request_id": OperationId::new().to_string(),
+                        "request": {"operation":operation,"expected_binding_generation":generation},
+                    })).await?;
+                    let current = client.call("operation_get".into(), json!({"operation":operation})).await?;
+                    result = if released.is_error == Some(true) && current.is_error != Some(true) { released } else { current };
+                }
+                let success = result.is_error != Some(true);
+                println!("{}", serde_json::to_string_pretty(&result.structured_content)?);
+                return Ok(success);
+            }
+            Command::Integrate(_) | Command::Dashboard { .. } => unreachable!(),
         }
         Ok(true)
     }

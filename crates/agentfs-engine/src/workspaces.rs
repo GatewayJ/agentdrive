@@ -84,6 +84,7 @@ impl WorkspaceService {
         let root = self.revisions.trees.save_tree(id, &tree).await?;
         let branch_id = BranchId::new();
         let revision = Revision {
+            message: None,
             id: initial_revision,
             workspace: id,
             branch: Some(branch_id),
@@ -108,10 +109,11 @@ impl WorkspaceService {
             autosave_head: None,
             working_root: root,
             base_revision: initial_revision,
+            source_branch: None,
             next_inode: 2,
             dirty: false,
             state: BranchState::Writable,
-            protected: true,
+            protected: false,
         };
         let mut operation = context.operation;
         operation.workspace = Some(id);
@@ -129,6 +131,10 @@ impl WorkspaceService {
         self.runtime
             .state
             .commit(LocalCommit {
+                selections: vec![WorkspaceSelection {
+                    workspace: id,
+                    branch: branch_id,
+                }],
                 new_workspaces: vec![workspace],
                 new_branches: vec![branch],
                 revisions: vec![revision],
@@ -187,6 +193,7 @@ impl WorkspaceApi for WorkspaceService {
             .authorize(actor, workspace, None, Permission::Read)
             .await?;
         Ok(WorkspaceStatus {
+            selected_branch: self.runtime.state.selected_branch(workspace.id).await?,
             location: self.runtime.location,
             branches: self.runtime.state.branches(workspace.id).await?,
             remote_branches: self.runtime.state.remote_refs(workspace.id).await?,
@@ -260,6 +267,7 @@ impl WorkspaceApi for WorkspaceService {
             let revision_id = RevisionId::new();
             let branch_id = BranchId::new();
             let revision = Revision {
+                message: None,
                 id: revision_id,
                 workspace: workspace.id,
                 branch: Some(branch_id),
@@ -284,6 +292,12 @@ impl WorkspaceApi for WorkspaceService {
                 autosave_head: None,
                 working_root: root,
                 base_revision: workspace.initial_revision,
+                source_branch: self
+                    .revisions
+                    .trees
+                    .revision(workspace.id, workspace.initial_revision)
+                    .await?
+                    .branch,
                 next_inode: increment(tree.values().map(|inode| inode.id.0).max().unwrap_or(1))?,
                 dirty: false,
                 state: BranchState::Writable,

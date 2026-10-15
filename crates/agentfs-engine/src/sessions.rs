@@ -157,46 +157,52 @@ impl SessionService {
                 "session exists; use session_resume",
             ));
         }
-        if request.source_revision.is_some() && request.source_branch.is_some() {
-            return Err(Error::invalid("choose one session source"));
-        }
-        let workspace = self
-            .runtime
+        let branch_id = match request.branch {
+            Some(id) => id,
+            None => self
+                .runtime
+                .state
+                .selected_branch(request.key.workspace)
+                .await?
+                .ok_or_else(|| {
+                    Error::invalid("select a workspace branch before opening a session")
+                })?,
+        };
+        self.runtime
             .authorize(
                 &operation.operation.principal,
                 request.key.workspace,
-                None,
+                Some(branch_id),
                 Permission::Write,
             )
             .await?;
-        let source = if let Some(id) = request.source_branch {
-            let _gate = self.runtime.lock_branch(id).await;
-            let _protection = self.runtime.objects.read().await;
-            let branch = self.runtime.branch(id).await?;
-            if branch.workspace != workspace.id {
-                return Err(Error::invalid("source branch belongs to another workspace"));
-            }
-            let branch = self
-                .revisions
-                .preserve_working_locked(&branch, &operation.operation.principal)
-                .await?;
-            branch.autosave_head.unwrap_or(branch.formal_head)
-        } else {
-            request
-                .source_revision
-                .unwrap_or(workspace.initial_revision)
-        };
+        let branch = self.runtime.branch(branch_id).await?;
+        branch.check_write(self.runtime.location, branch.authority_epoch)?;
+        if request.mount_path.is_some()
+            && self
+                .runtime
+                .state
+                .sessions(request.key.workspace)
+                .await?
+                .iter()
+                .any(|session| session.branch == branch_id && session.active_turn.is_some())
+        {
+            return Err(Error::new(
+                ErrorCode::BranchBusy,
+                "finish the active branch turn before attaching another session",
+            ));
+        }
         let mut binding = SessionBinding {
             key: request.key.clone(),
             principal: operation.operation.principal.clone(),
-            branch: BranchId::new(),
+            branch: branch_id,
             mount: None,
             state: SessionState::Active,
             active_turn: None,
         };
         let planned = if let Some(path) = request.mount_path {
             let mount_request = PrepareMount {
-                workspace: workspace.id,
+                workspace: request.key.workspace,
                 branch: binding.branch,
                 revision: None,
                 path,
@@ -205,7 +211,7 @@ impl SessionService {
             };
             let (old, new) = self
                 .mounts
-                .plan(&binding.principal, &mount_request, 1)
+                .plan(&binding.principal, &mount_request, branch.generation)
                 .await?;
             binding.mount = Some(new.id);
             operation.operation.pending = Some(PendingAction::MountChange {
@@ -219,15 +225,9 @@ impl SessionService {
             None
         };
         let mut result = {
+            let _gate = self.runtime.lock_branch(branch_id).await;
             let _protection = self.runtime.objects.read().await;
-            self.revisions
-                .fork_locked(
-                    operation,
-                    workspace.id,
-                    source,
-                    format!("session-{}", binding.branch),
-                    Some(binding.clone()),
-                )
+            self.save_binding(operation, binding.clone(), None, SaveResult::Session)
                 .await?
         };
         if let Some((old, new)) = planned {
@@ -298,6 +298,7 @@ impl SessionService {
                 .save_locked(
                     operation.clone(),
                     SaveRevision {
+                        message: None,
                         guard: BranchGuard::from(&branch),
                         kind: RevisionKind::Checkpoint,
                         parents: None,
@@ -325,6 +326,21 @@ impl SessionService {
 
 #[async_trait]
 impl SessionApi for SessionService {
+    async fn get(&self, actor: &Principal, key: &SessionKey) -> Result<Option<SessionBinding>> {
+        key.validate()?;
+        self.runtime
+            .authorize(actor, key.workspace, None, Permission::Write)
+            .await?;
+        match self.runtime.state.session(key).await? {
+            Some(binding) if &binding.principal == actor => Ok(Some(binding)),
+            Some(_) => Err(Error::new(
+                ErrorCode::PermissionDenied,
+                "session belongs to another principal",
+            )),
+            None => Ok(None),
+        }
+    }
+
     async fn open(&self, context: RequestContext, request: OpenSession) -> Result<OperationRecord> {
         let _lifecycle = self.runtime.lifecycle.lock().await;
         let _session_gate = self.lock(&request.key).await?;
@@ -383,6 +399,23 @@ impl SessionApi for SessionService {
                 return Err(Error::new(
                     ErrorCode::Conflict,
                     "closed session cannot be resumed",
+                ));
+            }
+            if self
+                .runtime
+                .state
+                .sessions(request.key.workspace)
+                .await?
+                .iter()
+                .any(|other| {
+                    other.branch == session.branch
+                        && other.key != session.key
+                        && other.active_turn.is_some()
+                })
+            {
+                return Err(Error::new(
+                    ErrorCode::BranchBusy,
+                    "another session has an active turn on this branch",
                 ));
             }
             let mut turn = if let Some(id) = &session.active_turn {
@@ -490,6 +523,7 @@ impl SessionApi for SessionService {
                         .save_locked(
                             context,
                             SaveRevision {
+                                message: None,
                                 guard: BranchGuard::from(&branch),
                                 kind: RevisionKind::Commit,
                                 parents: None,
@@ -584,6 +618,7 @@ impl SessionApi for SessionService {
         context: RequestContext,
         request: BeginTurn,
     ) -> Result<OperationRecord> {
+        let _lifecycle = self.runtime.lifecycle.lock().await;
         let _session_gate = self.lock(&request.key).await?;
         let mut session = self.binding(&context.principal, &request.key).await?;
         let operation = match self
@@ -602,6 +637,19 @@ impl SessionApi for SessionService {
         };
         let result = async {
             validate_label(&request.turn_id, "turn_id")?;
+            if self
+                .runtime
+                .state
+                .operations(request.key.workspace)
+                .await?
+                .iter()
+                .any(|record| matches!(record.pending, Some(PendingAction::BranchSwitch { .. })))
+            {
+                return Err(Error::new(
+                    ErrorCode::BranchBusy,
+                    "complete or cancel the pending branch switch before starting a turn",
+                ));
+            }
             if let Some(existing) = self.record(&request.key, &request.turn_id).await? {
                 return self
                     .operations
@@ -622,6 +670,19 @@ impl SessionApi for SessionService {
                 return Err(Error::new(
                     ErrorCode::BranchBusy,
                     "session already has an active turn",
+                ));
+            }
+            if self
+                .runtime
+                .state
+                .sessions(request.key.workspace)
+                .await?
+                .iter()
+                .any(|other| other.branch == session.branch && other.active_turn.is_some())
+            {
+                return Err(Error::new(
+                    ErrorCode::BranchBusy,
+                    "another session has an active turn on this branch",
                 ));
             }
             let _gate = self.runtime.lock_branch(session.branch).await;
@@ -665,6 +726,7 @@ impl SessionApi for SessionService {
     }
 
     async fn turn_end(&self, context: RequestContext, request: EndTurn) -> Result<OperationRecord> {
+        let _lifecycle = self.runtime.lifecycle.lock().await;
         let _session_gate = self.lock(&request.key).await?;
         let mut session = self.binding(&context.principal, &request.key).await?;
         let operation = match self
@@ -684,11 +746,12 @@ impl SessionApi for SessionService {
         let result = async {
             if !matches!(
                 request.status,
-                TurnStatus::Completed | TurnStatus::Failed | TurnStatus::Cancelled
+                TurnStatus::Completed
+                    | TurnStatus::Failed
+                    | TurnStatus::Cancelled
+                    | TurnStatus::Interrupted
             ) {
-                return Err(Error::invalid(
-                    "turn_end requires completed, failed or cancelled",
-                ));
+                return Err(Error::invalid("turn_end requires a terminal turn status"));
             }
             let mut turn = self
                 .record(&request.key, &request.turn_id)
@@ -747,6 +810,7 @@ impl SessionApi for SessionService {
                     .save_locked(
                         operation.clone(),
                         SaveRevision {
+                            message: None,
                             guard: BranchGuard::from(&branch),
                             kind: RevisionKind::Commit,
                             parents: None,

@@ -228,6 +228,7 @@ impl MergeService {
             .save_tree(branch.workspace, &tree)
             .await?;
         let revision = Revision {
+            message: None,
             id: RevisionId::new(),
             workspace: branch.workspace,
             branch: None,
@@ -603,6 +604,7 @@ impl MergeApi for MergeService {
                 .save_tree(candidate.workspace, &tree)
                 .await?;
             let revision = Revision {
+                message: None,
                 id: RevisionId::new(),
                 workspace: candidate.workspace,
                 branch: None,

@@ -25,7 +25,7 @@ Replace both paths with actual absolute paths; use `agentfs.exe` on Windows. The
 
 For direct Streamable HTTP, use `http://127.0.0.1:7421/mcp` and `Authorization: Bearer <token-file-contents>`. Use an MCP client that performs initialization and preserves the returned session information. The accepted Host values are the bound address and `localhost:<port>`. A supplied Origin must match `allowed_origins`; native CLI/stdio connections omit Origin. The daemon binds only to loopback; access from other machines requires an authenticated TLS proxy preserving an accepted Host value.
 
-The server advertises the MCP `tools` capability. It provides 33 tools, including their input JSON schemas and annotations. Read the connected server's catalog with `tools/list` or:
+The server advertises the MCP `tools` capability. It provides 32 tools, including their input JSON schemas and annotations. Read the connected server's catalog with `tools/list` or:
 
 ```sh
 agentfs tools > tools.json
@@ -78,18 +78,17 @@ Fields below are inside `request`. A suffix `?` means the field may be omitted. 
 
 | Tool | Request fields | Behavior / result |
 | --- | --- | --- |
-| `workspace_create` | `name`, `grants?`, `max_file_bytes?`, `max_working_bytes?`, `max_inodes?` | Creates a workspace and protected `main`; `result.workspace`. Defaults: 64 GiB/file, 256 GiB working capacity, 1,000,000 inodes. Inodes must be 1–1,000,000; file capacity must be positive and no greater than working capacity; working capacity must be at most `i64::MAX`. |
+| `workspace_create` | `name`, `grants?`, `max_file_bytes?`, `max_working_bytes?`, `max_inodes?` | Creates a workspace and selected writable `main`; `result.workspace`. Defaults: 64 GiB/file, 256 GiB working capacity, 1,000,000 inodes. Inodes must be 1–1,000,000; file capacity must be positive and no greater than working capacity; working capacity must be at most `i64::MAX`. |
 | `workspace_import` | `workspace`, `source` | Imports a stable allowed host directory into a new branch; `result.branch`. |
 | `workspace_export` | `workspace`, `revision`, `destination`, `paths?` | Exports selected paths into a new allowed host directory. Omitted/null paths select the whole revision. |
-| `revision_commit` | `guard`, `kind`, `durability?` | `kind` accepts `commit` or `checkpoint`; returns `result.revision` and `result.branch`. |
-| `branch_fork` | `workspace`, `source`, `name` | `source` is a retained revision ID; creates an isolated writable branch. |
+| `revision_commit` | `guard`, `kind`, `message?`, `durability?` | `kind` accepts `commit` or `checkpoint`; returns `result.revision` and `result.branch`. `message` permits up to 4096 UTF-8 bytes without NUL. |
+| `branch_create` | `workspace`, `name`, `source?`, `source_branch?` | Provide at most one source. Omission uses the selected branch; branch sources include unsaved working content. Returns `result.branch` without changing the selection. |
+| `branch_switch` | `workspace`, `branch` | Saves the previous branch and updates the workspace selection and attachments; active turns must finish and existing mounts require `mount_release`. |
 | `branch_restore` | `guard`, `revision`, `durability?` | Restores a branch, with mount release when required. |
-| `session_open` | `key`, `source_revision?`, `source_branch?`, `mount_path?`, `durability?` | Select at most one source; omission selects the workspace's initial revision. `source_branch` captures current working state. Omit `mount_path` for an unmounted session; returns `result.binding`. |
+| `session_open` | `key`, `branch?`, `mount_path?`, `durability?` | Attaches to an existing branch, defaulting to the workspace selection. Omit `mount_path` for an unmounted session. Returns `result.binding`. |
 | `session_resume` | `key`, `mount_path?`, `recovery_action?`, `turn_id?`, `durability?` | For recovery with an active turn, supply that `turn_id` and `recovery_action: "continue"` or `"interrupt"`. |
 | `session_pause` | `key`, `durability?` | Saves and pauses the session, releasing its mount when required. |
 | `session_close` | `key`, `durability?` | Saves and closes the session, releasing its mount when required. |
-| `turn_begin` | `key`, `turn_id` | Records the turn before work starts; `result.record`. |
-| `turn_end` | `key`, `turn_id`, `status`, `durability?` | `status` accepts `completed`, `failed`, or `cancelled`; saves changed content and an immutable turn result. |
 | `sync` | `workspace`, `direction`, `branches?` | `direction`: `push`, `pull`, `both`; omission/null of `branches` selects all. `both` pushes before pulling. On pull, discovery imports remote history before filtering branch IDs in the result. |
 | `cache_prefetch` | `workspace`, `revision`, `paths?` | Downloads a `RevisionRange`; `result.status`. |
 | `cache_pin` | `range`, `enabled` | `range` is a `RevisionRange`; `true` downloads and protects content, `false` removes that pin. |
@@ -107,7 +106,7 @@ Fields below are inside `request`. A suffix `?` means the field may be omitted. 
 | Tool | Arguments | Result |
 | --- | --- | --- |
 | `workspace_list` | `{}` | Visible workspace array. |
-| `workspace_status` | `workspace` | Workspace, local location, branches, remote references, mounts, pending jobs, capabilities, and storage statistics. |
+| `workspace_status` | `workspace` | Workspace, local location, `selected_branch`, branches, remote references, mounts, pending jobs, capabilities, and storage statistics. |
 | `revision_list` | `workspace`, `branch?` | Retained revision array; optional branch filter. |
 | `revision_diff` | `workspace`, `before`, `after` | File differences between two revision IDs. |
 | `revision_read` | `workspace`, `revision`, `path`, `offset`, `size` | `{bytes, length}`; offset and size are bytes, size at most 4,194,304. |
@@ -134,3 +133,5 @@ Call `workspace_status` for an existing workspace and inspect `capabilities`:
 File editing normally uses the mounted native path; the MCP tools manage workspaces, versions, and lifecycle. The catalog marks the nine queries `readOnlyHint: true` and `destructiveHint: false`; commands and cancellation use the opposite values. All tools currently advertise `idempotentHint: true` and `openWorldHint: true`. These annotations describe tool behavior; authentication, grants, request identities, and state checks enforce access and retries.
 
 Source definitions: [catalog and dispatch](../crates/agentfs-mcp/src/server.rs), [request types](../crates/agentfs-ports/src/api.rs), [shared types](../crates/agentfs-model/src/entities.rs), and [error codes](../crates/agentfs-model/src/error.rs).
+
+Turn persistence is managed by [agent integrations](integrations.md) through the authenticated lifecycle API. Branches expose `source_branch` and `base_revision` for creation ancestry.

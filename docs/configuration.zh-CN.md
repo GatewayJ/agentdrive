@@ -64,7 +64,7 @@ token 文件必须是普通文件，最多 4096 字节，去除首尾空白后�
 
 ## 凭据与环境变量优先级
 
-S3 凭据由**守护进程**读取。请在启动 `agentfsd serve` 的终端或服务环境中设置变量。`AGENTFS_TOKEN_FILE` 用于 CLI 访问 AgentFS 的身份验证。
+S3 凭据由**守护进程**读取。请在启动 `agentfsd serve` 的终端或服务环境中设置变量。`AGENTFS_TOKEN_FILE` 用于 CLI 访问 OpenCSG Workspace 的身份验证。
 
 ```sh
 export AWS_ACCESS_KEY_ID='your-access-key-id'
@@ -85,11 +85,11 @@ PowerShell 使用 `$env:AWS_ACCESS_KEY_ID = 'your-access-key-id'` 和 `$env:AWS_
 
 当前适配器不会读取 `~/.aws/credentials`、`AWS_PROFILE` 或 AWS CLI SSO 会话。请导出有效凭据，或者使用支持的角色凭据来源。静态环境变量凭据在启动时读取，替换后需要重新启动守护进程。
 
-AgentFS 调用 `AmazonS3Builder::from_env()` 后应用自身配置。配置中的 `bucket`、`region` 和 `allow_http`，包括默认值，都会覆盖对应的 AWS 环境变量。配置中的 `endpoint` 会覆盖 `AWS_ENDPOINT`。依赖库中的 `AWS_ENDPOINT_URL_S3` 优先于这两个设置。通过 `agentfs.json` 选择 endpoint 时，请移除不需要的 `AWS_ENDPOINT_URL_S3`；使用默认 AWS regional endpoint 时，也需要移除 `AWS_ENDPOINT`。适配器会选择 path-style 请求和基于 ETag 的条件写入。
+OpenCSG Workspace 调用 `AmazonS3Builder::from_env()` 后应用自身配置。配置中的 `bucket`、`region` 和 `allow_http`，包括默认值，都会覆盖对应的 AWS 环境变量。配置中的 `endpoint` 会覆盖 `AWS_ENDPOINT`。依赖库中的 `AWS_ENDPOINT_URL_S3` 优先于这两个设置。通过 `agentfs.json` 选择 endpoint 时，请移除不需要的 `AWS_ENDPOINT_URL_S3`；使用默认 AWS regional endpoint 时，也需要移除 `AWS_ENDPOINT`。适配器会选择 path-style 请求和基于 ETag 的条件写入。
 
 ## 存储要求与验证
 
-存储服务需要支持 GET/HEAD、按前缀列举、对象写入、分段上传和终止上传，以及强一致读取。AgentFS 使用 `If-None-Match: *` 创建不可变对象，并以相同条件完成分段上传；更新引用时使用携带之前 ETag 的 `If-Match`。条件写入行为见 [AWS S3 文档](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)。大于 8 MiB 的文件使用分段上传，分段大小根据文件大小在 8 至 64 MiB 之间选择。存储凭据权限应限制在选定的 bucket 和命名空间内。
+存储服务需要支持 GET/HEAD、按前缀列举、对象写入、分段上传和终止上传，以及强一致读取。OpenCSG Workspace 使用 `If-None-Match: *` 创建不可变对象，并以相同条件完成分段上传；更新引用时使用携带之前 ETag 的 `If-Match`。条件写入行为见 [AWS S3 文档](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)。大于 8 MiB 的文件使用分段上传，分段大小根据文件大小在 8 至 64 MiB 之间选择。存储凭据权限应限制在选定的 bucket 和命名空间内。
 
 守护进程启动时会构建 S3 客户端，但启动成功不能证明 bucket 或凭据可用。按照 [CLI 示例](cli.zh-CN.md)导入内容后，明确执行推送，并查看原始导入操作的结果记录：
 
@@ -108,6 +108,6 @@ jq -n --arg operation "$(jq -r '.id' "$AGENTFS_DIRECTORY/demo-import.json")" '{o
 
 各守护进程需要配置相同的 S3 endpoint、bucket、prefix 和签名 region。每台机器分别初始化状态目录并获得自己的 `LocationId`，然后使用源守护进程返回的 workspace ID。目标机器上通过身份验证的 principal 需要是工作区所有者，或者获得适当授权。各机器的 token 可以不同。
 
-在源机器执行推送，然后在目标机器使用相同 workspace ID 调用 `sync`，设置 `direction: "pull"`。拉取会导入历史和远端分支引用。可以使用已保留的版本创建本地分支或会话；需要接管已有可写分支时，完成在线 `ownership_transfer`。详见[操作说明](operations.zh-CN.md)和 [MCP 参考](mcp.zh-CN.md)。
+在源机器执行推送，然后在目标机器使用相同 workspace ID 调用 `sync`，设置 `direction: "pull"`。拉取会导入历史和远端分支引用。可以使用已保留的版本创建本地分支；需要接管已有可写分支时，完成在线 `ownership_transfer`。详见[操作说明](operations.zh-CN.md)和 [MCP 参考](mcp.zh-CN.md)。
 
 配置定义见[守护进程](../apps/agentfsd/src/config.rs)、[S3 适配器](../crates/agentfs-s3/src/lib.rs)，依赖版本见 [Cargo.lock](../Cargo.lock)。

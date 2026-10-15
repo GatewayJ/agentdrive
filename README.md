@@ -1,15 +1,16 @@
-# AgentFS
+# OpenCSG Workspace
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-AgentFS gives agents durable workspaces, isolated session branches, immutable revisions, and native filesystem paths. A long-running Rust daemon owns local state and mounts. Concurrent MCP clients and the CLI share its authenticated API.
+OpenCSG Workspace gives agents durable workspaces, explicit workspace branches, immutable revisions, and native filesystem paths. A long-running Rust daemon owns local state and mounts. Concurrent MCP clients and the CLI share its authenticated API.
 
 The implementation includes:
 
 - Portable file names, content-addressed objects, paged directory/inode indexes, and SQLite transactions.
 - Linux FUSE, macOS macFUSE, and Windows WinFsp adapters; snapshots, branch restore, session and turn history.
 - S3/RustFS replication, bounded streaming transfers, offline cache pins, online ownership transfer, and validated three-way merge candidates.
-- 33 typed MCP tools over authenticated Streamable HTTP, with a stdio proxy and JSON CLI.
+- ACP and Codex app-server lifecycle bridges, explicit branch commands, and a read-only branch/history dashboard.
+- 32 typed MCP tools over authenticated Streamable HTTP, with a stdio proxy and JSON CLI.
 
 ## Build
 
@@ -51,13 +52,20 @@ To connect an MCP client through stdio, configure the executable as `agentfs`, a
 
 Use `agentfs tools` as the source for JSON input schemas. Command tools accept `{ "request_id": "stable-id", "request": { ... } }` over MCP. The CLI's `--request-id` option builds that envelope. Query tools and `operation_cancel` receive their arguments directly. `--json -` reads JSON from standard input. The CLI exits with 0 for successful tool responses, 2 for a tool error, and 1 for transport or input errors; command-line parsing errors also use 2. See [CLI usage](docs/cli.md) for executable examples and [MCP parameters and capabilities](docs/mcp.md) for the complete tool reference.
 
-## Work with sessions
+## Branches, agents, and dashboard
 
-1. Create or import a workspace. `workspace_status` returns its `location`, branch IDs, ownership epochs, and generations.
-2. Call `session_open` with `key = {workspace, app_namespace, session_id, location}` and an absolute `mount_path` under a configured mount root. The operation returns the session branch and mount state.
-3. Call `turn_begin` with the session key and a stable `turn_id`. Run the agent against the mounted directory.
-4. Call `turn_end` with `completed`, `failed`, or `cancelled`. Modified content produces a revision; an unchanged turn retains the existing revision and still records its outcome.
-5. Use `session_pause`, `session_resume`, and `session_close` to manage the attachment. Request `durability: "remote"` when remote confirmation is required.
+A new workspace selects its writable `main` branch. Sessions attach to the selected branch. Create and switch branches explicitly through MCP (`branch_create`, `branch_switch`) or the CLI:
+
+```sh
+agentfs branch list --workspace "$WORKSPACE"
+agentfs branch create --workspace "$WORKSPACE" --name feat/task
+agentfs branch switch --workspace "$WORKSPACE" --branch "$BRANCH"
+agentfs dashboard --open
+```
+
+Creation captures current working content without changing the selection. Switching saves the previous branch, checks active turns and native file handles, and updates the workspace selection and attached sessions. The selection survives daemon restarts. The dashboard shows branch ancestry, commit messages, authors, timestamps, and parent revisions.
+
+Configure the agent application's stdio command through `agentfs integrate`. It manages session attachment, the working directory, turn boundaries, cancellation, and reconnect recovery. See [agent integrations](docs/integrations.md) for ACP and Codex app-server commands and protocol behavior. Automatic saves remain enabled throughout each turn.
 
 The branch owner, epoch, generation, and head are checked for guarded changes. Obtain current values from `workspace_status`; do not manufacture them. Operations that need an active mount to stop return `waiting_for_quiesce`. Stop processes using that directory, close their handles and current working directories, then call `mount_release` with the operation ID and expected binding generation. See [operations and recovery](docs/operations.md).
 
@@ -91,4 +99,4 @@ File operations cover regular files and directories, atomic branch append, renam
 
 The advertised capability response describes the supported behavior. Symbolic links, hard links, extended attributes, memory-mapped writes, advisory locking, automatic text conflict resolution, physical remote garbage collection, and global session-location arbitration are outside the implemented interface. Unlinking an open file or replacing an open destination returns a busy error. Concurrent changes to the same path become explicit merge conflicts. Mounts are owned by the daemon's OS identity; workspace access grants govern MCP requests.
 
-See the [documentation index](docs/README.md), [architecture](docs/architecture.md), [operations and recovery](docs/operations.md), and [validation](docs/validation.md). AgentFS is licensed under Apache-2.0; the vendored WinFsp Rust wrapper retains its MIT license.
+See the [documentation index](docs/README.md), [architecture](docs/architecture.md), [operations and recovery](docs/operations.md), and [validation](docs/validation.md). OpenCSG Workspace is licensed under Apache-2.0; the vendored WinFsp Rust wrapper retains its MIT license.

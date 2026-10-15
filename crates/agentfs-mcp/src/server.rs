@@ -43,14 +43,13 @@ impl McpServer {
             "workspace_import" => command!(ImportDirectory, workspace, import_directory),
             "workspace_export" => command!(ExportRevision, workspace, export_revision),
             "revision_commit" => command!(CommitRevision, revisions, commit),
-            "branch_fork" => command!(ForkBranch, revisions, fork),
+            "branch_create" => command!(ForkBranch, revisions, fork),
+            "branch_switch" => command!(SwitchBranch, mounts, switch_branch),
             "branch_restore" => command!(RestoreBranch, revisions, restore),
             "session_open" => command!(OpenSession, sessions, open),
             "session_resume" => command!(ResumeSession, sessions, resume),
             "session_pause" => command!(SessionAction, sessions, pause),
             "session_close" => command!(SessionAction, sessions, close),
-            "turn_begin" => command!(BeginTurn, sessions, turn_begin),
-            "turn_end" => command!(EndTurn, sessions, turn_end),
             "sync" => command!(SyncRequest, replica, sync),
             "cache_prefetch" => command!(RevisionRange, cache, prefetch),
             "cache_pin" => command!(PinRequest, cache, pin),
@@ -322,8 +321,13 @@ pub fn tool_catalog() -> Vec<Tool> {
             true,
         ),
         tool::<Command<ForkBranch>>(
-            "branch_fork",
-            "Create an isolated writable branch from a retained revision.",
+            "branch_create",
+            "Create a writable branch from current working content or an explicit source.",
+            false,
+        ),
+        tool::<Command<SwitchBranch>>(
+            "branch_switch",
+            "Select the workspace branch and update idle session attachments; active mounts require release.",
             false,
         ),
         tool::<Command<RestoreBranch>>(
@@ -333,7 +337,7 @@ pub fn tool_catalog() -> Vec<Tool> {
         ),
         tool::<Command<OpenSession>>(
             "session_open",
-            "Create an isolated agent session and optionally mount its workspace directory.",
+            "Attach a session to the selected workspace branch or an explicit branch.",
             false,
         ),
         tool::<Command<ResumeSession>>(
@@ -349,16 +353,6 @@ pub fn tool_catalog() -> Vec<Tool> {
         tool::<Command<SessionAction>>(
             "session_close",
             "Save and close a session, releasing its mount after caller quiescence.",
-            false,
-        ),
-        tool::<Command<BeginTurn>>(
-            "turn_begin",
-            "Persist an agent turn identifier before work begins.",
-            false,
-        ),
-        tool::<Command<EndTurn>>(
-            "turn_end",
-            "Atomically save working changes and the immutable completed, failed or cancelled turn result.",
             false,
         ),
         tool::<Command<SyncRequest>>(

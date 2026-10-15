@@ -25,7 +25,7 @@
 
 直接连接 Streamable HTTP 时，使用 `http://127.0.0.1:7421/mcp`，并提供 `Authorization: Bearer <token-file-contents>`。MCP 客户端需要完成初始化并保留返回的会话信息。允许的 Host 为监听地址和 `localhost:<port>`。请求携带 Origin 时，需要匹配 `allowed_origins`；原生 CLI/stdio 连接省略 Origin。守护进程仅监听本机回环地址；其他机器访问时，需要使用经过身份验证的 TLS 代理，并保留允许的 Host 值。
 
-服务声明支持 MCP `tools` 能力，提供 33 个工具及其输入 JSON schema 和 annotations。可以通过 `tools/list` 读取已连接服务的工具目录，或者运行：
+服务声明支持 MCP `tools` 能力，提供 32 个工具及其输入 JSON schema 和 annotations。可以通过 `tools/list` 读取已连接服务的工具目录，或者运行：
 
 ```sh
 agentfs tools > tools.json
@@ -78,18 +78,17 @@ jq '.tools[] | select(.name == "session_open") | .inputSchema' tools.json
 
 | 工具 | 请求字段 | 行为 / 结果 |
 | --- | --- | --- |
-| `workspace_create` | `name`, `grants?`, `max_file_bytes?`, `max_working_bytes?`, `max_inodes?` | 创建工作区和受保护的 `main`，返回 `result.workspace`。默认单文件 64 GiB、工作容量 256 GiB、1,000,000 个 inode。inode 数量为 1–1,000,000；文件容量必须为正数且不超过工作容量；工作容量最多为 `i64::MAX`。 |
+| `workspace_create` | `name`, `grants?`, `max_file_bytes?`, `max_working_bytes?`, `max_inodes?` | 创建工作区和默认选中的可写 `main`，返回 `result.workspace`。默认单文件 64 GiB、工作容量 256 GiB、1,000,000 个 inode。inode 数量为 1–1,000,000；文件容量必须为正数且不超过工作容量；工作容量最多为 `i64::MAX`。 |
 | `workspace_import` | `workspace`, `source` | 将允许范围内保持稳定的主机目录导入新分支，返回 `result.branch`。 |
 | `workspace_export` | `workspace`, `revision`, `destination`, `paths?` | 将选定路径导出到允许范围内的新主机目录。省略 paths 或设置为 `null` 时选择整个版本。 |
-| `revision_commit` | `guard`, `kind`, `durability?` | `kind` 接受 `commit` 或 `checkpoint`，返回 `result.revision` 和 `result.branch`。 |
-| `branch_fork` | `workspace`, `source`, `name` | `source` 是已保留的 revision ID；创建隔离的可写分支。 |
+| `revision_commit` | `guard`, `kind`, `message?`, `durability?` | `kind` 接受 `commit` 或 `checkpoint`，返回 `result.revision` 和 `result.branch`。 `message` 最多 4096 UTF-8 字节，不能含有 NUL。 |
+| `branch_create` | `workspace`, `name`, `source?`, `source_branch?` | 最多提供一个来源。省略时使用当前分支；分支来源包含尚未保存的工作内容。返回 `result.branch`，保持当前选择。 |
+| `branch_switch` | `workspace`, `branch` | 保存原分支，更新工作区选择和关联会话；活动回合需要完成，已有挂载需要 `mount_release`。 |
 | `branch_restore` | `guard`, `revision`, `durability?` | 恢复分支，需要时通过挂载释放继续操作。 |
-| `session_open` | `key`, `source_revision?`, `source_branch?`, `mount_path?`, `durability?` | 最多选择一个来源；省略时选择工作区初始版本。`source_branch` 会保存当前工作状态。省略 `mount_path` 时创建没有挂载的会话，返回 `result.binding`。 |
+| `session_open` | `key`, `branch?`, `mount_path?`, `durability?` | 关联已有分支；默认使用工作区当前选择。省略 `mount_path` 创建没有挂载的会话。返回 `result.binding`。 |
 | `session_resume` | `key`, `mount_path?`, `recovery_action?`, `turn_id?`, `durability?` | 恢复存在活动轮次的会话时，提供该 `turn_id`，并设置 `recovery_action: "continue"` 或 `"interrupt"`。 |
 | `session_pause` | `key`, `durability?` | 保存并暂停会话，需要时释放挂载。 |
 | `session_close` | `key`, `durability?` | 保存并关闭会话，需要时释放挂载。 |
-| `turn_begin` | `key`, `turn_id` | 开始任务前记录轮次，返回 `result.record`。 |
-| `turn_end` | `key`, `turn_id`, `status`, `durability?` | `status` 接受 `completed`、`failed` 或 `cancelled`；保存变化的内容和不可变的轮次结果。 |
 | `sync` | `workspace`, `direction`, `branches?` | `direction` 为 `push`、`pull`、`both`；省略 branches 或设置为 `null` 时选择全部。`both` 先推送后拉取。拉取时，发现过程会导入远端历史，再过滤结果中的 branch ID。 |
 | `cache_prefetch` | `workspace`, `revision`, `paths?` | 下载 `RevisionRange`，返回 `result.status`。 |
 | `cache_pin` | `range`, `enabled` | `range` 为 `RevisionRange`；`true` 下载并保护内容，`false` 移除该保留设置。 |
@@ -107,7 +106,7 @@ jq '.tools[] | select(.name == "session_open") | .inputSchema' tools.json
 | 工具 | 参数 | 结果 |
 | --- | --- | --- |
 | `workspace_list` | `{}` | 当前身份可见的工作区数组。 |
-| `workspace_status` | `workspace` | 工作区、本地 location、分支、远端引用、挂载、待处理任务、能力和存储统计。 |
+| `workspace_status` | `workspace` | 工作区、本地 location、`selected_branch`、分支、远端引用、挂载、待处理任务、能力和存储统计。 |
 | `revision_list` | `workspace`, `branch?` | 已保留的版本数组，可以按分支过滤。 |
 | `revision_diff` | `workspace`, `before`, `after` | 两个 revision ID 之间的文件差异。 |
 | `revision_read` | `workspace`, `revision`, `path`, `offset`, `size` | `{bytes, length}`；offset 和 size 以字节计，size 最多为 4,194,304。 |
@@ -134,3 +133,5 @@ jq '.tools[] | select(.name == "session_open") | .inputSchema' tools.json
 文件编辑通常通过挂载后的原生路径完成，MCP 工具负责工作区、版本和生命周期管理。工具目录将九个查询标记为 `readOnlyHint: true`、`destructiveHint: false`；命令和取消操作使用相反的值。全部工具当前声明 `idempotentHint: true` 和 `openWorldHint: true`。这些 annotations 描述工具行为，访问和重试由身份验证、授权、请求身份和状态检查控制。
 
 源代码定义见[工具目录与调用分发](../crates/agentfs-mcp/src/server.rs)、[请求类型](../crates/agentfs-ports/src/api.rs)、[公共类型](../crates/agentfs-model/src/entities.rs)和[错误代码](../crates/agentfs-model/src/error.rs)。
+
+回合保存由 [Agent 集成](integrations.zh-CN.md)通过经过身份验证的生命周期 API 管理。分支包含 `source_branch` 和 `base_revision`，用于查询创建关系。

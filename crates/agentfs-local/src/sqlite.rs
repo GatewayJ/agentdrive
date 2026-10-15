@@ -226,6 +226,20 @@ fn put_node(transaction: &Transaction<'_>, branch: BranchId, node: &Node) -> Res
 
 #[async_trait]
 impl LocalStateStore for LocalBackend {
+    async fn selected_branch(&self, workspace: WorkspaceId) -> Result<Option<BranchId>> {
+        self.db(move |connection| {
+            let branch: Option<String> = connection
+                .query_row(
+                    "SELECT branch FROM workspace_selections WHERE workspace=?1",
+                    [workspace.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(sql_error)?;
+            branch.map(|value| value.parse()).transpose()
+        })
+        .await
+    }
     async fn location(&self) -> Result<LocationId> {
         Ok(self.inner.location)
     }
@@ -418,6 +432,9 @@ impl LocalStateStore for LocalBackend {
             }
             for workspace in &commit.workspaces {
                 transaction.execute("UPDATE workspaces SET data=?2 WHERE id=?1", params![workspace.id.to_string(), encode(workspace)?]).map_err(sql_error)?;
+            }
+            for selection in &commit.selections {
+                transaction.execute("INSERT INTO workspace_selections(workspace,branch) VALUES(?1,?2) ON CONFLICT(workspace) DO UPDATE SET branch=excluded.branch", params![selection.workspace.to_string(), selection.branch.to_string()]).map_err(sql_error)?;
             }
             for branch in &commit.new_branches {
                 ensure_root(&transaction, branch.workspace, &branch.working_root)?;

@@ -83,6 +83,35 @@ impl Harness {
             session_id: name.into(),
             location: self.engine.runtime.location,
         };
+        let created = success(
+            self.engine
+                .services
+                .revisions
+                .fork(
+                    context(),
+                    ForkBranch {
+                        workspace,
+                        source: Some(
+                            source.unwrap_or(
+                                self.local
+                                    .workspace(workspace)
+                                    .await
+                                    .unwrap()
+                                    .unwrap()
+                                    .initial_revision,
+                            ),
+                        ),
+                        source_branch: None,
+                        name: name.into(),
+                    },
+                )
+                .await
+                .unwrap(),
+        );
+        let branch = match created.result.unwrap() {
+            CommandResult::Branch { branch } => branch.id,
+            _ => panic!("branch result missing"),
+        };
         let operation = success(
             self.engine
                 .services
@@ -91,8 +120,7 @@ impl Harness {
                     context(),
                     OpenSession {
                         key,
-                        source_revision: source,
-                        source_branch: None,
+                        branch: Some(branch),
                         mount_path: Some(self.directory.path().join(name)),
                         durability: Durability::Local,
                     },
@@ -164,6 +192,7 @@ impl Harness {
                 .commit(
                     context(),
                     CommitRevision {
+                        message: None,
                         guard: BranchGuard::from(&branch),
                         kind: RevisionKind::Commit,
                         durability: Durability::Local,
@@ -625,6 +654,7 @@ async fn remote_outage_preserves_local_save_and_sync_confirms_lost_responses() {
         .commit(
             context(),
             CommitRevision {
+                message: None,
                 guard: BranchGuard::from(&branch),
                 kind: RevisionKind::Commit,
                 durability: Durability::Remote,
@@ -1247,5 +1277,525 @@ async fn publication_failure_does_not_block_other_branches() {
         remaining
             .iter()
             .all(|job| job.reference.branch != second.branch)
+    );
+}
+
+#[tokio::test]
+async fn sessions_use_the_selected_branch_and_selection_survives_restart() {
+    let harness = Harness::new(None).await;
+    let workspace = harness.workspace().await;
+    let main = harness
+        .local
+        .selected_branch(workspace.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let key = SessionKey {
+        workspace: workspace.id,
+        app_namespace: "integration".into(),
+        session_id: "one".into(),
+        location: harness.engine.runtime.location,
+    };
+    let opened = success(
+        harness
+            .engine
+            .services
+            .sessions
+            .open(
+                context(),
+                OpenSession {
+                    key: key.clone(),
+                    branch: None,
+                    mount_path: None,
+                    durability: Durability::Local,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(opened.branch, Some(main));
+    assert_eq!(harness.local.branches(workspace.id).await.unwrap().len(), 1);
+    let created = success(
+        harness
+            .engine
+            .services
+            .revisions
+            .fork(
+                context(),
+                ForkBranch {
+                    workspace: workspace.id,
+                    source: None,
+                    source_branch: None,
+                    name: "feature".into(),
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    let feature = created.branch.unwrap();
+    success(
+        harness
+            .engine
+            .services
+            .mounts
+            .switch_branch(
+                context(),
+                SwitchBranch {
+                    workspace: workspace.id,
+                    branch: feature,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        harness.local.session(&key).await.unwrap().unwrap().branch,
+        feature
+    );
+    assert_eq!(
+        harness
+            .local
+            .branch(feature)
+            .await
+            .unwrap()
+            .unwrap()
+            .source_branch,
+        Some(main)
+    );
+    let Harness {
+        directory,
+        local,
+        engine,
+        clock,
+        driver,
+    } = harness;
+    drop((local, engine, clock, driver));
+    let (local, engine, _, _) = open(directory.path(), None).await;
+    assert_eq!(
+        local.selected_branch(workspace.id).await.unwrap(),
+        Some(feature)
+    );
+    let mut next = key;
+    next.session_id = "two".into();
+    let opened = success(
+        engine
+            .services
+            .sessions
+            .open(
+                context(),
+                OpenSession {
+                    key: next,
+                    branch: None,
+                    mount_path: None,
+                    durability: Durability::Local,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(opened.branch, Some(feature));
+    assert_eq!(local.branches(workspace.id).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn sessions_sharing_a_branch_serialize_turns() {
+    let harness = Harness::new(None).await;
+    let workspace = harness.workspace().await;
+    let first = SessionKey {
+        workspace: workspace.id,
+        app_namespace: "integration".into(),
+        session_id: "first".into(),
+        location: harness.engine.runtime.location,
+    };
+    let mut second = first.clone();
+    second.session_id = "second".into();
+    for key in [&first, &second] {
+        success(
+            harness
+                .engine
+                .services
+                .sessions
+                .open(
+                    context(),
+                    OpenSession {
+                        key: key.clone(),
+                        branch: None,
+                        mount_path: None,
+                        durability: Durability::Local,
+                    },
+                )
+                .await
+                .unwrap(),
+        );
+    }
+    success(
+        harness
+            .engine
+            .services
+            .sessions
+            .turn_begin(
+                context(),
+                BeginTurn {
+                    key: first.clone(),
+                    turn_id: "one".into(),
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    let rejected = harness
+        .engine
+        .services
+        .sessions
+        .turn_begin(
+            context(),
+            BeginTurn {
+                key: second.clone(),
+                turn_id: "two".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.error.unwrap().code, ErrorCode::BranchBusy);
+    success(
+        harness
+            .engine
+            .services
+            .sessions
+            .turn_end(
+                context(),
+                EndTurn {
+                    key: first,
+                    turn_id: "one".into(),
+                    status: TurnStatus::Completed,
+                    durability: Durability::Local,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    success(
+        harness
+            .engine
+            .services
+            .sessions
+            .turn_begin(
+                context(),
+                BeginTurn {
+                    key: second,
+                    turn_id: "two".into(),
+                },
+            )
+            .await
+            .unwrap(),
+    );
+}
+
+#[tokio::test]
+async fn explicit_branch_creation_captures_pending_content_once() {
+    let harness = Harness::new(None).await;
+    let workspace = harness.workspace().await;
+    let (session, fs) = harness.session(workspace.id, "source", None).await;
+    harness
+        .write_new(&fs, "pending.txt", b"pending content")
+        .await;
+    let request = ForkBranch {
+        workspace: workspace.id,
+        source: None,
+        source_branch: Some(session.branch),
+        name: "feature".into(),
+    };
+    let identity = context();
+    let created = success(
+        harness
+            .engine
+            .services
+            .revisions
+            .fork(identity.clone(), request.clone())
+            .await
+            .unwrap(),
+    );
+    let repeated = success(
+        harness
+            .engine
+            .services
+            .revisions
+            .fork(identity, request)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(created.id, repeated.id);
+    assert_eq!(created.branch, repeated.branch);
+    let branch = harness
+        .local
+        .branch(created.branch.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(branch.source_branch, Some(session.branch));
+    let content = harness
+        .engine
+        .services
+        .revisions
+        .read_file(
+            &actor(),
+            workspace.id,
+            branch.base_revision,
+            path("/pending.txt"),
+            0,
+            1024,
+        )
+        .await
+        .unwrap();
+    assert_eq!(content, b"pending content"[..]);
+    harness.write_new(&fs, "later.txt", b"source only").await;
+    assert!(
+        harness
+            .engine
+            .services
+            .revisions
+            .read_file(
+                &actor(),
+                workspace.id,
+                branch.formal_head,
+                path("/later.txt"),
+                0,
+                1024
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(harness.local.branches(workspace.id).await.unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn branch_switch_preserves_edits_and_waits_for_active_turns_and_handles() {
+    let harness = Harness::new(None).await;
+    let workspace = harness.workspace().await;
+    let main = harness
+        .local
+        .selected_branch(workspace.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let key = SessionKey {
+        workspace: workspace.id,
+        app_namespace: "integration".into(),
+        session_id: "switch".into(),
+        location: harness.engine.runtime.location,
+    };
+    success(
+        harness
+            .engine
+            .services
+            .sessions
+            .open(
+                context(),
+                OpenSession {
+                    key: key.clone(),
+                    branch: None,
+                    mount_path: Some(harness.directory.path().join("selected")),
+                    durability: Durability::Local,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    let binding = harness.local.session(&key).await.unwrap().unwrap();
+    let mount = harness
+        .local
+        .mount(binding.mount.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let fs = FsContext {
+        mount: mount.id,
+        generation: mount.generation,
+        identity: identity(),
+    };
+    let file = harness.write_new(&fs, "first.txt", b"main content").await;
+    let created = success(
+        harness
+            .engine
+            .services
+            .revisions
+            .fork(
+                context(),
+                ForkBranch {
+                    workspace: workspace.id,
+                    source: None,
+                    source_branch: None,
+                    name: "feature".into(),
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    let feature = created.branch.unwrap();
+    success(
+        harness
+            .engine
+            .services
+            .sessions
+            .turn_begin(
+                context(),
+                BeginTurn {
+                    key: key.clone(),
+                    turn_id: "active".into(),
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    let denied = harness
+        .engine
+        .services
+        .mounts
+        .switch_branch(
+            context(),
+            SwitchBranch {
+                workspace: workspace.id,
+                branch: feature,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.error.unwrap().code, ErrorCode::BranchBusy);
+    success(
+        harness
+            .engine
+            .services
+            .sessions
+            .turn_end(
+                context(),
+                EndTurn {
+                    key: key.clone(),
+                    turn_id: "active".into(),
+                    status: TurnStatus::Completed,
+                    durability: Durability::Local,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    harness
+        .write_new(&fs, "later.txt", b"saved before switching")
+        .await;
+    let handle = harness
+        .engine
+        .services
+        .files
+        .open(
+            &fs,
+            file.id,
+            OpenMode {
+                read: true,
+                write: false,
+                append: false,
+            },
+        )
+        .await
+        .unwrap();
+    let switched = success(
+        harness
+            .engine
+            .services
+            .mounts
+            .switch_branch(
+                context(),
+                SwitchBranch {
+                    workspace: workspace.id,
+                    branch: feature,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(switched.phase, OperationPhase::WaitingForQuiesce);
+    assert_eq!(
+        harness.local.selected_branch(workspace.id).await.unwrap(),
+        Some(main)
+    );
+    let rejected = harness
+        .engine
+        .services
+        .mounts
+        .release(
+            context(),
+            ReleaseMount {
+                operation: switched.id,
+                expected_binding_generation: mount.generation,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.error.unwrap().code, ErrorCode::MountBusy);
+    assert_eq!(
+        harness.local.selected_branch(workspace.id).await.unwrap(),
+        Some(main)
+    );
+    harness
+        .engine
+        .services
+        .files
+        .release(&fs, handle.id)
+        .await
+        .unwrap();
+    success(
+        harness
+            .engine
+            .services
+            .mounts
+            .release(
+                context(),
+                ReleaseMount {
+                    operation: switched.id,
+                    expected_binding_generation: mount.generation,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        harness.local.selected_branch(workspace.id).await.unwrap(),
+        Some(feature)
+    );
+    let binding = harness.local.session(&key).await.unwrap().unwrap();
+    assert_eq!(binding.branch, feature);
+    assert_ne!(binding.mount, Some(mount.id));
+    let main = harness.local.branch(main).await.unwrap().unwrap();
+    assert_eq!(
+        harness
+            .engine
+            .services
+            .revisions
+            .read_file(
+                &actor(),
+                workspace.id,
+                main.autosave_head.unwrap_or(main.formal_head),
+                path("/later.txt"),
+                0,
+                1024
+            )
+            .await
+            .unwrap(),
+        b"saved before switching"[..]
+    );
+    let branch = harness.local.branch(feature).await.unwrap().unwrap();
+    assert!(
+        harness
+            .engine
+            .services
+            .revisions
+            .read_file(
+                &actor(),
+                workspace.id,
+                branch.formal_head,
+                path("/later.txt"),
+                0,
+                1024
+            )
+            .await
+            .is_err()
     );
 }

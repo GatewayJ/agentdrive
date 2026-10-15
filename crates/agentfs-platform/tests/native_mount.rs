@@ -89,8 +89,7 @@ async fn native_mount_supports_file_io_durable_snapshots_and_read_only_history()
                         session_id: "native".into(),
                         location: engine.runtime.location,
                     },
-                    source_revision: None,
-                    source_branch: None,
+                    branch: None,
                     mount_path: Some(path.clone()),
                     durability: Durability::Local,
                 },
@@ -161,6 +160,7 @@ async fn native_mount_supports_file_io_durable_snapshots_and_read_only_history()
             .commit(
                 context(),
                 CommitRevision {
+                    message: None,
                     guard: BranchGuard::from(&branch),
                     kind: RevisionKind::Commit,
                     durability: Durability::Local,

@@ -63,7 +63,7 @@ jq -n --arg workspace "$WORKSPACE" '{workspace:$workspace}' |
   agentfs call workspace_status --json - > "$AGENTFS_DIRECTORY/demo-status.json"
 
 mkdir -p "$AGENTFS_DIRECTORY/exchange/source"
-printf 'Hello from AgentFS\n' > "$AGENTFS_DIRECTORY/exchange/source/hello.txt"
+printf 'Hello from OpenCSG Workspace\n' > "$AGENTFS_DIRECTORY/exchange/source/hello.txt"
 jq -n --arg workspace "$WORKSPACE" --arg source "$AGENTFS_DIRECTORY/exchange/source" '{workspace:$workspace,source:$source}' |
   agentfs call workspace_import --request-id "$RUN_ID-import" --json - > "$AGENTFS_DIRECTORY/demo-import.json"
 REVISION="$(jq -r '.result.branch.formal_head' "$AGENTFS_DIRECTORY/demo-import.json")"
@@ -78,26 +78,22 @@ jq -n --arg workspace "$WORKSPACE" --arg revision "$REVISION" --arg destination 
   agentfs call workspace_export --request-id "$RUN_ID-export" --json -
 ```
 
-Creation returns `result.workspace`. Import creates a new branch and returns `result.branch`; its `formal_head` is the imported revision. The protected `main` branch accepts validated merges. `revision_read` returns `{ "bytes": [0, 1, ...], "length": ... }`, with integer bytes and a maximum requested size of 4 MiB. Export requires an existing parent directory and a destination that does not already exist.
+Creation returns `result.workspace`. Import creates a new branch and returns `result.branch`; its `formal_head` is the imported revision. New workspaces select a writable `main` branch. `revision_read` returns `{ "bytes": [0, 1, ...], "length": ... }`, with integer bytes and a maximum requested size of 4 MiB. Export requires an existing parent directory and a destination that does not already exist.
 
-## Sessions and turns
-
-Continue in the same terminal using the workspace, revision, and status from the preceding example:
+## Branches and sessions
 
 ```sh
-LOCATION="$(jq -r '.location' "$AGENTFS_DIRECTORY/demo-status.json")"
-SESSION_KEY="$(jq -n --arg workspace "$WORKSPACE" --arg location "$LOCATION" '{workspace:$workspace,app_namespace:"example",session_id:"demo-session",location:$location}')"
-jq -n --argjson key "$SESSION_KEY" --arg source_revision "$REVISION" '{key:$key,source_revision:$source_revision}' |
-  agentfs call session_open --request-id "$RUN_ID-open" --json -
-jq -n --argjson key "$SESSION_KEY" '{key:$key,turn_id:"turn-1"}' |
-  agentfs call turn_begin --request-id "$RUN_ID-begin" --json -
-jq -n --argjson key "$SESSION_KEY" '{key:$key,turn_id:"turn-1",status:"completed"}' |
-  agentfs call turn_end --request-id "$RUN_ID-end" --json -
-jq -n --argjson key "$SESSION_KEY" '{key:$key}' |
-  agentfs call session_close --request-id "$RUN_ID-close" --json -
+agentfs branch list --workspace "$WORKSPACE"
+agentfs branch create --workspace "$WORKSPACE" --name feat/task --request-id "$RUN_ID-branch"
+agentfs branch switch --workspace "$WORKSPACE" --branch "$BRANCH" --request-id "$RUN_ID-switch"
+agentfs dashboard --open
 ```
 
-This creates and closes an unmounted session. To give an agent a native directory, supply an absolute `mount_path` within a configured `mount_roots` directory to `session_open`, with the platform driver enabled. Wait for `mount_ready: true` before starting the agent. Use a new session ID for another session. Paused or interrupted sessions use `session_resume`; mount release and recovery are described in [operations](operations.md).
+`branch create` accepts optional `--source <REVISION>` or `--source-branch <BRANCH>`; omission captures the selected branch's current working content. It returns the new branch in `result.branch` and preserves the current selection. `branch switch` changes the workspace selection and existing attachments to the previous branch. Active turns must finish. The CLI attempts release of an existing mount. If it is busy, close users of the directory and retry with the original request ID; MCP callers use `mount_release` to continue pending switches. Both commands generate a request ID when omitted; reuse an explicit ID for retries.
+
+`session_open` accepts `key`, optional `branch`, `mount_path`, and `durability`. The default branch is the workspace selection. `session_pause`, `session_resume`, and `session_close` manage existing attachments. [Agent integrations](integrations.md) automate attachment, turn persistence, working directory selection, cancellation, and recovery.
+
+`dashboard` prints the browser URL. `dashboard --open` opens it with the selected token in a URL fragment; the page removes the fragment immediately and keeps the token in session storage. Data requests use bearer authentication. The dashboard provides branch trees and revision details, with refresh every 15 seconds.
 
 ## Read a saved request from a file
 

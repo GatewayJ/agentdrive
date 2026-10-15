@@ -66,4 +66,12 @@ Backend tests exercise competing conditional reference creation, stale condition
 
 [GitHub Actions](https://github.com/GatewayJ/agentfs/actions) runs the checked-in test matrix for each commit, including container validation on Linux. Native macOS mounting requires an installed and enabled macFUSE driver; that kernel mount test has not been executed in the development environment.
 
-The create/import/read/export/session examples in [CLI usage](cli.md) were executed against a temporary daemon. The [MCP parameter tables](mcp.md) were checked against the running daemon's 33 tool schemas. S3 configuration was checked against the daemon config loader, adapter, and credential/endpoint selection in the locked `object_store` dependency. These documentation checks do not add an AWS S3 deployment to the verified environments above.
+The create/import/read/export/session examples in [CLI usage](cli.md) were executed against a temporary daemon. The [MCP parameter tables](mcp.md) were checked against the running daemon's 32 tool schemas. S3 configuration was checked against the daemon config loader, adapter, and credential/endpoint selection in the locked `object_store` dependency. These documentation checks do not add an AWS S3 deployment to the verified environments above.
+
+Additional lifecycle, branch, and dashboard checks:
+
+```sh
+python3 tests/lifecycle_smoke.py
+```
+
+This script requires native mounting and covers ACP and Codex app-server completion, cancellation, failures, process interruption, duplicate requests, autosave, daemon restart, reconnect, and CLI branch switching with an existing mount. Rust tests cover lost response bodies, shared-branch turn exclusion, handle checks, persistent selection, and HTTP authorization. Browser checks cover ancestry, revision details, token login, and narrow layouts. The installed Codex app-server initialize and thread/start handshake verified the OpenCSG Workspace working directory; complete turn scenarios use protocol fixtures.

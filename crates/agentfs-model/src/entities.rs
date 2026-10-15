@@ -137,10 +137,18 @@ pub struct Branch {
     pub autosave_head: Option<RevisionId>,
     pub working_root: ObjectRef,
     pub base_revision: RevisionId,
+    #[serde(default)]
+    pub source_branch: Option<BranchId>,
     pub next_inode: u64,
     pub dirty: bool,
     pub state: BranchState,
     pub protected: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WorkspaceSelection {
+    pub workspace: WorkspaceId,
+    pub branch: BranchId,
 }
 
 impl Branch {
@@ -193,6 +201,8 @@ pub enum RevisionKind {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Revision {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
     pub id: RevisionId,
     pub workspace: WorkspaceId,
     pub branch: Option<BranchId>,
@@ -427,6 +437,12 @@ pub struct OperationRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PendingAction {
+    BranchSwitch {
+        selection: WorkspaceSelection,
+        previous: BranchId,
+        old: Option<MountBinding>,
+        new: Option<MountBinding>,
+    },
     MountChange {
         old: Option<MountBinding>,
         new: Option<MountBinding>,

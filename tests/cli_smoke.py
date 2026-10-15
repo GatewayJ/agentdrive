@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory(prefix='agentfs-cli-') as temporary:
     try:
         daemon = start()
         tools = json.loads(subprocess.check_output(client + ['tools'], text=True, timeout=30))
-        assert len(tools['tools']) == 33
+        assert len(tools['tools']) == 32
         created = call('workspace_create', {'name': 'cli-integration'}, 'create')
         assert created['local_saved']
         workspace = created['result']['workspace']['id']
@@ -72,7 +72,7 @@ with tempfile.TemporaryDirectory(prefix='agentfs-cli-') as temporary:
             assert responses.get(timeout=15)['id'] == 1
             send({'method': 'notifications/initialized'})
             send({'id': 2, 'method': 'tools/list', 'params': {}})
-            assert len(responses.get(timeout=15)['result']['tools']) == 33
+            assert len(responses.get(timeout=15)['result']['tools']) == 32
             send({'id': 3, 'method': 'tools/call', 'params': {'name': 'workspace_status', 'arguments': {'workspace': workspace}}})
             assert responses.get(timeout=15)['result']['structuredContent']['workspace']['id'] == workspace
         finally:

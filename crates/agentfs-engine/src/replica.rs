@@ -528,6 +528,7 @@ impl ReplicaPublisher for ReplicaService {
                     autosave_head: reference.autosave_head,
                     working_root: reference.working_root.clone(),
                     base_revision: reference.formal_head,
+                    source_branch: None,
                     next_inode,
                     dirty: formal.root != reference.working_root,
                     state: if reference.write_stopped {

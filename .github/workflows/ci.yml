@@ -35,6 +35,8 @@ jobs:
         run: |
           make -j "$(nproc)" build
           python3 tests/cli_smoke.py
+      - name: Verify ACP and Codex lifecycle persistence
+        run: python3 tests/lifecycle_smoke.py
       - name: Verify container validation
         run: |
           docker pull debian:bookworm-slim
@@ -124,3 +126,5 @@ jobs:
           make -j $env:NUMBER_OF_PROCESSORS build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/cli_smoke.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/lifecycle_smoke.py

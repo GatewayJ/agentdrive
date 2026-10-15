@@ -89,7 +89,12 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
         .await
         .unwrap();
     let tools = owner.tools().await.unwrap().tools;
-    assert_eq!(tools.len(), 33);
+    assert_eq!(tools.len(), 32);
+    assert!(!tools.iter().any(|tool| matches!(
+        tool.name.as_ref(),
+        "turn_begin" | "turn_end" | "branch_fork"
+    )));
+    assert!(tools.iter().any(|tool| tool.name == "branch_switch"));
     assert!(
         tools
             .iter()
@@ -161,6 +166,187 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
         .await
         .unwrap();
     assert_eq!(forged.is_error, Some(true));
+    let base = format!("http://{address}");
+    let view = format!("{base}/api/workspaces/{}", workspace.as_str().unwrap());
+    assert_eq!(http.get(&view).send().await.unwrap().status(), 401);
+    assert_eq!(
+        http.get(&view)
+            .bearer_auth(visitor_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    assert_eq!(
+        http.get(&view)
+            .bearer_auth(owner_token)
+            .header("Origin", "https://untrusted.example")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    assert_eq!(
+        http.get(&view)
+            .bearer_auth(owner_token)
+            .header("Host", "untrusted.example")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let response = http
+        .get(&view)
+        .bearer_auth(owner_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let view: Value = response.json().await.unwrap();
+    assert_eq!(view["status"]["branches"].as_array().unwrap().len(), 1);
+    assert!(view["status"]["selected_branch"].is_string());
+    assert_eq!(view["revisions"].as_array().unwrap().len(), 1);
+    let key = json!({"workspace":workspace,"location":view["status"]["location"],"app_namespace":"test","session_id":"bridge"});
+    let lifecycle = format!("{base}/api/lifecycle");
+    let attachment = json!({"request_id":"attach", "event":"attach", "key":key, "mount_path":temporary.path().join("mount")});
+    let first: Value = http
+        .post(&lifecycle)
+        .bearer_auth(owner_token)
+        .json(&attachment)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let repeated: Value = http
+        .post(&lifecycle)
+        .bearer_auth(owner_token)
+        .json(&attachment)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(first, repeated);
+    let mut changed = attachment.clone();
+    changed["mount_path"] = json!(temporary.path().join("different"));
+    assert_eq!(
+        http.post(&lifecycle)
+            .bearer_auth(owner_token)
+            .json(&changed)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        409
+    );
+    let begin = json!({"request_id":"begin", "event":"begin", "key":key, "turn_id":"turn"});
+    assert!(
+        http.post(&lifecycle)
+            .bearer_auth(owner_token)
+            .json(&begin)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    let end = json!({"request_id":"end", "event":"end", "key":key, "turn_id":"turn", "status":"completed"});
+    let saved: Value = http
+        .post(&lifecycle)
+        .bearer_auth(owner_token)
+        .json(&end)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let repeated: Value = http
+        .post(&lifecycle)
+        .bearer_auth(owner_token)
+        .json(&end)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(saved, repeated);
+    assert_eq!(saved["local_saved"], true);
+    let detach = json!({"request_id":"detach", "event":"detach", "key":key});
+    assert!(
+        http.post(&lifecycle)
+            .bearer_auth(owner_token)
+            .json(&detach)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    let mut reconnect = attachment;
+    reconnect["request_id"] = json!("reconnect");
+    assert!(
+        http.post(&lifecycle)
+            .bearer_auth(owner_token)
+            .json(&reconnect)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    let begin = json!({"request_id":"begin-next", "event":"begin", "key":key, "turn_id":"next"});
+    assert!(
+        http.post(&lifecycle)
+            .bearer_auth(owner_token)
+            .json(&begin)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    assert!(
+        http.post(&lifecycle)
+            .bearer_auth(owner_token)
+            .json(&detach)
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    let session = engine
+        .services
+        .sessions
+        .get(
+            &"owner".to_owned().try_into().unwrap(),
+            &serde_json::from_value(key).unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.active_turn.as_deref(), Some("next"));
+    assert_eq!(session.state, SessionState::Active);
+    let page = http.get(&base).send().await.unwrap();
+    assert_eq!(page.status(), 200);
+    assert!(
+        page.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("script-src 'self'")
+    );
     owner.close().await.unwrap();
     visitor.close().await.unwrap();
     cancellation.cancel();

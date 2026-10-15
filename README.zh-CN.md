@@ -1,15 +1,20 @@
-# AgentFS
+# OpenCSG Workspace
+
+**人与 Agent 的共享工作空间**
+
+**共享资料，接力工作。**
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-AgentFS 为 Agent 提供可持久保存的工作区、隔离的会话分支、不可变的版本记录，以及原生文件系统路径。长期运行的 Rust 守护进程负责管理本地状态和挂载；多个 MCP 客户端和 CLI 可以并发访问同一套经过身份验证的 API。
+OpenCSG Workspace 为 Agent 提供可持久保存的工作区、显式管理的工作分支、不可变的版本记录，以及原生文件系统路径。长期运行的 Rust 守护进程负责管理本地状态和挂载；多个 MCP 客户端和 CLI 可以并发访问同一套经过身份验证的 API。
 
 功能包括：
 
 - 跨平台文件名称、按内容寻址的对象、分页的目录和 inode 索引，以及 SQLite 事务。
 - Linux FUSE、macOS macFUSE 和 Windows WinFsp 适配；快照、分支恢复、会话和轮次历史。
 - S3/RustFS 同步、限制内存用量的流式传输、离线缓存保留、在线所有权交接，以及经过验证的三方合并候选结果。
-- 通过需要身份验证的 Streamable HTTP 提供 33 个具有明确类型的 MCP 工具，同时提供 stdio 代理和 JSON CLI。
+- ACP 和 Codex app-server 生命周期集成、分支命令，以及只读的分支和版本 Dashboard。
+- 通过需要身份验证的 Streamable HTTP 提供 32 个具有明确类型的 MCP 工具，同时提供 stdio 代理和 JSON CLI。
 
 ## 构建
 
@@ -51,13 +56,20 @@ export AGENTFS_TOKEN_FILE="$HOME/.local/share/agentfs/token"
 
 使用 `agentfs tools` 查看 JSON 输入 schema。通过 MCP 调用命令工具时，请求格式为 `{ "request_id": "stable-id", "request": { ... } }`；CLI 的 `--request-id` 选项会构造该请求结构。查询工具和 `operation_cancel` 直接接收参数。`--json -` 从标准输入读取 JSON。工具响应没有错误时，CLI 返回退出码 0；工具返回错误时返回 2；传输或输入发生错误时返回 1；命令行参数解析错误也使用 2。可执行示例见 [CLI 使用](docs/cli.zh-CN.md)，完整工具参考见 [MCP 参数与能力](docs/mcp.zh-CN.md)。
 
-## 使用会话
+## 分支、Agent 与 Dashboard
 
-1. 创建或导入工作区。`workspace_status` 会返回 `location`、分支 ID、所有权 epoch 和 generation。
-2. 调用 `session_open`，传入 `key = {workspace, app_namespace, session_id, location}`，以及配置允许的挂载根目录下的绝对路径 `mount_path`。操作会返回会话分支和挂载状态。
-3. 使用会话 key 和稳定的 `turn_id` 调用 `turn_begin`，然后让 Agent 在挂载目录中执行任务。
-4. 调用 `turn_end`，状态设置为 `completed`、`failed` 或 `cancelled`。内容发生修改时会生成新版本；内容没有变化时保留已有版本，并记录本轮结果。
-5. 使用 `session_pause`、`session_resume` 和 `session_close` 管理会话与挂载的关联。需要远端确认时，请求 `durability: "remote"`。
+新工作区默认选择可写的 `main` 分支。新会话使用工作区当前选择的分支。通过 MCP 的 `branch_create`、`branch_switch` 或 CLI 显式创建和切换：
+
+```sh
+agentfs branch list --workspace "$WORKSPACE"
+agentfs branch create --workspace "$WORKSPACE" --name feat/task
+agentfs branch switch --workspace "$WORKSPACE" --branch "$BRANCH"
+agentfs dashboard --open
+```
+
+创建分支会保存来源分支的当前内容，并保持工作区原有选择。切换会保存原分支，检查活动回合和文件句柄，再更新工作区选择和关联会话。重启后仍然保留选择。Dashboard 展示分支关系、commit 说明、创建者、时间和父版本。
+
+应用通过 `agentfs integrate` 启动 ACP agent 或 Codex app-server，由集成程序管理会话、工作目录、回合结束、取消及重连恢复。回合期间仍然执行自动保存。完整命令和事件行为见[Agent 集成](docs/integrations.zh-CN.md)。
 
 需要并发保护的变更会检查分支 owner、epoch、generation 和 head。这些值应从 `workspace_status` 获取，请勿自行编造。需要停止当前挂载的操作会返回 `waiting_for_quiesce`。请停止使用该目录的进程，关闭相关文件句柄，并使进程退出该目录，然后携带 operation ID 和预期的 binding generation 调用 `mount_release`。详见[操作与恢复](docs/operations.zh-CN.md)。
 
@@ -91,4 +103,4 @@ CI 会在 Linux、macOS 和 Windows 上运行 workspace 测试，并执行 Linux
 
 能力查询响应会说明支持的行为。当前接口不支持 symbolic link、hard link、扩展属性、内存映射写入、advisory locking、自动文本冲突解决、远端对象物理回收，以及全局会话位置仲裁。删除已打开的文件，或替换已打开的目标文件，会返回 busy 错误。同一路径的并发变更会产生明确的合并冲突。挂载使用守护进程的操作系统身份，工作区访问授权控制 MCP 请求。
 
-更多说明见[文档目录](docs/README.zh-CN.md)、[架构](docs/architecture.zh-CN.md)、[操作与恢复](docs/operations.zh-CN.md)和[验证](docs/validation.zh-CN.md)。AgentFS 使用 Apache-2.0 许可证；仓库内附带的 WinFsp Rust wrapper 保留其 MIT 许可证。
+更多说明见[文档目录](docs/README.zh-CN.md)、[架构](docs/architecture.zh-CN.md)、[操作与恢复](docs/operations.zh-CN.md)和[验证](docs/validation.zh-CN.md)。OpenCSG Workspace 使用 Apache-2.0 许可证；仓库内附带的 WinFsp Rust wrapper 保留其 MIT 许可证。

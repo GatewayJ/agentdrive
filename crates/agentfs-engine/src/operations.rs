@@ -144,7 +144,9 @@ impl OperationApi for OperationService {
             ));
         }
         let old = match &operation.pending {
-            Some(PendingAction::MountChange { old, .. }) => old.as_ref(),
+            Some(
+                PendingAction::MountChange { old, .. } | PendingAction::BranchSwitch { old, .. },
+            ) => old.as_ref(),
             Some(PendingAction::ApplyRevision { mount, .. }) => mount.as_ref(),
             _ => {
                 return Err(Error::new(

@@ -48,6 +48,7 @@ pub struct Capabilities {
 
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WorkspaceStatus {
+    pub selected_branch: Option<BranchId>,
     pub workspace: Workspace,
     pub location: LocationId,
     pub branches: Vec<Branch>,
@@ -61,6 +62,7 @@ pub struct WorkspaceStatus {
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CommitRevision {
+    pub message: Option<String>,
     pub guard: BranchGuard,
     pub kind: RevisionKind,
     #[serde(default)]
@@ -71,8 +73,16 @@ pub struct CommitRevision {
 #[serde(deny_unknown_fields)]
 pub struct ForkBranch {
     pub workspace: WorkspaceId,
-    pub source: RevisionId,
+    pub source: Option<RevisionId>,
+    pub source_branch: Option<BranchId>,
     pub name: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SwitchBranch {
+    pub workspace: WorkspaceId,
+    pub branch: BranchId,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
@@ -104,8 +114,7 @@ pub struct ExportRevision {
 #[serde(deny_unknown_fields)]
 pub struct OpenSession {
     pub key: SessionKey,
-    pub source_revision: Option<RevisionId>,
-    pub source_branch: Option<BranchId>,
+    pub branch: Option<BranchId>,
     pub mount_path: Option<PathBuf>,
     #[serde(default)]
     pub durability: Durability,
@@ -336,6 +345,7 @@ pub trait RevisionApi: Send + Sync {
 
 #[async_trait]
 pub trait SessionApi: Send + Sync {
+    async fn get(&self, actor: &Principal, key: &SessionKey) -> Result<Option<SessionBinding>>;
     async fn open(&self, context: RequestContext, request: OpenSession) -> Result<OperationRecord>;
     async fn resume(
         &self,
@@ -409,6 +419,11 @@ pub trait MergeApi: Send + Sync {
 
 #[async_trait]
 pub trait MountApi: Send + Sync {
+    async fn switch_branch(
+        &self,
+        context: RequestContext,
+        request: SwitchBranch,
+    ) -> Result<OperationRecord>;
     async fn prepare(
         &self,
         context: RequestContext,

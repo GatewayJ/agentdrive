@@ -81,6 +81,7 @@ pub trait SnapshotCapture: Send + Sync {
 
 #[derive(Clone, Debug)]
 pub struct SaveRevision {
+    pub message: Option<String>,
     pub guard: BranchGuard,
     pub kind: RevisionKind,
     pub parents: Option<Vec<RevisionId>>,

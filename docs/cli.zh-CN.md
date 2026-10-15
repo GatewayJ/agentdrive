@@ -63,7 +63,7 @@ jq -n --arg workspace "$WORKSPACE" '{workspace:$workspace}' |
   agentfs call workspace_status --json - > "$AGENTFS_DIRECTORY/demo-status.json"
 
 mkdir -p "$AGENTFS_DIRECTORY/exchange/source"
-printf 'Hello from AgentFS\n' > "$AGENTFS_DIRECTORY/exchange/source/hello.txt"
+printf 'Hello from OpenCSG Workspace\n' > "$AGENTFS_DIRECTORY/exchange/source/hello.txt"
 jq -n --arg workspace "$WORKSPACE" --arg source "$AGENTFS_DIRECTORY/exchange/source" '{workspace:$workspace,source:$source}' |
   agentfs call workspace_import --request-id "$RUN_ID-import" --json - > "$AGENTFS_DIRECTORY/demo-import.json"
 REVISION="$(jq -r '.result.branch.formal_head' "$AGENTFS_DIRECTORY/demo-import.json")"
@@ -78,26 +78,22 @@ jq -n --arg workspace "$WORKSPACE" --arg revision "$REVISION" --arg destination 
   agentfs call workspace_export --request-id "$RUN_ID-export" --json -
 ```
 
-创建操作返回 `result.workspace`。导入会创建新分支并返回 `result.branch`，其中的 `formal_head` 是导入后的版本。受保护的 `main` 分支接受经过验证的合并。`revision_read` 返回 `{ "bytes": [0, 1, ...], "length": ... }`，文件内容表示为整数字节数组，单次请求的大小最多为 4 MiB。导出要求父目录已经存在，目标目录尚未存在。
+创建操作返回 `result.workspace`。导入会创建新分支并返回 `result.branch`，其中的 `formal_head` 是导入后的版本。新工作区默认选择可写的 `main` 分支。`revision_read` 返回 `{ "bytes": [0, 1, ...], "length": ... }`，文件内容表示为整数字节数组，单次请求的大小最多为 4 MiB。导出要求父目录已经存在，目标目录尚未存在。
 
-## 会话与轮次
-
-在同一终端继续执行，使用前述示例获得的工作区、版本和状态：
+## 分支与会话
 
 ```sh
-LOCATION="$(jq -r '.location' "$AGENTFS_DIRECTORY/demo-status.json")"
-SESSION_KEY="$(jq -n --arg workspace "$WORKSPACE" --arg location "$LOCATION" '{workspace:$workspace,app_namespace:"example",session_id:"demo-session",location:$location}')"
-jq -n --argjson key "$SESSION_KEY" --arg source_revision "$REVISION" '{key:$key,source_revision:$source_revision}' |
-  agentfs call session_open --request-id "$RUN_ID-open" --json -
-jq -n --argjson key "$SESSION_KEY" '{key:$key,turn_id:"turn-1"}' |
-  agentfs call turn_begin --request-id "$RUN_ID-begin" --json -
-jq -n --argjson key "$SESSION_KEY" '{key:$key,turn_id:"turn-1",status:"completed"}' |
-  agentfs call turn_end --request-id "$RUN_ID-end" --json -
-jq -n --argjson key "$SESSION_KEY" '{key:$key}' |
-  agentfs call session_close --request-id "$RUN_ID-close" --json -
+agentfs branch list --workspace "$WORKSPACE"
+agentfs branch create --workspace "$WORKSPACE" --name feat/task --request-id "$RUN_ID-branch"
+agentfs branch switch --workspace "$WORKSPACE" --branch "$BRANCH" --request-id "$RUN_ID-switch"
+agentfs dashboard --open
 ```
 
-该示例创建并关闭一个没有挂载的会话。需要为 Agent 提供原生目录时，请启用平台驱动，并在 `session_open` 中提供位于配置 `mount_roots` 下的绝对路径 `mount_path`。等到 `mount_ready: true` 后启动 Agent。另一个会话需要使用新的 session ID。已暂停或中断的会话使用 `session_resume`；挂载释放和恢复说明见[操作文档](operations.zh-CN.md)。
+`branch create` 接受可选的 `--source <REVISION>` 或 `--source-branch <BRANCH>`；省略时保存当前分支的工作内容作为来源。结果中的 `result.branch` 为新分支，工作区当前选择保持原值。`branch switch` 更新工作区选择及原分支上的关联会话。活动回合需要完成；CLI 会尝试释放已有挂载；被占用时关闭使用目录的程序，再使用原 request ID 重试。MCP 调用方使用 `mount_release` 继续等待中的切换。两个命令会生成 request ID；需要重试时可以提供固定的 `--request-id`。
+
+`session_open` 接受 `key` 及可选的 `branch`、`mount_path`、`durability`。默认使用工作区当前选择的分支。`session_pause`、`session_resume`、`session_close` 管理已有会话。[Agent 集成](integrations.zh-CN.md)负责自动关联会话、设置工作目录、保存回合、取消及恢复。
+
+`dashboard` 打印浏览器地址。`dashboard --open` 在 URL fragment 中传递访问令牌，页面读取后立即移除 fragment，并将令牌保存在 session storage 中。数据请求使用 Bearer 身份验证。页面提供分支树和版本信息，每 15 秒刷新。
 
 ## 从文件读取请求
 

@@ -129,6 +129,13 @@ impl RevisionService {
         } else {
             self.snapshots.capture(&branch).await?
         };
+        if request.message.as_ref().is_some_and(|message| {
+            message.len() > 4096 || message.chars().any(|character| character == '\0')
+        }) {
+            return Err(Error::invalid(
+                "revision message exceeds 4096 bytes or contains NUL",
+            ));
+        }
         let formal = self
             .trees
             .revision(branch.workspace, branch.formal_head)
@@ -160,6 +167,7 @@ impl RevisionService {
                 self.trees.revision(branch.workspace, *parent).await?;
             }
             Some(Revision {
+                message: request.message.clone(),
                 id: revision_id,
                 workspace: branch.workspace,
                 branch: Some(branch.id),
@@ -273,6 +281,7 @@ impl RevisionService {
             return Ok(branch.clone());
         }
         let request = SaveRevision {
+            message: None,
             guard: BranchGuard::from(branch),
             kind: RevisionKind::Autosave,
             parents: None,
@@ -315,15 +324,12 @@ impl RevisionService {
         workspace: WorkspaceId,
         source: RevisionId,
         name: String,
-        session: Option<SessionBinding>,
+        source_branch: Option<BranchId>,
     ) -> Result<OperationRecord> {
         validate_label(&name, "branch name")?;
         let revision = self.trees.revision(workspace, source).await?;
         let tree = self.trees.tree(workspace, &revision.root).await?;
-        let id = session
-            .as_ref()
-            .map(|binding| binding.branch)
-            .unwrap_or_default();
+        let id = BranchId::new();
         let next_inode = increment(tree.values().map(|inode| inode.id.0).max().unwrap_or(1))?;
         let branch = Branch {
             id,
@@ -339,6 +345,7 @@ impl RevisionService {
             autosave_head: None,
             working_root: revision.root.clone(),
             base_revision: source,
+            source_branch,
             next_inode,
             dirty: false,
             state: BranchState::Writable,
@@ -353,14 +360,8 @@ impl RevisionService {
         } else {
             OperationPhase::LocalSaved
         };
-        operation.result = Some(if let Some(binding) = &session {
-            CommandResult::Session {
-                binding: binding.clone(),
-            }
-        } else {
-            CommandResult::Branch {
-                branch: branch.clone(),
-            }
+        operation.result = Some(CommandResult::Branch {
+            branch: branch.clone(),
         });
         let job = self
             .publisher
@@ -382,7 +383,6 @@ impl RevisionService {
                         .collect(),
                 }],
                 operations: vec![operation.clone()],
-                sessions: session.into_iter().collect(),
                 sync_jobs: vec![job],
                 ..Default::default()
             })
@@ -428,6 +428,7 @@ impl DurabilityService for RevisionService {
             let _protection = self.runtime.objects.read().await;
             let branch = self.runtime.branch(branch).await?;
             let request = SaveRevision {
+                message: None,
                 guard: BranchGuard::from(&branch),
                 kind: RevisionKind::Autosave,
                 parents: None,
@@ -546,6 +547,7 @@ impl RevisionApi for VersionService {
             OperationStart::New(context) => context,
         };
         let save = SaveRevision {
+            message: request.message,
             guard: request.guard,
             kind: request.kind,
             parents: None,
@@ -562,8 +564,9 @@ impl RevisionApi for VersionService {
     }
 
     async fn fork(&self, context: RequestContext, request: ForkBranch) -> Result<OperationRecord> {
-        self.revisions
-            .runtime
+        let runtime = &self.revisions.runtime;
+        let _lifecycle = runtime.lifecycle.lock().await;
+        runtime
             .authorize(
                 &context.principal,
                 request.workspace,
@@ -576,7 +579,7 @@ impl RevisionApi for VersionService {
             .operations
             .start(
                 context,
-                "branch_fork",
+                "branch_create",
                 &request,
                 Some(request.workspace),
                 None,
@@ -586,18 +589,72 @@ impl RevisionApi for VersionService {
             OperationStart::Existing(record) => return Ok(record),
             OperationStart::New(context) => context,
         };
-        let result = {
-            let _protection = self.revisions.runtime.objects.read().await;
+        let result = async {
+            if request.source.is_some() && request.source_branch.is_some() {
+                return Err(Error::invalid("choose one branch source"));
+            }
+            if runtime
+                .state
+                .branches(request.workspace)
+                .await?
+                .iter()
+                .any(|branch| branch.name == request.name && branch.state != BranchState::Deleted)
+            {
+                return Err(Error::new(
+                    ErrorCode::AlreadyExists,
+                    "branch name already exists",
+                ));
+            }
+            let (source, source_branch) = if let Some(source) = request.source {
+                let revision = self
+                    .revisions
+                    .trees
+                    .revision(request.workspace, source)
+                    .await?;
+                (source, revision.branch)
+            } else {
+                let id = match request.source_branch {
+                    Some(id) => id,
+                    None => runtime
+                        .state
+                        .selected_branch(request.workspace)
+                        .await?
+                        .ok_or_else(|| {
+                            Error::invalid("select a branch or provide an explicit source")
+                        })?,
+                };
+                runtime
+                    .authorize(
+                        &operation.operation.principal,
+                        request.workspace,
+                        Some(id),
+                        Permission::Read,
+                    )
+                    .await?;
+                let _gate = runtime.lock_branch(id).await;
+                let _protection = runtime.objects.read().await;
+                let branch = runtime.branch(id).await?;
+                let branch = self
+                    .revisions
+                    .preserve_working_locked(&branch, &operation.operation.principal)
+                    .await?;
+                (
+                    branch.autosave_head.unwrap_or(branch.formal_head),
+                    Some(branch.id),
+                )
+            };
+            let _protection = runtime.objects.read().await;
             self.revisions
                 .fork_locked(
                     operation.clone(),
                     request.workspace,
-                    request.source,
+                    source,
                     request.name,
-                    None,
+                    source_branch,
                 )
                 .await
-        };
+        }
+        .await;
         match result {
             Ok(record) => Ok(record),
             Err(error) => self.revisions.operations.fail(&operation, error).await,

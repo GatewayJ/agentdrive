@@ -489,7 +489,7 @@ impl FileSystem for FileService {
         inode: InodeId,
         mode: OpenMode,
     ) -> Result<FileHandle> {
-        if (!mode.read && !mode.write) || (mode.append && !mode.write) {
+        if (mode.append || !mode.read) && !mode.write {
             return Err(Error::invalid("invalid file open mode"));
         }
         let (mount, _) = self.binding(context, mode.write).await?;

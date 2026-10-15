@@ -22,6 +22,7 @@ impl fmt::Debug for ObjectStream {
 
 #[derive(Clone, Debug, Default)]
 pub struct LocalCommit {
+    pub selections: Vec<WorkspaceSelection>,
     pub guards: Vec<BranchGuard>,
     pub new_workspaces: Vec<Workspace>,
     pub workspaces: Vec<Workspace>,
@@ -70,6 +71,7 @@ pub struct ReservedOperation {
 
 #[async_trait]
 pub trait LocalStateStore: Send + Sync {
+    async fn selected_branch(&self, workspace: WorkspaceId) -> Result<Option<BranchId>>;
     async fn location(&self) -> Result<LocationId>;
     async fn workspace(&self, id: WorkspaceId) -> Result<Option<Workspace>>;
     async fn workspaces(&self) -> Result<Vec<Workspace>>;
