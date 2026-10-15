@@ -13,7 +13,6 @@ pub struct Adapters {
     pub clock: Arc<dyn Clock>,
     pub mounts: Arc<dyn MountDriver>,
     pub directories: Arc<dyn DirectoryAccess>,
-    pub validation: Arc<dyn ValidationRunner>,
 }
 
 impl std::fmt::Debug for Adapters {
@@ -98,8 +97,6 @@ impl Engine {
             revisions.clone(),
             operations.clone(),
             mounts.clone(),
-            adapters.validation,
-            config.live,
         );
         let workspace = WorkspaceService::new(
             runtime.clone(),

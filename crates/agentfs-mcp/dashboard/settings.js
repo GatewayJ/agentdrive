@@ -13,35 +13,6 @@ export function createSettingsPage({api, element, $}) {
     $('settings-reload').textContent = dirty ? '重新载入并放弃修改' : '重新载入';
   }
   function changed() { dirty = true; message('settings-notice', ''); state(); }
-  function inputField(card, key, label, value, type = 'text') {
-    const wrapper = element('label', '', label);
-    const input = element(type === 'textarea' ? 'textarea' : 'input');
-    input.dataset.field = key;
-    if (type !== 'textarea') input.type = type;
-    if (type === 'number') { input.min = '1'; input.step = '1'; }
-    input.required = !['arguments'].includes(key);
-    input.value = value;
-    if (type === 'textarea') input.rows = 3;
-    wrapper.append(input); card.append(wrapper);
-    return input;
-  }
-  function addValidation(name = '', config = {image:'', program:'', arguments:[], timeout_seconds:60, max_output_bytes:65536}) {
-    const card = element('div', 'validation-card');
-    const heading = element('div', 'validation-card-heading');
-    heading.append(element('strong', '', name || '新验证任务'));
-    const remove = element('button', 'text-button', '移除任务'); remove.type = 'button';
-    remove.addEventListener('click', () => { card.remove(); $('validation-empty').hidden = $('validation-list').children.length > 0; changed(); });
-    heading.append(remove); card.append(heading);
-    const fields = element('div', 'validation-fields');
-    const nameInput = inputField(fields, 'name', '任务名称', name); nameInput.maxLength = 128;
-    inputField(fields, 'image', '容器镜像', config.image);
-    inputField(fields, 'program', '容器内程序', config.program);
-    inputField(fields, 'timeout_seconds', '超时时间（秒）', config.timeout_seconds, 'number').max = '3600';
-    inputField(fields, 'max_output_bytes', '输出上限（字节）', config.max_output_bytes, 'number').max = '2097152';
-    inputField(fields, 'arguments', '程序参数，每行一个', config.arguments.join('\n'), 'textarea');
-    card.append(fields); $('validation-list').append(card); $('validation-empty').hidden = true;
-    return nameInput;
-  }
   function render(data) {
     current = data; dirty = false;
     $('settings-form').hidden = false; $('startup-panel').hidden = false;
@@ -49,8 +20,6 @@ export function createSettingsPage({api, element, $}) {
     $('cache-target').value = data.runtime.cache.target_bytes / mib;
     $('cache-free').value = data.runtime.cache.min_free_bytes / mib;
     $('allowed-origins').value = data.runtime.allowed_origins.join('\n');
-    $('validation-list').replaceChildren(); $('validation-empty').hidden = false;
-    for (const [name, config] of Object.entries(data.runtime.validation)) addValidation(name, config);
     const remote = data.runtime.remote;
     $('storage-mode').value = remote?.enabled !== false && remote ? 's3' : 'local';
     $('s3-endpoint').value = remote?.endpoint || '';
@@ -68,7 +37,7 @@ export function createSettingsPage({api, element, $}) {
       ['配置文件', data.config_path], ['监听地址', startup.listen], ['存储目录', startup.data_dir],
       ['挂载目录', startup.mount_roots.join('\n') || '未配置'], ['导入导出目录', (startup.directory_roots || []).join('\n') || '未配置'],
       ['认证身份', startup.credentials.map(value => value.principal).join('、')],
-      ['设置管理员', (startup.administrators || ['owner']).join('、') || '未配置'], ['Docker 程序', startup.docker || 'docker'],
+      ['设置管理员', (startup.administrators || ['owner']).join('、') || '未配置'],
     ];
     for (const [label, value] of fields) values.append(element('dt', '', label), element('dd', '', value));
     $('settings-version').textContent = `配置版本 ${data.revision.slice(0, 12)}`;
@@ -105,13 +74,6 @@ export function createSettingsPage({api, element, $}) {
     }
     const cache = {max_bytes:bytes('cache-max'), target_bytes:bytes('cache-target'), min_free_bytes:bytes('cache-free')};
     if (cache.target_bytes >= cache.max_bytes) throw new Error('清理目标必须小于容量上限。');
-    const validation = Object.create(null);
-    for (const card of $('validation-list').children) {
-      const fields = Object.fromEntries([...card.querySelectorAll('[data-field]')].map(input => [input.dataset.field, input.value]));
-      const name = fields.name.trim();
-      if (!name || Object.hasOwn(validation, name)) throw new Error('验证任务名称不能为空或重复。');
-      validation[name] = {image:fields.image.trim(), program:fields.program.trim(), arguments:fields.arguments === '' ? [] : fields.arguments.split('\n'), timeout_seconds:Number(fields.timeout_seconds), max_output_bytes:Number(fields.max_output_bytes)};
-    }
     const enabled = $('storage-mode').value === 's3';
     const bucket = $('s3-bucket').value.trim();
     if (enabled && !bucket) throw new Error('请填写 S3 Bucket。');
@@ -123,7 +85,7 @@ export function createSettingsPage({api, element, $}) {
         session_token:$('s3-session-token').value || null,
       } : null,
     } : null;
-    return {cache, validation, remote, allowed_origins:[...new Set($('allowed-origins').value.split('\n').map(value => value.trim()).filter(Boolean))]};
+    return {cache, remote, allowed_origins:[...new Set($('allowed-origins').value.split('\n').map(value => value.trim()).filter(Boolean))]};
   }
   function storageFields() {
     const enabled = $('storage-mode').value === 's3';
@@ -135,7 +97,6 @@ export function createSettingsPage({api, element, $}) {
   $('storage-mode').addEventListener('change', storageFields);
   $('s3-auth').addEventListener('change', storageFields);
   $('settings-form').addEventListener('input', changed);
-  $('add-validation').addEventListener('click', () => { addValidation().focus(); changed(); });
   $('settings-reload').addEventListener('click', () => load(true));
   $('settings-form').addEventListener('submit', async event => {
     event.preventDefault();

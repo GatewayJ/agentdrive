@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix='agentfs-cli-') as temporary:
         assert result.stdout.strip() == f'http://127.0.0.1:{port}/'
     config_path = root / 'agentfs.json'
     config = json.loads(config_path.read_text())
-    assert not {'allowed_origins', 'cache', 'validation', 'docker', 'remote'} & config.keys(), config
+    assert not {'allowed_origins', 'cache', 'remote'} & config.keys(), config
     for cache, expected in [
         ({'max_bytes': 1024, 'target_bytes': 1024}, 'cache target must be below its limit'),
         ({'max_byte': 1024}, 'unknown field'),
@@ -75,6 +75,8 @@ with tempfile.TemporaryDirectory(prefix='agentfs-cli-') as temporary:
         daemon = start()
         tools = json.loads(subprocess.check_output(client + ['tools'], text=True, timeout=30))
         assert len(tools['tools']) == 32
+        names = {tool['name'] for tool in tools['tools']}
+        assert 'revision_files' in names and 'merge_validate' not in names
         commit_schema = next(tool['inputSchema'] for tool in tools['tools'] if tool['name'] == 'revision_commit')
         assert commit_schema['$defs']['CommitKind']['enum'] == ['commit', 'checkpoint'], commit_schema
         created = call('workspace_create', {'name': 'cli-integration'}, 'create')
@@ -105,6 +107,8 @@ with tempfile.TemporaryDirectory(prefix='agentfs-cli-') as temporary:
             assert len(responses.get(timeout=15)['result']['tools']) == 32
             send({'id': 3, 'method': 'tools/call', 'params': {'name': 'workspace_status', 'arguments': {'workspace': workspace}}})
             assert responses.get(timeout=15)['result']['structuredContent']['workspace']['id'] == workspace
+            send({'id': 4, 'method': 'tools/call', 'params': {'name': 'revision_files', 'arguments': {'workspace': workspace, 'revision': branch['formal_head']}}})
+            assert '/' in responses.get(timeout=15)['result']['structuredContent']['entries']
         finally:
             proxy.stdin.close()
             try:
@@ -119,6 +123,9 @@ with tempfile.TemporaryDirectory(prefix='agentfs-cli-') as temporary:
         payload = bytes(range(251)) * 8193
         (source / 'directory' / 'data').write_bytes(payload)
         (source / 'empty').write_bytes(b'')
+        (source / 'pages').mkdir()
+        for index in range(205):
+            (source / 'pages' / f'{index:03}.txt').write_text(str(index))
         modified_ns = 1_700_000_000_000_000_000
         os.utime(source / 'directory' / 'data', ns=(modified_ns, modified_ns))
         os.utime(source / 'directory', ns=(modified_ns, modified_ns))
@@ -139,11 +146,35 @@ with tempfile.TemporaryDirectory(prefix='agentfs-cli-') as temporary:
         assert duplicate['id'] == exported['id']
         denied = call('workspace_import', {'workspace': workspace, 'source': str(root)}, 'outside', success=False)
         assert denied['error']['code'] == 'PERMISSION_DENIED'
+        page = call('revision_files', {'workspace': workspace, 'revision': revision, 'path': '/pages'})
+        assert len(page['entries']) == 200 and page['next'] is not None
+        following = call('revision_files', {'workspace': workspace, 'revision': revision, 'path': '/pages', 'after': page['next']})
+        assert len(following['entries']) == 6 and following['next'] is None
+        assert not set(page['entries']) & set(following['entries'])
+        target = next(item for item in call('workspace_status', {'workspace': workspace})['branches'] if item['id'] == branch['id'])
+        guard = {'branch': target['id'], 'authority_epoch': target['authority_epoch'], 'generation': target['generation'], 'expected_head': target['formal_head'], 'mutation_seq': target['mutation_seq']}
+        prepared = call('merge_prepare', {'workspace': workspace, 'source': revision, 'target': guard}, 'prepare-merge')['result']['candidate']
+        edited = call('merge_resolve', {'merge': prepared['id'], 'candidate': prepared['revision'], 'resolutions': [
+            {'choice': 'replace', 'path': '/notes.md', 'content': list('AI 合并说明'.encode()), 'mode': 420},
+            {'choice': 'copy', 'path': '/image.bin', 'revision': revision, 'source_path': '/directory/data'},
+            {'choice': 'delete', 'path': '/empty'},
+        ]}, 'edit-merge')['result']['candidate']
+        assert edited['revision'] != prepared['revision'] and not edited['conflicts']
+        applied = call('merge_apply', {'merge': edited['id'], 'candidate': edited['revision'], 'target': guard}, 'apply-merge')
+        assert applied['local_saved'] and not applied.get('error'), applied
+        merged = applied['result']['revision']
+        merged_directory = root / 'exchange' / 'merged'
+        call('workspace_export', {'workspace': workspace, 'revision': merged, 'destination': str(merged_directory)}, 'export-merge')
+        assert (merged_directory / 'image.bin').read_bytes() == payload
+        assert (merged_directory / 'notes.md').read_text(encoding='utf-8') == 'AI 合并说明'
+        assert not (merged_directory / 'empty').exists()
+        merge_revision = next(item for item in call('revision_list', {'workspace': workspace}) if item['id'] == merged)
+        assert merge_revision['parents'] == [target['formal_head'], revision]
         # The process restart also exercises WAL recovery and stable operation identities.
         daemon.terminate()
         daemon.wait(timeout=30)
         config['cache'] = {'max_bytes': 3 * 1024 ** 3, 'target_bytes': 1536 * 1024 ** 2, 'min_free_bytes': 64 * 1024 ** 2}
-        config.update(allowed_origins=[], validation={}, docker='docker', remote=None)
+        config.update(allowed_origins=[], remote=None)
         config_path.write_text(json.dumps(config))
         daemon = start()
         recovered = call('operation_by_request', {'request_id': 'import'})

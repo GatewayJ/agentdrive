@@ -1,6 +1,5 @@
 use agentfs_config::{
-    CacheConfig, ConfigStore, LiveConfig, RuntimeConfig, SettingsUpdate, ValidationConfig,
-    initialize,
+    CacheConfig, ConfigStore, LiveConfig, RuntimeConfig, SettingsUpdate, initialize,
 };
 use agentfs_engine::*;
 use agentfs_local::LocalBackend;
@@ -277,7 +276,6 @@ async fn open_with_config(
             clock: clock.clone(),
             mounts: driver.clone(),
             directories: Arc::new(NoHostDirectories),
-            validation: Arc::new(TestValidation),
         },
         EngineConfig {
             live,
@@ -888,7 +886,7 @@ async fn ownership_transfer_stops_old_writer_and_adopts_on_new_location() {
 }
 
 #[tokio::test]
-async fn merge_requires_current_validation_and_preserves_both_parents() {
+async fn merge_accepts_file_edits_and_preserves_both_parents() {
     let harness = Harness::new(None).await;
     let workspace = harness.workspace().await;
     let (base, base_fs) = harness.session(workspace.id, "base", None).await;
@@ -941,6 +939,9 @@ async fn merge_requires_current_validation_and_preserves_both_parents() {
             .await
             .unwrap();
     }
+    harness
+        .write_new(&source_fs, "picture.png", b"\x89PNG\r\n\x1a\n\x00\xff")
+        .await;
     let source_revision = harness.commit(source.branch).await;
     let target_revision = harness.commit(target.branch).await;
     let guard = BranchGuard::from(&harness.local.branch(target.branch).await.unwrap().unwrap());
@@ -970,43 +971,6 @@ async fn merge_requires_current_validation_and_preserves_both_parents() {
         .engine
         .services
         .merge
-        .validate(
-            context(),
-            ValidateMerge {
-                merge: candidate.id,
-                candidate: candidate.revision,
-                configuration: None,
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(rejected.error.unwrap().code, ErrorCode::UnresolvedConflict);
-    let resolved = success(
-        harness
-            .engine
-            .services
-            .merge
-            .resolve(
-                context(),
-                ResolveMerge {
-                    merge: candidate.id,
-                    candidate: candidate.revision,
-                    resolutions: vec![Resolution::Source {
-                        path: path("/file"),
-                    }],
-                },
-            )
-            .await
-            .unwrap(),
-    );
-    let candidate = match resolved.result.unwrap() {
-        CommandResult::Merge { candidate } => candidate,
-        _ => unreachable!(),
-    };
-    let denied = harness
-        .engine
-        .services
-        .merge
         .apply(
             context(),
             ApplyMerge {
@@ -1018,23 +982,75 @@ async fn merge_requires_current_validation_and_preserves_both_parents() {
         )
         .await
         .unwrap();
-    assert_eq!(denied.error.unwrap().code, ErrorCode::ValidationFailed);
-    success(
+    assert_eq!(rejected.error.unwrap().code, ErrorCode::UnresolvedConflict);
+    let previous_candidate = candidate.revision;
+    let resolved = success(
         harness
             .engine
             .services
             .merge
-            .validate(
+            .resolve(
                 context(),
-                ValidateMerge {
+                ResolveMerge {
                     merge: candidate.id,
                     candidate: candidate.revision,
-                    configuration: None,
+                    resolutions: vec![
+                        Resolution::Source {
+                            path: path("/file"),
+                        },
+                        Resolution::Replace {
+                            path: path("/note.md"),
+                            content: b"AI merge notes".to_vec(),
+                            mode: 0o644,
+                        },
+                        Resolution::Copy {
+                            path: path("/merged.png"),
+                            revision: source_revision,
+                            source_path: path("/picture.png"),
+                        },
+                    ],
                 },
             )
             .await
             .unwrap(),
     );
+    let candidate = match resolved.result.unwrap() {
+        CommandResult::Merge { candidate } => candidate,
+        _ => unreachable!(),
+    };
+    let files = harness
+        .engine
+        .services
+        .revisions
+        .files(
+            &actor(),
+            ListRevisionFiles {
+                workspace: workspace.id,
+                revision: candidate.revision,
+                path: None,
+                after: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(files.entries.contains_key(&path("/note.md")));
+    assert!(files.entries.contains_key(&path("/merged.png")));
+    let stale = harness
+        .engine
+        .services
+        .merge
+        .apply(
+            context(),
+            ApplyMerge {
+                merge: candidate.id,
+                candidate: previous_candidate,
+                target: guard,
+                durability: Durability::Local,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.error.unwrap().code, ErrorCode::CandidateMoved);
     let pending = success(
         harness
             .engine
@@ -1099,6 +1115,29 @@ async fn merge_requires_current_validation_and_preserves_both_parents() {
             .unwrap(),
         "source"
     );
+    let image = harness
+        .engine
+        .services
+        .revisions
+        .read_file(
+            &actor(),
+            workspace.id,
+            revision,
+            path("/merged.png"),
+            0,
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!(image.as_ref(), b"\x89PNG\r\n\x1a\n\x00\xff");
+    let notes = harness
+        .engine
+        .services
+        .revisions
+        .read_file(&actor(), workspace.id, revision, path("/note.md"), 0, 100)
+        .await
+        .unwrap();
+    assert_eq!(notes.as_ref(), b"AI merge notes");
     assert_eq!(
         harness
             .engine
@@ -1939,7 +1978,7 @@ async fn branch_switch_preserves_edits_and_waits_for_active_turns_and_handles() 
 }
 
 #[tokio::test]
-async fn cache_and_merge_validation_use_reloaded_configuration() {
+async fn cache_uses_reloaded_configuration() {
     let directory = tempfile::tempdir().unwrap();
     let path = initialize(
         &directory.path().join("configuration"),
@@ -1981,7 +2020,7 @@ async fn cache_and_merge_validation_use_reloaded_configuration() {
         .await
         .unwrap();
     harness.write_new(&source_fs, "new", b"new content").await;
-    let source_revision = harness.commit(source.branch).await;
+    harness.commit(source.branch).await;
     harness.sync(workspace.id, SyncDirection::Push).await;
     assert_eq!(harness.engine.services.cache.collect().await.unwrap(), 0);
     assert!(
@@ -1998,16 +2037,6 @@ async fn cache_and_merge_validation_use_reloaded_configuration() {
         target_bytes: 0,
         min_free_bytes: 0,
     };
-    runtime.validation.insert(
-        "check".into(),
-        ValidationConfig {
-            image: "pass".into(),
-            program: "/bin/true".into(),
-            arguments: vec![],
-            timeout_seconds: 60,
-            max_output_bytes: 4096,
-        },
-    );
     config
         .update(
             &actor(),
@@ -2025,95 +2054,6 @@ async fn cache_and_merge_validation_use_reloaded_configuration() {
             .await
             .unwrap()
     );
-    let (target, _) = harness.session(workspace.id, "target", None).await;
-    let target = harness.local.branch(target.branch).await.unwrap().unwrap();
-    let prepared = success(
-        harness
-            .engine
-            .services
-            .merge
-            .prepare(
-                context(),
-                PrepareMerge {
-                    workspace: workspace.id,
-                    source: source_revision,
-                    target: BranchGuard::from(&target),
-                    base: None,
-                },
-            )
-            .await
-            .unwrap(),
-    );
-    let CommandResult::Merge { candidate } = prepared.result.unwrap() else {
-        panic!("merge result")
-    };
-    let request = ValidateMerge {
-        merge: candidate.id,
-        candidate: candidate.revision,
-        configuration: Some("check".into()),
-    };
-    let validated = success(
-        harness
-            .engine
-            .services
-            .merge
-            .validate(context(), request.clone())
-            .await
-            .unwrap(),
-    );
-    let CommandResult::Merge { candidate: passed } = validated.result.unwrap() else {
-        panic!("merge result")
-    };
-    assert!(passed.validation.as_ref().unwrap().passed);
-    let current = config.settings(&actor()).unwrap();
-    let mut runtime = current.runtime;
-    runtime.validation.get_mut("check").unwrap().image = "fail".into();
-    config
-        .update(
-            &actor(),
-            SettingsUpdate {
-                revision: current.revision,
-                runtime,
-            },
-        )
-        .unwrap();
-    let validated = success(
-        harness
-            .engine
-            .services
-            .merge
-            .validate(context(), request.clone())
-            .await
-            .unwrap(),
-    );
-    let CommandResult::Merge { candidate: failed } = validated.result.unwrap() else {
-        panic!("merge result")
-    };
-    assert!(!failed.validation.as_ref().unwrap().passed);
-    assert_ne!(
-        passed.validation.unwrap().config_version,
-        failed.validation.unwrap().config_version
-    );
-    let current = config.settings(&actor()).unwrap();
-    let mut runtime = current.runtime;
-    runtime.validation.clear();
-    config
-        .update(
-            &actor(),
-            SettingsUpdate {
-                revision: current.revision,
-                runtime,
-            },
-        )
-        .unwrap();
-    let rejected = harness
-        .engine
-        .services
-        .merge
-        .validate(context(), request)
-        .await
-        .unwrap();
-    assert_eq!(rejected.error.unwrap().code, ErrorCode::NotFound);
 }
 
 #[tokio::test]

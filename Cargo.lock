@@ -136,7 +136,6 @@ dependencies = [
 name = "agentfs-ports"
 version = "0.1.0"
 dependencies = [
- "agentfs-config",
  "agentfs-model",
  "async-trait",
  "bytes",

@@ -4,9 +4,7 @@ use agentfs_engine::{Adapters, Engine, EngineConfig};
 use agentfs_local::LocalBackend;
 use agentfs_mcp::{GatewayConfig, router};
 use agentfs_model::*;
-use agentfs_platform::{
-    ContainerValidation, HostDirectories, NativeMountDriver, SystemClock, local_identity,
-};
+use agentfs_platform::{HostDirectories, NativeMountDriver, SystemClock, local_identity};
 use agentfs_ports::*;
 use agentfs_s3::S3Backend;
 use clap::{Parser, Subcommand};
@@ -84,7 +82,6 @@ async fn serve(settings: Arc<ConfigStore>) -> Result<()> {
             clock: Arc::new(SystemClock::default()),
             mounts: driver,
             directories: HostDirectories::new(config.directory_roots.clone())?,
-            validation: Arc::new(ContainerValidation::new(config.docker.clone())),
         },
         EngineConfig {
             live: settings.live(),

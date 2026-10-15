@@ -16,7 +16,6 @@ tracing.workspace = true
 
 cap-std = "4.0.3"
 cap-fs-ext = "4.0.3"
-tempfile.workspace = true
 libc.workspace = true
 uuid.workspace = true
 
@@ -40,6 +39,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 agentfs-config.workspace = true
 agentfs-engine.workspace = true
 agentfs-local.workspace = true

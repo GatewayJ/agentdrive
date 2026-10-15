@@ -51,12 +51,10 @@ fn invalid_files_and_startup_changes_retain_all_active_values_until_repaired() {
     nested["cache"] = json!({"unknown_field":1});
     let mut origins = config.clone();
     origins["allowed_origins"] = json!(["https://example.com/path"]);
-    let mut validation = config.clone();
-    validation["validation"] = json!({"test":{"image":"image","program":"/bin/true","arguments":[],"timeout_seconds":0,"max_output_bytes":1024}});
     let mut startup = config.clone();
     startup["listen"] = json!("127.0.0.1:7422");
     startup["cache"] = json!({"max_bytes":3221225472u64});
-    for invalid in [unknown, cache, nested, origins, validation, startup] {
+    for invalid in [unknown, cache, nested, origins, startup] {
         fs::write(&settings.config_path, serde_json::to_vec(&invalid).unwrap()).unwrap();
         assert!(store.reload().is_err());
         let current = store.live().load();

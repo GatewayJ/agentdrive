@@ -78,6 +78,10 @@ impl MountDriver for NativeMountDriver {
         }
         if std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink())
         {
+            #[cfg(windows)]
+            if self.implementation.owns_mount_path(&path) {
+                return Ok(path);
+            }
             return Err(Error::new(
                 ErrorCode::PermissionDenied,
                 "mount path must not be a symbolic link",

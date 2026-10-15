@@ -8,11 +8,11 @@
 | --- | --- |
 | `agentfs-model` | IDs, paths, objects, revisions, branches, sessions, operations, merge records, errors |
 | `agentfs-config` | Configuration schema, defaults, validation, atomic file replacement, administrator access, and shared runtime snapshots |
-| `agentfs-ports` | Storage, filesystem, mount, clock, validation, directory, and application interfaces |
+| `agentfs-ports` | Storage, filesystem, mount, clock, directory, and application interfaces |
 | `agentfs-engine` | File semantics and workspace, revision, session, replication, cache, ownership, merge workflows |
 | `agentfs-local` | A process lock, SQLite metadata, immutable objects, working files, leases, verified reads |
 | `agentfs-s3` | Streaming immutable object transport and conditional reference updates |
-| `agentfs-platform` | FUSE/WinFsp callbacks, contained host-directory access, container validation, clock |
+| `agentfs-platform` | FUSE/WinFsp callbacks, contained host-directory access and clock |
 | `agentfs-mcp` | Typed tools, authenticated HTTP routing, dashboard and settings HTTP API, client, stdio forwarding |
 | `agentfs-test-support` | Deterministic clocks, mount and storage doubles, injected outages and lost acknowledgements |
 | `agentfsd` / `agentfs` | Daemon lifecycle and command-line client |
@@ -28,10 +28,11 @@
 | `engine/workspaces` | Workspace creation, status and host-directory import/export |
 | `engine/sessions`, `engine/mounts` | Bind agent sessions to selected branches, persist turn results and coordinate mount transitions |
 | `engine/replica`, `engine/ownership` | Synchronization jobs, conditional remote publication and writer ownership transfer |
+| `engine/storage` | Hydrate retained history, copy remote references and switch storage |
 | `engine/cache` | Prefetch, pin and reclaim eligible local objects using the current cache policy |
-| `engine/merge` | Prepare candidates, resolve conflicts, run configured checks and apply validated results |
+| `engine/merge` | Prepare candidates, edit files, resolve conflicts and apply results |
 | `engine/operations` | Durable request deduplication, progress and result receipts |
-| `config/types` | Cache, validation and S3 configuration types and policy validation |
+| `config/types` | Cache and S3 configuration types and policy validation |
 | `config/file` | File schema, defaults, token-file loading and initial directory creation |
 | `config/store` | Validate candidate settings, serialize writers, save configuration and publish `ArcSwap` snapshots |
 | `mcp/gateway`, `mcp/server` | Authenticate HTTP requests and dispatch typed application tools |
@@ -43,11 +44,11 @@
 
 ## Configuration lifecycle
 
-`ConfigStore::open` reads and validates the file. `StartupConfig` supplies storage paths, mounts, transport and credentials during construction. Cache policy, named validation checks and allowed HTTP origins are held together in one `ArcSwap<Snapshot>`. Cache collection and merge validation retain one snapshot for the operation; HTTP authorization checks the snapshot for each request.
+`ConfigStore::open` reads and validates the file. `StartupConfig` supplies storage paths, mounts, transport and credentials during construction. Cache policy, S3 connections and allowed HTTP origins are held together in one `ArcSwap<Snapshot>`. Cache collection retains one snapshot for the operation; HTTP authorization checks the snapshot for each request.
 
 A daemon worker checks the configuration file once per second. A dashboard save uses the same store and writer lock, checks the expected file revision, writes and synchronizes a temporary file in the same directory, replaces the configuration file, and publishes the snapshot. On Unix the directory is also synchronized. File errors, invalid values and changes to startup settings preserve the active configuration and report an error. Configuration revision checks reject stale API writers and detected external file edits; external editors do not participate in the daemon's writer lock. Use atomic file replacement when editing externally.
 
-Settings administration uses the startup `administrators` list, default `["owner"]`, independently of workspace grants. The settings API never reads or returns token contents. Changing credentials, administrator membership, storage bindings, listen address or Docker executable requires a restart. See [configuration](configuration.md) for the fields and HTTP interface.
+Settings administration uses the startup `administrators` list, default `["owner"]`, independently of workspace grants. The settings API never reads or returns token contents. Changing HTTP credentials, administrator membership, local directories or listen address requires a restart. S3 settings use `ConfigApplier` to prepare content, persist configuration, and replace the remote adapters while holding lifecycle, publication and object-retention locks. See [configuration](configuration.md) for the fields and HTTP interface.
 
 ## Local persistence
 
@@ -71,9 +72,8 @@ Pull imports remote history and references without changing an active local bran
 
 ## Merge
 
-Merge preparation selects a common ancestor or validates an explicit one, compares path changes, and produces an immutable candidate. Changes to the same path require explicit resolution. Resolution creates a new candidate. Validation records belong to a specific candidate and target state; stale records cannot authorize apply. Apply requires clean target state, current ownership/generation/head, completed validation, and mount quiescence. The resulting revision retains source and target parents.
+Merge preparation selects a common ancestor or validates an explicit one, compares path changes, and produces an immutable candidate. Changes to the same path require explicit resolution. Resolution creates a new candidate. Apply requires clean target state, current ownership/generation/head, resolved conflicts, and mount quiescence. The resulting revision retains source and target parents.
 
-Administrator-configured container validations export candidate content into a private directory and run a preinstalled image with no network, a read-only filesystem and input mount, an unprivileged user, dropped capabilities, and resource/time/output limits. API callers select a configuration name. They cannot supply arbitrary host commands.
 
 ## Authentication boundary
 

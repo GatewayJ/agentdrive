@@ -28,7 +28,6 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
             clock: Arc::new(ManualClock::default()),
             mounts: Arc::new(MemoryMountDriver::default()),
             directories: Arc::new(NoHostDirectories),
-            validation: Arc::new(TestValidation),
         },
         EngineConfig {
             live: settings.live(),
@@ -98,7 +97,7 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
     assert_eq!(tools.len(), 32);
     assert!(!tools.iter().any(|tool| matches!(
         tool.name.as_ref(),
-        "turn_begin" | "turn_end" | "branch_fork"
+        "turn_begin" | "turn_end" | "branch_fork" | "merge_validate"
     )));
     assert!(tools.iter().any(|tool| tool.name == "branch_switch"));
     assert!(

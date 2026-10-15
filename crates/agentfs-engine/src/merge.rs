@@ -1,7 +1,6 @@
 use crate::{
     OperationService, RevisionService, Runtime, revisions::same_entry, runtime::check_guard,
 };
-use agentfs_config::LiveConfig;
 use agentfs_model::*;
 use agentfs_ports::*;
 use async_trait::async_trait;
@@ -16,19 +15,12 @@ pub struct MergeService {
     revisions: Arc<RevisionService>,
     operations: Arc<OperationService>,
     transitions: Arc<dyn RevisionTransition>,
-    runner: Arc<dyn ValidationRunner>,
-    configurations: Arc<LiveConfig>,
     candidates: Mutex<()>,
 }
 
 impl std::fmt::Debug for MergeService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MergeService")
-            .field(
-                "configurations",
-                &self.configurations.load().values.validation.keys(),
-            )
-            .finish_non_exhaustive()
+        f.debug_struct("MergeService").finish_non_exhaustive()
     }
 }
 
@@ -38,16 +30,12 @@ impl MergeService {
         revisions: Arc<RevisionService>,
         operations: Arc<OperationService>,
         transitions: Arc<dyn RevisionTransition>,
-        runner: Arc<dyn ValidationRunner>,
-        configurations: Arc<LiveConfig>,
     ) -> Arc<Self> {
         Arc::new(Self {
             runtime,
             revisions,
             operations,
             transitions,
-            runner,
-            configurations,
             candidates: Mutex::new(()),
         })
     }
@@ -251,7 +239,6 @@ impl MergeService {
             target: request.target,
             revision: revision.id,
             conflicts,
-            validation: None,
             applied_revision: None,
         };
         self.operations
@@ -502,7 +489,7 @@ impl MergeApi for MergeService {
                 ));
             }
             if request.resolutions.is_empty() {
-                return Err(Error::invalid("provide at least one conflict resolution"));
+                return Err(Error::invalid("provide at least one file edit"));
             }
             let _protection = self.runtime.objects.read().await;
             let revision = self
@@ -542,34 +529,74 @@ impl MergeApi for MergeService {
                     .await?,
             );
             for resolution in request.resolutions {
-                let position = candidate
+                let selected = resolution.path().clone();
+                if candidate.conflicts.iter().any(|conflict| {
+                    conflict.path.contains(&selected)
+                        && conflict.path.lookup_key() != selected.lookup_key()
+                }) {
+                    return Err(Error::new(
+                        ErrorCode::UnresolvedConflict,
+                        "resolve the parent conflict before editing its children",
+                    ));
+                }
+                candidate
                     .conflicts
-                    .iter()
-                    .position(|conflict| {
-                        conflict.path.lookup_key() == resolution.path().lookup_key()
-                    })
-                    .ok_or_else(|| {
-                        Error::invalid("resolution path is not an unresolved conflict")
-                    })?;
-                let conflict = candidate.conflicts.remove(position);
+                    .retain(|conflict| !selected.contains(&conflict.path));
                 match resolution {
-                    Resolution::Source { .. } => {
-                        replace_subtree(&mut tree, &conflict.path, &source)
-                    }
-                    Resolution::Target { .. } => {
-                        replace_subtree(&mut tree, &conflict.path, &target)
-                    }
+                    Resolution::Source { .. } => replace_subtree(&mut tree, &selected, &source),
+                    Resolution::Target { .. } => replace_subtree(&mut tree, &selected, &target),
                     Resolution::Delete { .. } => {
-                        if conflict.path.is_root() {
+                        if selected.is_root() {
                             return Err(Error::invalid("cannot delete the workspace root"));
                         }
-                        tree.retain(|_, (path, _)| !conflict.path.contains(path));
+                        tree.retain(|_, (path, _)| !selected.contains(path));
+                    }
+                    Resolution::Copy {
+                        revision,
+                        source_path,
+                        ..
+                    } => {
+                        if selected.is_root() {
+                            return Err(Error::invalid(
+                                "cannot replace the workspace root with a file",
+                            ));
+                        }
+                        self.runtime
+                            .authorize(
+                                &operation.operation.principal,
+                                candidate.workspace,
+                                None,
+                                Permission::Read,
+                            )
+                            .await?;
+                        let source_revision = self
+                            .revisions
+                            .trees
+                            .revision(candidate.workspace, revision)
+                            .await?;
+                        let source_tree = self
+                            .revisions
+                            .trees
+                            .tree(candidate.workspace, &source_revision.root)
+                            .await?;
+                        let inode = source_tree
+                            .iter()
+                            .find(|(path, _)| path.lookup_key() == source_path.lookup_key())
+                            .map(|(_, inode)| inode.clone())
+                            .ok_or_else(|| {
+                                Error::new(ErrorCode::NotFound, "copy source does not exist")
+                            })?;
+                        if inode.kind != FileKind::File {
+                            return Err(Error::new(
+                                ErrorCode::IsDirectory,
+                                "copy source must be a file",
+                            ));
+                        }
+                        tree.retain(|_, (path, _)| !selected.contains(path));
+                        tree.insert(selected.lookup_key(), (selected, inode));
                     }
                     Resolution::Replace { content, mode, .. } => {
-                        if conflict.path.is_root()
-                            || content.len() > 1024 * 1024
-                            || mode & !0o777 != 0
-                        {
+                        if selected.is_root() || content.len() > 1024 * 1024 || mode & !0o777 != 0 {
                             return Err(Error::invalid("invalid replacement file, mode or size"));
                         }
                         let object = self
@@ -579,12 +606,12 @@ impl MergeApi for MergeService {
                             .local
                             .put(candidate.workspace, ObjectKind::File, content.into())
                             .await?;
-                        tree.retain(|_, (path, _)| !conflict.path.contains(path));
+                        tree.retain(|_, (path, _)| !selected.contains(path));
                         let now = self.runtime.clock.now_ns();
                         tree.insert(
-                            conflict.path.lookup_key(),
+                            selected.lookup_key(),
                             (
-                                conflict.path,
+                                selected,
                                 Inode {
                                     id: InodeId(0),
                                     kind: FileKind::File,
@@ -620,7 +647,6 @@ impl MergeApi for MergeService {
                 operation: operation.operation.id,
             };
             candidate.revision = revision.id;
-            candidate.validation = None;
             self.operations
                 .finish(
                     operation.clone(),
@@ -630,130 +656,6 @@ impl MergeApi for MergeService {
                     LocalCommit {
                         revisions: vec![revision],
                         merges: vec![candidate],
-                        ..Default::default()
-                    },
-                )
-                .await
-        }
-        .await;
-        match result {
-            Ok(record) => Ok(record),
-            Err(error) => self.operations.fail(&operation, error).await,
-        }
-    }
-
-    async fn validate(
-        &self,
-        context: RequestContext,
-        request: ValidateMerge,
-    ) -> Result<OperationRecord> {
-        let configuration = self.configurations.load();
-        let candidate = self.candidate(&context.principal, request.merge).await?;
-        let operation = match self
-            .operations
-            .start(
-                context,
-                "merge_validate",
-                &request,
-                Some(candidate.workspace),
-                Some(candidate.target.branch),
-            )
-            .await?
-        {
-            OperationStart::Existing(record) => return Ok(record),
-            OperationStart::New(context) => context,
-        };
-        let result = async {
-            if candidate.revision != request.candidate || candidate.applied_revision.is_some() {
-                return Err(Error::new(
-                    ErrorCode::CandidateMoved,
-                    "merge candidate changed or was applied",
-                ));
-            }
-            if !candidate.conflicts.is_empty() {
-                return Err(Error::new(
-                    ErrorCode::UnresolvedConflict,
-                    "resolve all conflicts before validation",
-                ));
-            }
-            let _protection = self.runtime.objects.read().await;
-            let revision = self
-                .revisions
-                .trees
-                .revision(candidate.workspace, candidate.revision)
-                .await?;
-            let tree = self
-                .revisions
-                .trees
-                .tree(candidate.workspace, &revision.root)
-                .await?;
-            for object in self
-                .revisions
-                .trees
-                .closure(candidate.workspace, vec![revision.root])
-                .await?
-            {
-                let _reader = self
-                    .revisions
-                    .trees
-                    .content
-                    .open(candidate.workspace, &object)
-                    .await?;
-            }
-            let validation = if let Some(name) = request.configuration {
-                let config = configuration
-                    .values
-                    .validation
-                    .get(&name)
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorCode::NotFound,
-                            "validation configuration does not exist",
-                        )
-                    })?
-                    .clone();
-                self.runner
-                    .run(ValidationRequest {
-                        candidate: candidate.revision,
-                        workspace: candidate.workspace,
-                        config,
-                        tree,
-                        content: self.revisions.trees.content.clone(),
-                    })
-                    .await?
-            } else {
-                ValidationRecord {
-                    candidate: candidate.revision,
-                    config_version: object_ref(ObjectKind::RecordIndex, b"tree-integrity/v1").id,
-                    passed: true,
-                    skipped: false,
-                    output: "Tree structure and content digests verified.".into(),
-                }
-            };
-            if validation.candidate != candidate.revision {
-                return Err(Error::integrity(
-                    "validation result belongs to a different candidate",
-                ));
-            }
-            let _candidate_gate = self.candidates.lock().await;
-            let mut current = self
-                .candidate(&operation.operation.principal, candidate.id)
-                .await?;
-            if current.revision != candidate.revision || current.applied_revision.is_some() {
-                return Err(Error::new(
-                    ErrorCode::CandidateMoved,
-                    "merge candidate changed during validation",
-                ));
-            }
-            current.validation = Some(validation);
-            self.operations
-                .finish(
-                    operation.clone(),
-                    CommandResult::Merge {
-                        candidate: current.clone(),
-                    },
-                    LocalCommit {
-                        merges: vec![current],
                         ..Default::default()
                     },
                 )
@@ -807,14 +709,6 @@ impl MergeApi for MergeService {
                 return Err(Error::new(
                     ErrorCode::UnresolvedConflict,
                     "merge has unresolved conflicts",
-                ));
-            }
-            if candidate.validation.as_ref().is_none_or(|validation| {
-                !validation.passed || validation.candidate != candidate.revision
-            }) {
-                return Err(Error::new(
-                    ErrorCode::ValidationFailed,
-                    "current candidate has not passed validation",
                 ));
             }
             self.transitions

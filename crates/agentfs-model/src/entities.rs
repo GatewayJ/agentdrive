@@ -521,15 +521,6 @@ pub struct MergeConflict {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct ValidationRecord {
-    pub candidate: RevisionId,
-    pub config_version: ObjectId,
-    pub passed: bool,
-    pub skipped: bool,
-    pub output: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MergeCandidate {
     pub id: MergeId,
     pub workspace: WorkspaceId,
@@ -538,7 +529,6 @@ pub struct MergeCandidate {
     pub target: BranchGuard,
     pub revision: RevisionId,
     pub conflicts: Vec<MergeConflict>,
-    pub validation: Option<ValidationRecord>,
     pub applied_revision: Option<RevisionId>,
 }
 

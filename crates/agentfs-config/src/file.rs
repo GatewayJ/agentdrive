@@ -1,8 +1,7 @@
-use crate::{CacheConfig, RuntimeConfig, S3Config, ValidationConfig};
+use crate::{CacheConfig, RuntimeConfig, S3Config};
 use agentfs_model::*;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
     fs::{self, OpenOptions},
     io::Write,
     net::SocketAddr,
@@ -20,8 +19,6 @@ pub struct Config {
     pub allowed_origins: Vec<String>,
     #[serde(default, skip_serializing_if = "is_default_cache")]
     pub cache: CacheConfig,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub validation: BTreeMap<String, ValidationConfig>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,17 +34,9 @@ pub struct StartupConfig {
         skip_serializing_if = "is_default_administrators"
     )]
     pub administrators: Vec<Principal>,
-    #[serde(default = "docker", skip_serializing_if = "is_default_docker")]
-    pub docker: PathBuf,
-}
-fn docker() -> PathBuf {
-    "docker".into()
 }
 fn is_default_cache(cache: &CacheConfig) -> bool {
     cache == &CacheConfig::default()
-}
-fn is_default_docker(path: &Path) -> bool {
-    path == Path::new("docker")
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -66,7 +55,6 @@ impl Config {
         RuntimeConfig {
             remote: self.remote.clone(),
             cache: self.cache.clone(),
-            validation: self.validation.clone(),
             allowed_origins: self.allowed_origins.clone(),
         }
     }
@@ -75,7 +63,6 @@ impl Config {
             remote: runtime.remote,
             startup,
             cache: runtime.cache,
-            validation: runtime.validation,
             allowed_origins: runtime.allowed_origins,
         }
     }
@@ -103,9 +90,6 @@ impl Config {
         }
         if self.startup.credentials.is_empty() {
             return Err(Error::invalid("at least one credential is required"));
-        }
-        if self.startup.docker.as_os_str().is_empty() {
-            return Err(Error::invalid("docker executable must not be empty"));
         }
         self.runtime().validate()
     }
@@ -192,11 +176,9 @@ pub fn initialize(directory: &Path, listen: SocketAddr) -> Result<PathBuf> {
                 token_file,
             }],
             administrators: administrators(),
-            docker: docker(),
         },
         allowed_origins: vec![],
         cache: CacheConfig::default(),
-        validation: BTreeMap::new(),
     };
     create_file(&config_path, &serde_json::to_vec_pretty(&config)?)?;
     Ok(config_path)

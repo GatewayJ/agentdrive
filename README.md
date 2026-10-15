@@ -8,7 +8,7 @@ The implementation includes:
 
 - Portable file names, content-addressed objects, paged directory/inode indexes, and SQLite transactions.
 - Linux FUSE, macOS macFUSE, and Windows WinFsp adapters; snapshots, branch restore, session and turn history.
-- S3/RustFS replication, bounded streaming transfers, offline cache pins, online ownership transfer, and validated three-way merge candidates.
+- S3/RustFS replication, bounded streaming transfers, offline cache pins, online ownership transfer, and editable three-way merge candidates.
 - ACP and Codex app-server lifecycle bridges, explicit branch commands, and a dashboard for branch history and runtime settings.
 - 32 typed MCP tools over authenticated Streamable HTTP, with a stdio proxy and JSON CLI.
 
@@ -63,7 +63,7 @@ agentfs branch switch --workspace "$WORKSPACE" --branch "$BRANCH"
 agentfs dashboard --open
 ```
 
-Creation captures current working content without changing the selection. Switching saves the previous branch, checks active turns and native file handles, and updates the workspace selection and attached sessions. The selection survives daemon restarts. The dashboard shows branch ancestry, commit messages, authors, timestamps, and parent revisions. Administrators can use **Settings** to update cache policy, validation checks and allowed HTTP origins while the daemon is running; see [configuration](docs/configuration.md).
+Creation captures current working content without changing the selection. Switching saves the previous branch, checks active turns and native file handles, and updates the workspace selection and attached sessions. The selection survives daemon restarts. The dashboard shows branch ancestry, commit messages, authors, timestamps, and parent revisions. Administrators can use **Settings** to update cache policy, S3 storage and allowed HTTP origins while the daemon is running; see [configuration](docs/configuration.md).
 
 Configure the agent application's stdio command through `agentfs integrate`. It manages session attachment, the working directory, turn boundaries, cancellation, and reconnect recovery. See [agent integrations](docs/integrations.md) for ACP and Codex app-server commands and protocol behavior. Automatic saves remain enabled throughout each turn.
 

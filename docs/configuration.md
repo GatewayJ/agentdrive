@@ -18,28 +18,25 @@ The generated file contains `data_dir`, `listen`, `mount_roots`, `directory_root
 | `administrators` | Principals allowed to read and change daemon settings, default `["owner"]`. Independent of workspace grants; changes require a restart. |
 | `allowed_origins` | HTTP Origin allowlist, default `[]`. CLI and stdio connections do not send an Origin. |
 | `cache` | Optional object; omitted fields default to `max_bytes: 2147483648`, `target_bytes: 1610612736`, `min_free_bytes: 67108864`. Override individual fields as needed; the resulting `target_bytes` must be below `max_bytes`. |
-| `validation` | Map of named container checks, default `{}`; see [operations](operations.md). |
-| `docker` | Docker executable name or path, default `docker`. |
 | `remote` | S3 configuration below. Omitted or `null` means local storage only. |
 
 For example, adding `"cache": { "max_bytes": 3221225472 }` sets the cache limit to 3 GiB while retaining the default target size and free-space threshold. When selecting a limit at or below the default target, also supply a smaller `target_bytes`.
 
-All state, root, and token paths must be absolute. Create allowed roots before starting the daemon. JSON strings do not expand `~`, `$HOME`, or environment variables. Windows paths use escaped backslashes, such as `"C:\\Users\\alice\\agentfs\\state"`, or forward slashes. Unknown top-level configuration fields and unknown `cache`, `validation` entry or `remote` fields are rejected. The configuration file is limited to 1 MiB.
+All state, root, and token paths must be absolute. Create allowed roots before starting the daemon. JSON strings do not expand `~`, `$HOME`, or environment variables. Windows paths use escaped backslashes, such as `"C:\\Users\\alice\\agentfs\\state"`, or forward slashes. Unknown top-level configuration fields and unknown `cache` or `remote` fields are rejected. The configuration file is limited to 1 MiB.
 
 Token files must be regular files, at most 4096 bytes, containing at least 32 non-whitespace bytes after trimming. On Unix, group and other permissions must be absent; initialization creates mode `0600`. Tokens must be unique. A token selects the configured `principal`; workspace ownership and grants determine that principal's access. Protect configuration and state using the daemon user's filesystem permissions.
 
 ## Runtime updates and dashboard settings
 
-Open **Settings** in the dashboard sidebar, or visit `/settings`. Authenticate with an administrator token. The form edits cache sizes in MiB, S3 connections and credentials, named container validation checks, and allowed HTTP origins. Saved S3 connection changes are applied while the daemon runs. Saving persists the changes to the same `agentfs.json` used to start the daemon and publishes one configuration snapshot. The configuration retains its existing top-level structure; optional defaults remain omitted when saving.
+Open **Settings** in the dashboard sidebar, or visit `/settings`. Authenticate with an administrator token. The form edits cache sizes in MiB, S3 connections and credentials, and allowed HTTP origins. Saved S3 connection changes are applied while the daemon runs. Saving persists the changes to the same `agentfs.json` used to start the daemon and publishes one configuration snapshot. The configuration retains its existing top-level structure; optional defaults remain omitted when saving.
 
 | Configuration | Effective time |
 | --- | --- |
 | `remote` | After preparing history and the destination connection, without restarting |
 | `cache` | Next cache collection; the background worker runs every 30 seconds |
-| `validation` | Next validation operation; an operation already running retains its configuration |
 | `allowed_origins` | Next HTTP request, including existing MCP sessions |
 | `data_dir`, `listen`, `mount_roots`, `directory_roots` | After a daemon restart |
-| `credentials`, token-file contents, `administrators`, `docker`, process environment | After a daemon restart |
+| `credentials`, token-file contents, `administrators`, process environment | After a daemon restart |
 
 Origins use the exact `scheme://host[:port]` form for HTTP or HTTPS, without a path, trailing slash, credentials, wildcard, or an explicit default port. Same-origin dashboard requests and requests without Origin remain supported. Bearer authentication still applies. This setting controls Origin checks and does not enable CORS response headers.
 
@@ -48,7 +45,7 @@ External file edits are checked once per second. Each candidate is validated bef
 The authenticated HTTP interface provides:
 
 - `GET /api/settings`: active `runtime`, read-only `startup` fields, `config_path`, a `revision`, and `reload_error`.
-- `PUT /api/settings`: `{ "revision": "<revision from GET>", "runtime": { "cache": { ... }, "validation": { ... }, "allowed_origins": [], "remote": null } }`. Supply the complete runtime object returned by GET. A successful response returns the saved settings.
+- `PUT /api/settings`: `{ "revision": "<revision from GET>", "runtime": { "cache": { ... }, "allowed_origins": [], "remote": null } }`. Supply the complete runtime object returned by GET. A successful response returns the saved settings.
 
 Both endpoints require membership in `administrators`; workspace grants do not grant settings access. Responses contain token-file paths but never token contents or S3 environment credentials. Missing authentication returns 401, insufficient settings access returns 403, and a stale revision or a detected external file edit returns 409. Validation failure preserves the active settings and file. The UI preserves unsaved form values when it detects a newer revision and offers an explicit reload action.
 

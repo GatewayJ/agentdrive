@@ -1,5 +1,6 @@
 """Run lifecycle bridges with actual daemon processes and a native filesystem."""
 import argparse
+from contextlib import closing
 import json
 from pathlib import Path
 import queue
@@ -91,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix='agentfs-lifecycle-') as temporary:
 
     def records(workspace):
         config = json.loads((root / 'agentfs.json').read_text())
-        with sqlite3.connect(str(Path(config['data_dir']) / 'meta.db')) as database:
+        with closing(sqlite3.connect(str(Path(config['data_dir']) / 'meta.db'))) as database:
             return [json.loads(row[0]) for row in database.execute('SELECT data FROM turns WHERE workspace=?', (workspace,))]
 
     try:

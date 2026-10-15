@@ -38,10 +38,6 @@ jobs:
           python3 tests/config_smoke.py
       - name: Verify ACP and Codex lifecycle persistence
         run: python3 tests/lifecycle_smoke.py
-      - name: Verify container validation
-        run: |
-          docker pull debian:bookworm-slim
-          make -j "$(nproc)" test CARGO_FLAGS='-p agentfs-platform --test validation -- --ignored --nocapture'
       - name: Start isolated RustFS
         run: |
           docker run -d --name agentfs-test-s3 -p 127.0.0.1:9000:9000 -e RUSTFS_ACCESS_KEY=AGENTFSTESTLOCAL -e RUSTFS_SECRET_KEY=agentfs-local-integration-secret-2026 rustfs/rustfs@sha256:60f4f2f41ce95216f8cac676e69f9d90c0bfec458a3bc7fd7fb9b7c2452ac57a /data

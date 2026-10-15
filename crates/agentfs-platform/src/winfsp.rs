@@ -39,6 +39,12 @@ impl Driver {
             mounts: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
+    pub fn owns_mount_path(&self, path: &std::path::Path) -> bool {
+        self.mounts
+            .lock()
+            .values()
+            .any(|mount| mount.binding.path == path && mount.alive.load(Ordering::Acquire))
+    }
     pub async fn mount(&self, spec: MountSpec, files: Arc<dyn FileSystem>) -> Result<()> {
         let runtime = Handle::current();
         let mounts = self.mounts.clone();

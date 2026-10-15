@@ -230,18 +230,3 @@ impl DirectoryAccess for NoHostDirectories {
         ))
     }
 }
-
-#[derive(Debug)]
-pub struct TestValidation;
-#[async_trait]
-impl ValidationRunner for TestValidation {
-    async fn run(&self, request: ValidationRequest) -> Result<ValidationRecord> {
-        Ok(ValidationRecord {
-            candidate: request.candidate,
-            config_version: object_ref(ObjectKind::RecordIndex, &encode(&request.config)?).id,
-            passed: request.config.image != "fail",
-            skipped: false,
-            output: "Deterministic test validation.".into(),
-        })
-    }
-}

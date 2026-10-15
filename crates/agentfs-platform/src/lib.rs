@@ -1,11 +1,9 @@
-//! Native mounting, confined host directories and validation processes.
+//! Native mounting and confined host directories.
 mod directories;
 mod native;
-mod validation;
 
 pub use directories::HostDirectories;
 pub use native::NativeMountDriver;
-pub use validation::ContainerValidation;
 
 use agentfs_model::LocalIdentity;
 use agentfs_ports::Clock;

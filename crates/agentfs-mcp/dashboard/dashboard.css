@@ -935,7 +935,7 @@ h1 {
 .settings-help { margin-top:16px; }
 .settings-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px; }
 .settings-content label { display:block; color:#526171; font-size:12px; }
-.settings-content input,.settings-content textarea {
+.settings-content input,.settings-content textarea,.settings-content select {
   display:block;
   width:100%;
   min-width:0;
@@ -958,11 +958,6 @@ h1 {
 .secondary { background:#fff; border:1px solid #dce4e0; border-radius:6px; padding:10px 14px; color:#537262; white-space:nowrap; }
 .secondary:hover { background:#f2f7f4; }
 .settings-notice { border:1px solid #cee5d9; background:#eff8f3; color:#36795c; padding:13px 16px; line-height:1.8; border-radius:7px; margin-bottom:20px; }
-.validation-card { padding:19px; border:1px solid var(--line); border-radius:8px; margin-top:16px; background:#fcfdfd; }
-.validation-card-heading { display:flex; align-items:center; justify-content:space-between; margin-bottom:18px; }
-.validation-card-heading strong { font-size:12px; color:#63786c; }
-.text-button { background:none; border:0; color:#996f5e; padding:4px; font-size:11px; }
-.validation-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; }
 .settings-actions { display:flex; align-items:center; gap:12px; margin:23px 0 30px; }
 .settings-actions>div { margin-right:auto; }
 .settings-actions strong { font-size:12px; color:#64746b; font-weight:500; }
@@ -979,7 +974,6 @@ h1 {
   .settings-panel { padding:20px; }
   .settings-heading { gap:10px; }
   .settings-heading p { font-size:11px; }
-  .validation-fields { grid-template-columns:1fr; }
   .settings-actions { flex-wrap:wrap; }
   .settings-actions>div { width:100%; }
   #startup-values { grid-template-columns:80px minmax(0,1fr); }
@@ -990,3 +984,6 @@ h1 {
 .storage-fields input,.storage-fields select { width:100%; min-width:0; }
 .storage-check { display:flex; gap:10px; align-items:center; margin-top:18px; font-size:13px; }
 @media(max-width:700px) { .storage-fields { grid-template-columns:1fr; } }
+
+.settings-content .storage-check { display:flex; }
+.settings-content .storage-check input { width:auto; margin:0; }

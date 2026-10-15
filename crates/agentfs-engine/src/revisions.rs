@@ -107,7 +107,7 @@ impl RevisionService {
         if branch.protected && permission != Permission::Merge {
             return Err(Error::new(
                 ErrorCode::ReadOnly,
-                "protected branch requires a validated merge",
+                "protected branch requires a merge",
             ));
         }
         let replacing = request.replace_root.is_some();
@@ -750,6 +750,43 @@ impl RevisionApi for VersionService {
                 })
             })
             .collect())
+    }
+
+    async fn files(&self, actor: &Principal, request: ListRevisionFiles) -> Result<RevisionFiles> {
+        self.revisions
+            .runtime
+            .authorize(actor, request.workspace, None, Permission::Read)
+            .await?;
+        let _protection = self.revisions.runtime.objects.read().await;
+        let revision = self
+            .revisions
+            .trees
+            .revision(request.workspace, request.revision)
+            .await?;
+        let tree = self
+            .revisions
+            .trees
+            .tree(request.workspace, &revision.root)
+            .await?;
+        let selected = request.path.unwrap_or_else(WorkspacePath::root);
+        let selected = tree
+            .keys()
+            .find(|path| path.lookup_key() == selected.lookup_key())
+            .ok_or_else(|| Error::new(ErrorCode::NotFound, "revision path does not exist"))?
+            .clone();
+        let mut entries = tree.into_iter().filter(|(path, _)| {
+            selected.contains(path) && request.after.as_ref().is_none_or(|after| path > after)
+        });
+        let page: FileTree = entries.by_ref().take(200).collect();
+        let next = if entries.next().is_some() {
+            page.last_key_value().map(|(path, _)| path.clone())
+        } else {
+            None
+        };
+        Ok(RevisionFiles {
+            entries: page,
+            next,
+        })
     }
 
     async fn read_file(

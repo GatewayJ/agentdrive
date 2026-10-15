@@ -94,9 +94,8 @@ Fields below are inside `request`. A suffix `?` means the field may be omitted. 
 | `cache_pin` | `range`, `enabled` | `range` is a `RevisionRange`; `true` downloads and protects content, `false` removes that pin. |
 | `ownership_transfer` | `guard`, `target` | `target` is the destination `LocationId`; performs an online ownership transfer. |
 | `merge_prepare` | `workspace`, `source`, `target`, `base?` | `source` and optional `base` are revision IDs; `target` is a `BranchGuard`; returns `result.candidate`. |
-| `merge_resolve` | `merge`, `candidate`, `resolutions` | `candidate` is the current candidate revision ID; creates a new candidate and invalidates prior validation. |
-| `merge_validate` | `merge`, `candidate`, `configuration?` | Always checks structure; an optional name selects an administrator-defined container check. Omission/null performs structural validation only. |
-| `merge_apply` | `merge`, `candidate`, `target`, `durability?` | Requires successful current validation and a clean target matching its `BranchGuard`; may require mount release. |
+| `merge_resolve` | `merge`, `candidate`, `resolutions` | `candidate` is the current candidate revision ID; edits any candidate path using `source`, `target`, `delete`, `replace` or `copy` and returns a new candidate. |
+| `merge_apply` | `merge`, `candidate`, `target`, `durability?` | Requires resolved conflicts and a clean target matching its `BranchGuard`; may require mount release. |
 | `mount_prepare` | `workspace`, `branch`, `path`, `access`, `revision?`, `durability?` | `access`: `read_write` or `read_only`. A supplied revision requires `read_only`; writable mounts require local ownership and an unprotected branch. |
 | `mount_release` | `operation`, `expected_binding_generation` | Continues a pending operation after processes release the original mount. The operation ID comes from the pending receipt. |
 | `mount_unmount` | `mount`, `generation` | Uses the binding ID and generation from `workspace_status.mounts`; requests normal unmount. |
@@ -109,9 +108,10 @@ Fields below are inside `request`. A suffix `?` means the field may be omitted. 
 | `workspace_status` | `workspace` | Workspace, local location, `selected_branch`, branches, remote references, mounts, pending jobs, capabilities, and storage statistics. |
 | `revision_list` | `workspace`, `branch?` | Retained revision array; optional branch filter. |
 | `revision_diff` | `workspace`, `before`, `after` | File differences between two revision IDs. |
+| `revision_files` | `workspace`, `revision`, `path?`, `after?` | Up to 200 paths and attributes per page from a branch head or candidate revision. Pass returned `next` as `after`; `path` restricts the subtree. |
 | `revision_read` | `workspace`, `revision`, `path`, `offset`, `size` | `{bytes, length}`; offset and size are bytes, size at most 4,194,304. |
 | `cache_status` | `workspace`, `revision`, `paths?` | `complete`, `offline_ready`, `completed_bytes`, and missing object IDs for the range. `offline_ready` additionally requires pin protection. |
-| `merge_get` | `merge` | Current candidate, conflicts, and validation. |
+| `merge_get` | `merge` | Current candidate and conflicts. |
 | `operation_get` | `operation` | Operation receipt visible to the principal. |
 | `operation_by_request` | `request_id` | Original operation receipt for this principal. |
 | `operation_cancel` | `operation` | Cancels an eligible operation before commit or attachment changes; returns its receipt. This tool modifies state. |

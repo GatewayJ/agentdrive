@@ -205,6 +205,21 @@ pub struct RevisionRange {
 
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ListRevisionFiles {
+    pub workspace: WorkspaceId,
+    pub revision: RevisionId,
+    pub path: Option<WorkspacePath>,
+    pub after: Option<WorkspacePath>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RevisionFiles {
+    pub entries: FileTree,
+    pub next: Option<WorkspacePath>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PinRequest {
     pub range: RevisionRange,
     pub enabled: bool,
@@ -238,6 +253,11 @@ pub enum Resolution {
     Delete {
         path: WorkspacePath,
     },
+    Copy {
+        path: WorkspacePath,
+        revision: RevisionId,
+        source_path: WorkspacePath,
+    },
     Replace {
         path: WorkspacePath,
         content: Vec<u8>,
@@ -251,7 +271,8 @@ impl Resolution {
             Self::Source { path }
             | Self::Target { path }
             | Self::Delete { path }
-            | Self::Replace { path, .. } => path,
+            | Self::Replace { path, .. }
+            | Self::Copy { path, .. } => path,
         }
     }
 }
@@ -262,14 +283,6 @@ pub struct ResolveMerge {
     pub merge: MergeId,
     pub candidate: RevisionId,
     pub resolutions: Vec<Resolution>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ValidateMerge {
-    pub merge: MergeId,
-    pub candidate: RevisionId,
-    pub configuration: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
@@ -348,6 +361,7 @@ pub trait RevisionApi: Send + Sync {
         before: RevisionId,
         after: RevisionId,
     ) -> Result<Vec<FileDifference>>;
+    async fn files(&self, actor: &Principal, request: ListRevisionFiles) -> Result<RevisionFiles>;
     async fn read_file(
         &self,
         actor: &Principal,
@@ -424,11 +438,6 @@ pub trait MergeApi: Send + Sync {
         &self,
         context: RequestContext,
         request: ResolveMerge,
-    ) -> Result<OperationRecord>;
-    async fn validate(
-        &self,
-        context: RequestContext,
-        request: ValidateMerge,
     ) -> Result<OperationRecord>;
     async fn apply(&self, context: RequestContext, request: ApplyMerge) -> Result<OperationRecord>;
 }

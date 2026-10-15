@@ -10,7 +10,7 @@ make -j "$(getconf _NPROCESSORS_ONLN)" build
 python3 tests/cli_smoke.py
 ```
 
-The workflow tests exercise concurrent request retries, atomic append, rename with open handles, restart recovery, immutable turn outcomes, autosave timing, remote failure and lost acknowledgements, ownership transfer, merge validation, stale mount changes, cache pinning/eviction, and offline prefetch. Persistence tests cover digest failures, reader leases, transaction rollback, request recovery, and unknown format rejection. MCP tests verify concurrent clients, principal isolation, authentication, and Host/Origin policy. The CLI test starts real processes and verifies stdio MCP, import/export content and metadata, allowed paths, and process restart.
+The workflow tests exercise concurrent request retries, atomic append, rename with open handles, restart recovery, immutable turn outcomes, autosave timing, remote failure and lost acknowledgements, ownership transfer, merge file edits, stale mount changes, cache pinning/eviction, and offline prefetch. Persistence tests cover digest failures, reader leases, transaction rollback, request recovery, and unknown format rejection. MCP tests verify concurrent clients, principal isolation, authentication, and Host/Origin policy. The CLI test starts real processes and verifies stdio MCP, import/export content and metadata, allowed paths, and process restart.
 
 ## Native filesystems
 
@@ -28,16 +28,6 @@ The WinFsp wrapper's null volume-flush regression is tested separately on Window
 make -j $env:NUMBER_OF_PROCESSORS test CARGO_FLAGS='--manifest-path vendor/winfsp_wrs/Cargo.toml --lib'
 ```
 
-## Container validation
-
-With Docker and `debian:bookworm-slim` available:
-
-```sh
-make -j "$(getconf _NPROCESSORS_ONLN)" test CARGO_FLAGS='-p agentfs-platform --test validation -- --ignored --nocapture'
-```
-
-The test runs as an unprivileged container user, reads privately permissioned candidate content, verifies the input mount is read-only, and checks output and time limits. Candidate materialization grants read access to the validation user while retaining executable-file behavior; container mount permissions prevent modification.
-
 ## S3 / RustFS
 
 Use a disposable endpoint and credentials permitted to create the `agentfs-integration` bucket. Test objects use unique prefixes. Do not point these tests at production storage.
@@ -48,6 +38,7 @@ export AWS_ACCESS_KEY_ID=AGENTFSTESTLOCAL
 export AWS_SECRET_ACCESS_KEY=agentfs-local-integration-secret-2026
 make -j "$(getconf _NPROCESSORS_ONLN)" test CARGO_FLAGS='-p agentfs-s3 -- --ignored --nocapture'
 python3 tests/replica_smoke.py
+python3 tests/storage_smoke.py
 ```
 
 Backend tests exercise competing conditional reference creation, stale conditional updates, empty files, digest rejection, and 20 MiB multipart object publication. The two-daemon test pushes an imported revision, pulls and exports it at another location, and transfers branch ownership through the real S3 backend.
@@ -61,10 +52,9 @@ Backend tests exercise competing conditional reference creation, stale condition
 | CLI, stdio MCP, directory metadata, restart recovery | macOS, Linux, Windows |
 | Conditional S3 writes and multipart content | Isolated RustFS instance |
 | Two-daemon S3 replication and ownership transfer | macOS and Linux |
-| Container validation permissions, output limits, timeout | Docker on macOS |
 | macFUSE callback compilation | macOS |
 
-[GitHub Actions](https://github.com/GatewayJ/agentfs/actions) runs the checked-in test matrix for each commit, including container validation on Linux. Native macOS mounting requires an installed and enabled macFUSE driver; that kernel mount test has not been executed in the development environment.
+[GitHub Actions](https://github.com/GatewayJ/agentfs/actions) runs the checked-in test matrix for each commit. Native macOS mounting requires an installed and enabled macFUSE driver; that kernel mount test has not been executed in the development environment.
 
 The create/import/read/export/session examples in [CLI usage](cli.md) were executed against a temporary daemon. The [MCP parameter tables](mcp.md) were checked against the running daemon's 32 tool schemas. S3 configuration was checked against the daemon config loader, adapter, and credential/endpoint selection in the locked `object_store` dependency. These documentation checks do not add an AWS S3 deployment to the verified environments above.
 

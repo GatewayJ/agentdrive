@@ -1,11 +1,10 @@
-use crate::{CacheConfig, Config, S3Config, StartupConfig, ValidationConfig};
+use crate::{CacheConfig, Config, S3Config, StartupConfig};
 use agentfs_model::{Error, ErrorCode, Principal, Result};
 use arc_swap::ArcSwap;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -20,7 +19,6 @@ pub struct RuntimeConfig {
     #[serde(default)]
     pub remote: Option<S3Config>,
     pub cache: CacheConfig,
-    pub validation: BTreeMap<String, ValidationConfig>,
     pub allowed_origins: Vec<String>,
 }
 
@@ -29,14 +27,6 @@ impl RuntimeConfig {
         self.cache.validate()?;
         if let Some(remote) = &self.remote {
             remote.validate()?;
-        }
-        for (name, config) in &self.validation {
-            if name.trim().is_empty() || name.len() > 128 {
-                return Err(Error::invalid(
-                    "validation names must contain 1 to 128 bytes",
-                ));
-            }
-            config.validate()?;
         }
         for origin in &self.allowed_origins {
             let url = url::Url::parse(origin)

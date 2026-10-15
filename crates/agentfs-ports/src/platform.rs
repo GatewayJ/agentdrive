@@ -1,5 +1,4 @@
 use crate::FileSystem;
-use agentfs_config::ValidationConfig;
 use agentfs_model::*;
 use async_trait::async_trait;
 use std::{path::PathBuf, sync::Arc};
@@ -28,28 +27,6 @@ pub trait MountDriver: Send + Sync {
     async fn unmount(&self, binding: &MountBinding) -> Result<()>;
     async fn status(&self, binding: &MountBinding) -> Result<NativeMountState>;
     fn capability(&self) -> &'static str;
-}
-
-#[derive(Clone)]
-pub struct ValidationRequest {
-    pub candidate: RevisionId,
-    pub workspace: WorkspaceId,
-    pub config: ValidationConfig,
-    pub tree: FileTree,
-    pub content: Arc<dyn crate::ContentResolver>,
-}
-
-impl std::fmt::Debug for ValidationRequest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ValidationRequest")
-            .field("candidate", &self.candidate)
-            .finish_non_exhaustive()
-    }
-}
-
-#[async_trait]
-pub trait ValidationRunner: Send + Sync {
-    async fn run(&self, request: ValidationRequest) -> Result<ValidationRecord>;
 }
 
 #[async_trait]

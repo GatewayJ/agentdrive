@@ -23,6 +23,7 @@ pub enum ErrorCode {
     Unavailable,
     RemoteRequired,
     RemoteUnknown,
+    #[serde(alias = "VALIDATION_FAILED")]
     Conflict,
     StaleBinding,
     StaleAuthority,
@@ -39,7 +40,6 @@ pub enum ErrorCode {
     AmbiguousBase,
     BaseUnavailable,
     UnresolvedConflict,
-    ValidationFailed,
     Cancelled,
 }
 

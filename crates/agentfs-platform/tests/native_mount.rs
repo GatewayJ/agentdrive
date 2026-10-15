@@ -7,9 +7,7 @@ use agentfs_config::{LiveConfig, RuntimeConfig};
 use agentfs_engine::{Adapters, Engine, EngineConfig};
 use agentfs_local::LocalBackend;
 use agentfs_model::*;
-use agentfs_platform::{
-    ContainerValidation, HostDirectories, NativeMountDriver, SystemClock, local_identity,
-};
+use agentfs_platform::{HostDirectories, NativeMountDriver, SystemClock, local_identity};
 use agentfs_ports::*;
 use std::{
     io::{Read, Seek, SeekFrom, Write},
@@ -42,9 +40,8 @@ async fn native_mount_supports_file_io_durable_snapshots_and_read_only_history()
             remote_objects: None,
             remote_refs: None,
             clock: Arc::new(SystemClock::default()),
-            mounts: driver,
+            mounts: driver.clone(),
             directories: HostDirectories::new(vec![]).unwrap(),
-            validation: Arc::new(ContainerValidation::new("docker".into())),
         },
         EngineConfig {
             live: LiveConfig::new(RuntimeConfig::default()).unwrap(),
@@ -75,6 +72,7 @@ async fn native_mount_supports_file_io_durable_snapshots_and_read_only_history()
         _ => panic!("wrong result"),
     };
     let path = mounts.join("working");
+    let normalized = driver.normalize_path(&path).await.unwrap();
     let opened = success(
         engine
             .services
@@ -97,6 +95,7 @@ async fn native_mount_supports_file_io_durable_snapshots_and_read_only_history()
             .unwrap(),
     );
     assert_eq!(opened.mount_ready, Some(true));
+    assert_eq!(driver.normalize_path(&path).await.unwrap(), normalized);
     let session = match opened.result.unwrap() {
         CommandResult::Session { binding } => binding,
         _ => panic!("wrong result"),

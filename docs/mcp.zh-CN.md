@@ -94,9 +94,8 @@ jq '.tools[] | select(.name == "session_open") | .inputSchema' tools.json
 | `cache_pin` | `range`, `enabled` | `range` 为 `RevisionRange`；`true` 下载并保护内容，`false` 移除该保留设置。 |
 | `ownership_transfer` | `guard`, `target` | `target` 是目标 `LocationId`；执行在线所有权交接。 |
 | `merge_prepare` | `workspace`, `source`, `target`, `base?` | `source` 和可选的 `base` 为 revision ID；`target` 为 `BranchGuard`；返回 `result.candidate`。 |
-| `merge_resolve` | `merge`, `candidate`, `resolutions` | `candidate` 为当前候选 revision ID；创建新候选结果，并使之前的验证失效。 |
-| `merge_validate` | `merge`, `candidate`, `configuration?` | 始终检查结构；可选名称用于选择管理员定义的容器检查。省略或设置为 `null` 时仅执行结构验证。 |
-| `merge_apply` | `merge`, `candidate`, `target`, `durability?` | 要求当前候选结果验证成功，目标分支没有未保存的修改并符合 `BranchGuard`；可能要求释放挂载。 |
+| `merge_resolve` | `merge`, `candidate`, `resolutions` | `candidate` 为当前候选 revision ID；通过 `source`、`target`、`delete`、`replace` 或 `copy` 编辑候选中的路径，返回新候选版本。 |
+| `merge_apply` | `merge`, `candidate`, `target`, `durability?` | 要求全部冲突已处理，目标分支没有未保存的修改并符合 `BranchGuard`；可能要求释放挂载。 |
 | `mount_prepare` | `workspace`, `branch`, `path`, `access`, `revision?`, `durability?` | `access` 为 `read_write` 或 `read_only`。提供 revision 时必须选择 `read_only`；可写挂载要求分支由本地拥有且未受保护。 |
 | `mount_release` | `operation`, `expected_binding_generation` | 使用目录的进程释放原始挂载后，继续等待中的操作。operation ID 来自等待中的操作结果记录。 |
 | `mount_unmount` | `mount`, `generation` | 使用 `workspace_status.mounts` 中的 binding ID 和 generation，请求正常卸载。 |
@@ -109,9 +108,10 @@ jq '.tools[] | select(.name == "session_open") | .inputSchema' tools.json
 | `workspace_status` | `workspace` | 工作区、本地 location、`selected_branch`、分支、远端引用、挂载、待处理任务、能力和存储统计。 |
 | `revision_list` | `workspace`, `branch?` | 已保留的版本数组，可以按分支过滤。 |
 | `revision_diff` | `workspace`, `before`, `after` | 两个 revision ID 之间的文件差异。 |
+| `revision_files` | `workspace`, `revision`, `path?`, `after?` | 每页最多 200 个路径及文件属性；可以选择分支 head 或候选版本。将返回的 `next` 作为 `after` 继续查询，`path` 限制目录范围。 |
 | `revision_read` | `workspace`, `revision`, `path`, `offset`, `size` | `{bytes, length}`；offset 和 size 以字节计，size 最多为 4,194,304。 |
 | `cache_status` | `workspace`, `revision`, `paths?` | 指定范围的 `complete`、`offline_ready`、`completed_bytes` 和缺失的 object ID。`offline_ready` 还要求缓存受到保留设置保护。 |
-| `merge_get` | `merge` | 当前候选结果、冲突和验证记录。 |
+| `merge_get` | `merge` | 当前候选结果与冲突。 |
 | `operation_get` | `operation` | 当前 principal 可见的操作结果记录。 |
 | `operation_by_request` | `request_id` | 当前 principal 的原始操作结果记录。 |
 | `operation_cancel` | `operation` | 在提交或挂载关联发生变化前，取消符合条件的操作并返回其结果记录。该工具会修改状态。 |

@@ -56,7 +56,6 @@ impl McpServer {
             "ownership_transfer" => command!(TransferOwnership, ownership, transfer),
             "merge_prepare" => command!(PrepareMerge, merge, prepare),
             "merge_resolve" => command!(ResolveMerge, merge, resolve),
-            "merge_validate" => command!(ValidateMerge, merge, validate),
             "merge_apply" => command!(ApplyMerge, merge, apply),
             "mount_prepare" => command!(PrepareMount, mounts, prepare),
             "mount_release" => command!(ReleaseMount, mounts, release),
@@ -91,6 +90,12 @@ impl McpServer {
                         .await?,
                 )
             }
+            "revision_files" => encode(
+                self.services
+                    .revisions
+                    .files(&self.principal, parse(arguments)?)
+                    .await?,
+            ),
             "revision_read" => {
                 let input: ReadQuery = parse(arguments)?;
                 let bytes = self
@@ -315,6 +320,11 @@ pub fn tool_catalog() -> Vec<Tool> {
             "Compare file contents and supported attributes between revisions.",
             true,
         ),
+        tool::<ListRevisionFiles>(
+            "revision_files",
+            "List up to 200 paths and file attributes from a revision. Use a branch head or merge candidate revision; pass next as after to continue. Optional path restricts the subtree.",
+            true,
+        ),
         tool::<ReadQuery>(
             "revision_read",
             "Read up to 4 MiB of an immutable file as a byte array.",
@@ -387,22 +397,17 @@ pub fn tool_catalog() -> Vec<Tool> {
         ),
         tool::<MergeQuery>(
             "merge_get",
-            "Inspect a merge candidate, conflicts and validation.",
+            "Inspect a merge candidate and its conflicts.",
             true,
         ),
         tool::<Command<ResolveMerge>>(
             "merge_resolve",
-            "Resolve conflicts and create a new candidate, invalidating previous validation.",
-            false,
-        ),
-        tool::<Command<ValidateMerge>>(
-            "merge_validate",
-            "Validate candidate integrity and optionally run an administrator-configured container check.",
+            "Edit candidate files or resolve conflicts using source, target, delete, replace or copy.",
             false,
         ),
         tool::<Command<ApplyMerge>>(
             "merge_apply",
-            "Apply a validated candidate with two-parent history and target generation checks.",
+            "Apply a conflict-free candidate with two-parent history and target generation checks.",
             false,
         ),
         tool::<Command<PrepareMount>>(

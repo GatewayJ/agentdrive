@@ -42,24 +42,38 @@
 
 所有权交接在线执行。请在旧 location 结束活动轮次，并释放可写挂载。使用当前 `BranchGuard` 和目标 `LocationId` 提交 `ownership_transfer`。旧 location 会停止分支写入，完成发布队列，再更新条件引用。新的 location 通过拉取接管已确认的所有权。远端响应无法确定时，请保留原始交接操作。
 
-## 合并验证
+## 合并文件
 
-`merge_prepare` 生成候选结果和路径冲突。针对当前候选结果提交 `merge_resolve`，为每个冲突选择 source、target、delete 或替换内容。`merge_validate` 执行结构检查，并且可以运行管理员命名的容器配置。候选结果发生任何变化都会使之前的验证失效。`merge_apply` 需要提供已验证的候选结果和当前 target guard。
+通过 `workspace_status` 取得分支的 `formal_head`，使用 `revision_files` 列出该版本的文件。每页最多 200 个路径；返回 `next` 时，将它作为下一次请求的 `after`。可选的 `path` 限制目录范围。`revision_read` 读取文件字节，`revision_diff` 比较两个版本。需要包含工作目录修改时，通过 `revision_commit` 保存后使用返回的版本。
 
-`validation` 下的配置示例：
+`merge_prepare` 接收来源版本和目标 `BranchGuard`，生成候选内容。AI 可以使用 `revision_files`、`revision_read` 检查候选版本，再通过 `merge_resolve` 编辑任意文件。每次编辑返回新的候选版本，后续操作使用这个版本：
+
+- `source`、`target`：选择该路径在来源或目标版本中的内容，包括目录内容。
+- `delete`：删除指定文件或目录。
+- `replace`：提供 `content` 字节数组和 `mode`，创建或替换文件；单个文件最多 1 MiB。
+- `copy`：提供 `revision` 和 `source_path`，将同一工作区已有版本中的文件复制到 `path`。图片及大型二进制文件直接复用内容，保留原有属性。
+
+自行生成的图片可以通过 `workspace_import` 导入允许的交换目录，再使用返回的版本作为 `copy.revision`。新文件所在的父目录需要已经存在于候选内容中。处理目录冲突后才能编辑其中的文件；选择整个目录会同时处理该目录下的冲突。
+
+所有冲突处理完成后调用 `merge_apply`，提供当前候选版本和目标 guard。系统检查目标分支是否变化、是否存在未提交修改以及挂载使用情况。成功后创建保留来源与目标两个父版本的合并记录。正在使用的挂载需要通过 `mount_release` 完成切换。CLI 使用相同名称和参数，例如：
+
+```sh
+agentfs call revision_files --json "{\"workspace\":\"$WORKSPACE\",\"revision\":\"$SOURCE_REVISION\"}"
+agentfs call merge_resolve --request-id "$RUN_ID-edit" --json - < merge-edits.json
+agentfs call merge_apply --request-id "$RUN_ID-apply" --json - < merge-apply.json
+```
+
+`merge-edits.json` 的参数示例：
 
 ```json
 {
-  "syntax": {
-    "image": "python:3.13-alpine",
-    "program": "/usr/local/bin/python",
-    "arguments": ["-c", "import ast,pathlib; [ast.parse(p.read_text()) for p in pathlib.Path('/workspace').rglob('*.py')]"],
-    "timeout_seconds": 30,
-    "max_output_bytes": 65536
-  }
+  "merge": "<merge-id>",
+  "candidate": "<current-candidate-revision-id>",
+  "resolutions": [
+    {"choice": "source", "path": "/README.md"},
+    {"choice": "copy", "path": "/cover.png", "revision": "<image-revision-id>", "source_path": "/cover.png"}
+  ]
 }
 ```
-
-需要预先加载所选镜像，验证使用 `--pull=never`。受控部署应使用不可变的镜像摘要。候选内容以只读方式挂载到 `/workspace`，临时工作空间为 `/tmp`。
 
 远端凭据见[配置与 S3](configuration.zh-CN.md)，可执行示例见 [CLI 使用](cli.zh-CN.md)。

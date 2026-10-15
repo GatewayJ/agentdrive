@@ -42,24 +42,38 @@ Use `cache_prefetch` to download a revision or selected paths. Use `cache_pin` w
 
 Ownership transfer is online. Finish active turns and release writable mounts on the old location. Submit `ownership_transfer` with the current `BranchGuard` and the destination `LocationId`. The old location stops branch writes before draining publication and updating the conditional reference. Pull at the new location to adopt confirmed ownership. Retain the original transfer operation during an uncertain remote response.
 
-## Merge validation
+## Merging files
 
-`merge_prepare` produces a candidate and path conflicts. Submit `merge_resolve` against the current candidate using source, target, delete, or replacement content for each conflict. `merge_validate` performs structural checks and can run an administrator-named container configuration. Any candidate change invalidates earlier validation. `merge_apply` includes the validated candidate and current target guard.
+Use `workspace_status` to obtain a branch's `formal_head`, then `revision_files` to list that version. Pages contain up to 200 paths; pass a returned `next` value as `after` to continue. Optional `path` limits the subtree. Use `revision_read` for bytes and `revision_diff` to compare versions. Commit working-directory edits with `revision_commit` before selecting their returned revision.
 
-Example configuration entry under `validation`:
+`merge_prepare` takes a source revision and target `BranchGuard` and creates a candidate. AI can inspect the candidate using `revision_files` and `revision_read`, then edit any path through `merge_resolve`. Each edit returns a new candidate revision for subsequent requests:
+
+- `source` / `target`: select the path's contents from that version, including directory contents.
+- `delete`: remove a file or directory.
+- `replace`: create or replace a file using a `content` byte array and `mode`, up to 1 MiB per file.
+- `copy`: copy a file from `revision` and `source_path` within the same workspace to `path`. Images and large binary files reuse existing content and attributes.
+
+Import generated images from an allowed exchange directory with `workspace_import`, then use the returned revision as `copy.revision`. Parent directories must exist in the candidate. Resolve a directory conflict before editing its children; replacing a whole directory resolves its descendant conflicts.
+
+Once conflicts are resolved, `merge_apply` takes the current candidate and target guard. It checks target changes, uncommitted content and mount use, then creates a revision with both source and target parents. Active mounts require `mount_release` to finish the switch. The CLI uses the same tool names and parameters:
+
+```sh
+agentfs call revision_files --json "{\"workspace\":\"$WORKSPACE\",\"revision\":\"$SOURCE_REVISION\"}"
+agentfs call merge_resolve --request-id "$RUN_ID-edit" --json - < merge-edits.json
+agentfs call merge_apply --request-id "$RUN_ID-apply" --json - < merge-apply.json
+```
+
+Example `merge-edits.json` arguments:
 
 ```json
 {
-  "syntax": {
-    "image": "python:3.13-alpine",
-    "program": "/usr/local/bin/python",
-    "arguments": ["-c", "import ast,pathlib; [ast.parse(p.read_text()) for p in pathlib.Path('/workspace').rglob('*.py')]"],
-    "timeout_seconds": 30,
-    "max_output_bytes": 65536
-  }
+  "merge": "<merge-id>",
+  "candidate": "<current-candidate-revision-id>",
+  "resolutions": [
+    {"choice": "source", "path": "/README.md"},
+    {"choice": "copy", "path": "/cover.png", "revision": "<image-revision-id>", "source_path": "/cover.png"}
+  ]
 }
 ```
-
-Preload the selected image; validation uses `--pull=never`. Use an immutable image digest for controlled deployments. The candidate is mounted at `/workspace` read-only; scratch space is `/tmp`.
 
 See [configuration and S3](configuration.md) for remote credentials and [CLI usage](cli.md) for executable examples.

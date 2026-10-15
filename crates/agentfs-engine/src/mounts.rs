@@ -470,41 +470,33 @@ impl MountService {
             .revision(branch.workspace, revision)
             .await?;
         self.files.replace(branch.id, &revision.root).await?;
-        let parents =
-            if let Some(id) = merge {
-                let candidate = self.runtime.state.merge(id).await?.ok_or_else(|| {
+        let parents = if let Some(id) = merge {
+            let candidate =
+                self.runtime.state.merge(id).await?.ok_or_else(|| {
                     Error::new(ErrorCode::NotFound, "merge candidate does not exist")
                 })?;
-                if candidate.revision != revision.id || candidate.target != target {
-                    return Err(Error::new(
-                        ErrorCode::CandidateMoved,
-                        "merge candidate changed",
-                    ));
-                }
-                if branch.dirty {
-                    return Err(Error::new(
-                        ErrorCode::DirtyWorktree,
-                        "merge target has uncommitted changes",
-                    ));
-                }
-                if !candidate.conflicts.is_empty() {
-                    return Err(Error::new(
-                        ErrorCode::UnresolvedConflict,
-                        "merge has unresolved conflicts",
-                    ));
-                }
-                if candidate.validation.as_ref().is_none_or(|validation| {
-                    validation.candidate != revision.id || !validation.passed
-                }) {
-                    return Err(Error::new(
-                        ErrorCode::ValidationFailed,
-                        "current merge candidate has not passed validation",
-                    ));
-                }
-                Some(vec![target.expected_head, candidate.source])
-            } else {
-                None
-            };
+            if candidate.revision != revision.id || candidate.target != target {
+                return Err(Error::new(
+                    ErrorCode::CandidateMoved,
+                    "merge candidate changed",
+                ));
+            }
+            if branch.dirty {
+                return Err(Error::new(
+                    ErrorCode::DirtyWorktree,
+                    "merge target has uncommitted changes",
+                ));
+            }
+            if !candidate.conflicts.is_empty() {
+                return Err(Error::new(
+                    ErrorCode::UnresolvedConflict,
+                    "merge has unresolved conflicts",
+                ));
+            }
+            Some(vec![target.expected_head, candidate.source])
+        } else {
+            None
+        };
         if self
             .runtime
             .state
