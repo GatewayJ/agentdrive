@@ -1,3 +1,4 @@
+use agentfs_config::ValidationConfig;
 use agentfs_engine::ContentService;
 use agentfs_local::LocalBackend;
 use agentfs_model::*;

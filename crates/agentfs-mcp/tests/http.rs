@@ -1,15 +1,22 @@
+use agentfs_config::{ConfigStore, Credential, initialize};
 use agentfs_engine::{Adapters, Engine, EngineConfig};
 use agentfs_local::LocalBackend;
-use agentfs_mcp::{Client, Credential, GatewayConfig, router};
+use agentfs_mcp::{Client, GatewayConfig, router};
 use agentfs_model::*;
 use agentfs_test_support::*;
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
     let temporary = tempfile::tempdir().unwrap();
+    let path = initialize(
+        &temporary.path().join("configuration"),
+        "127.0.0.1:7421".parse().unwrap(),
+    )
+    .unwrap();
+    let settings = ConfigStore::open(&path).unwrap();
     let local = Arc::new(LocalBackend::open(temporary.path()).unwrap());
     let engine = Engine::open(
         Adapters {
@@ -24,12 +31,11 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
             validation: Arc::new(TestValidation),
         },
         EngineConfig {
-            cache: CacheConfig::default(),
+            live: settings.live(),
             identity: LocalIdentity {
                 uid: 1000,
                 gid: 1000,
             },
-            validation: BTreeMap::new(),
         },
     )
     .await
@@ -54,7 +60,7 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
         ],
         GatewayConfig {
             allowed_hosts: vec![address.to_string()],
-            allowed_origins: vec![],
+            settings: settings.clone(),
             cancellation: cancellation.clone(),
         },
     )
@@ -346,6 +352,158 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
             .to_str()
             .unwrap()
             .contains("script-src 'self'")
+    );
+    let settings_url = format!("{base}/api/settings");
+    assert_eq!(http.get(&settings_url).send().await.unwrap().status(), 401);
+    assert_eq!(
+        http.get(&settings_url)
+            .bearer_auth(visitor_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let response = http
+        .get(&settings_url)
+        .bearer_auth(owner_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let initial: Value = response.json().await.unwrap();
+    let mut update = json!({"revision":initial["revision"],"runtime":initial["runtime"]});
+    update["runtime"]["allowed_origins"] = json!(["https://trusted.example"]);
+    update["runtime"]["cache"]["max_bytes"] = json!(3221225472u64);
+    assert_eq!(
+        http.put(&settings_url)
+            .bearer_auth(visitor_token)
+            .json(&update)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    assert_eq!(
+        http.put(&settings_url)
+            .bearer_auth(owner_token)
+            .header("Origin", "https://untrusted.example")
+            .json(&update)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let response = http
+        .put(&settings_url)
+        .bearer_auth(owner_token)
+        .json(&update)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let applied: Value = response.json().await.unwrap();
+    assert_ne!(applied["revision"], initial["revision"]);
+    assert_eq!(settings.live().load().values.cache.max_bytes, 3221225472);
+    assert_eq!(
+        http.put(&settings_url)
+            .bearer_auth(owner_token)
+            .json(&update)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        409
+    );
+    assert_eq!(
+        http.get(&settings_url)
+            .bearer_auth(owner_token)
+            .header("Origin", "https://trusted.example")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    let mcp_request = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"origin-test","version":"1"}}});
+    assert_eq!(
+        http.post(&endpoint)
+            .bearer_auth(owner_token)
+            .header("Origin", "https://trusted.example")
+            .header("Accept", "application/json, text/event-stream")
+            .json(&mcp_request)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    let mut invalid = json!({"revision":applied["revision"], "runtime":applied["runtime"]});
+    invalid["runtime"]["cache"]["target_bytes"] = json!(9999999999u64);
+    assert_eq!(
+        http.put(&settings_url)
+            .bearer_auth(owner_token)
+            .json(&invalid)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    assert_eq!(settings.live().load().revision, applied["revision"]);
+    invalid["runtime"] = applied["runtime"].clone();
+    invalid["runtime"]["listen"] = json!("127.0.0.1:7999");
+    assert_eq!(
+        http.put(&settings_url)
+            .bearer_auth(owner_token)
+            .json(&invalid)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        422
+    );
+    let cleared = json!({"revision":applied["revision"],"runtime":initial["runtime"]});
+    assert_eq!(
+        http.put(&settings_url)
+            .bearer_auth(owner_token)
+            .json(&cleared)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        http.post(&endpoint)
+            .bearer_auth(owner_token)
+            .header("Origin", "https://trusted.example")
+            .header("Accept", "application/json, text/event-stream")
+            .json(&mcp_request)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    assert!(owner.tools().await.is_ok());
+    assert_eq!(
+        http.get(format!("{base}/settings"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        http.get(format!("{base}/settings.js"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
     );
     owner.close().await.unwrap();
     visitor.close().await.unwrap();

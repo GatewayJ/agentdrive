@@ -72,6 +72,9 @@ Additional lifecycle, branch, and dashboard checks:
 
 ```sh
 python3 tests/lifecycle_smoke.py
+python3 tests/config_smoke.py
 ```
 
 This script requires native mounting and covers ACP and Codex app-server completion, cancellation, failures, process interruption, duplicate requests, autosave, daemon restart, reconnect, and CLI branch switching with an existing mount. Rust tests cover lost response bodies, shared-branch turn exclusion, handle checks, persistent selection, and HTTP authorization. Browser checks cover ancestry, revision details, token login, and narrow layouts. The installed Codex app-server initialize and thread/start handshake verified the OpenCSG Workspace working directory; complete turn scenarios use protocol fixtures.
+
+`config_smoke.py` runs the daemon with a temporary directory and verifies file reload, invalid configuration retention, startup-change reporting, HTTP saves, revision conflicts, and restart recovery. It does not require a mount driver.

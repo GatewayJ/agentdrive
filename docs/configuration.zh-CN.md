@@ -4,7 +4,7 @@
 
 ## 守护进程配置
 
-运行 `agentfsd init --directory /absolute/path/to/agentfs`，创建 `agentfs.json`、私有 token 文件，以及挂载和文件交换目录。修改生成的配置后，运行 `agentfsd serve --config /absolute/path/to/agentfs/agentfs.json`。配置在启动时读取，修改后需要重新启动守护进程。
+运行 `agentfsd init --directory /absolute/path/to/agentfs`，创建 `agentfs.json`、私有 token 文件，以及挂载和文件交换目录。修改生成的配置后，运行 `agentfsd serve --config /absolute/path/to/agentfs/agentfs.json`。daemon 在启动时读取配置，并每秒检查运行配置的修改。
 
 生成的文件包含 `data_dir`、`listen`、`mount_roots`、`directory_roots` 和 `credentials`。其他可选设置使用下表中的默认值，按需添加即可。
 
@@ -15,6 +15,7 @@
 | `mount_roots` | 必填，允许挂载的绝对根目录数组；初始化创建 `<directory>/mounts`。 |
 | `directory_roots` | 允许导入和导出的绝对根目录；省略时为 `[]`。初始化创建并允许使用 `<directory>/exchange`。 |
 | `credentials` | 必填，格式为 `{ "principal": "owner", "token_file": "/absolute/path/token" }` 的数组，至少需要一项凭据。 |
+| `administrators` | 可以读取和修改 daemon 设置的身份列表，默认为 `["owner"]`。与工作区授权分别管理，修改后需要重启。 |
 | `allowed_origins` | HTTP Origin 允许列表，默认 `[]`。CLI 和 stdio 连接不会发送 Origin。 |
 | `cache` | 可选对象，省略的字段使用默认值：`max_bytes: 2147483648`、`target_bytes: 1610612736`、`min_free_bytes: 67108864`。可以单独覆盖任意字段；最终的 `target_bytes` 必须小于 `max_bytes`。 |
 | `validation` | 具有名称的容器检查配置，默认 `{}`，详见[操作说明](operations.zh-CN.md)。 |
@@ -23,9 +24,32 @@
 
 例如，添加 `"cache": { "max_bytes": 3221225472 }` 可以将缓存上限设为 3 GiB，其余字段继续使用默认值。如果上限小于或等于默认的目标容量，需要同时提供更小的 `target_bytes`。
 
-状态目录、允许的根目录和 token 路径必须使用绝对路径。启动前应创建允许的根目录。JSON 字符串不会展开 `~`、`$HOME` 或环境变量。Windows 路径使用转义后的反斜线，例如 `"C:\\Users\\alice\\agentfs\\state"`，也可以使用正斜线。未知的顶层配置字段，以及未知的 `cache` 或 `remote` 字段会被拒绝。配置文件上限为 1 MiB。
+状态目录、允许的根目录和 token 路径必须使用绝对路径。启动前应创建允许的根目录。JSON 字符串不会展开 `~`、`$HOME` 或环境变量。Windows 路径使用转义后的反斜线，例如 `"C:\\Users\\alice\\agentfs\\state"`，也可以使用正斜线。未知的顶层配置字段，以及未知的 `cache`、`validation` 条目或 `remote` 字段会被拒绝。配置文件上限为 1 MiB。
 
 token 文件必须是普通文件，最多 4096 字节，去除首尾空白后至少包含 32 个非空白字节。Unix 环境下，文件不能授予所属组和其他用户访问权限；初始化会创建权限为 `0600` 的文件。各 token 必须唯一。token 选择配置中的 `principal`，工作区所有权和授权决定该身份的访问范围。请使用守护进程用户的文件系统权限保护配置和状态。
+
+## 热更新与 Dashboard 设置
+
+在 Dashboard 左侧选择“设置”，或访问 `/settings`，使用管理员 token 认证。页面支持修改以 MiB 为单位的缓存容量、具有名称的容器验证任务，以及 HTTP Origin 允许列表。保存会写入 daemon 启动时使用的同一个 `agentfs.json`，并发布完整配置快照。配置文件保持原有顶层结构，保存时仍会省略采用默认值的可选字段。
+
+| 配置 | 生效时间 |
+| --- | --- |
+| `cache` | 下一次缓存清理；后台任务每 30 秒执行一次 |
+| `validation` | 下一次验证操作；正在执行的操作保持原有配置 |
+| `allowed_origins` | 下一次 HTTP 请求，包括已有 MCP 会话的请求 |
+| `data_dir`、`listen`、`mount_roots`、`directory_roots`、`remote` | daemon 重启后 |
+| `credentials`、token 文件内容、`administrators`、`docker`、进程环境变量 | daemon 重启后 |
+
+Origin 使用 HTTP 或 HTTPS 的 `scheme://host[:port]` 格式，不包含路径、末尾斜线、用户名密码、通配符或显式填写的默认端口。同源 Dashboard 请求及没有 Origin 的请求可以访问，所有请求仍需 Bearer 身份验证。此设置控制 Origin 检查，服务不会因此添加 CORS 响应头。
+
+直接修改配置文件后，daemon 在每秒检查时读取候选内容，校验通过后发布。JSON 错误、无效容量、文件无法访问，以及任意启动字段的变化都会保留完整的当前配置，并在设置页面显示错误。修改启动字段后，需要重启 daemon 才能应用整个文件。修正文件后，下一次检查会清除错误。建议通过原子替换文件提交修改，避免读取正在写入的 JSON。daemon 不监听 token 文件内容。
+
+带身份验证的 HTTP 接口：
+
+- `GET /api/settings`：返回当前 `runtime`、只读 `startup` 字段、`config_path`、配置版本 `revision` 和 `reload_error`。
+- `PUT /api/settings`：提交 `{ "revision": "<GET 返回的版本>", "runtime": { "cache": { ... }, "validation": { ... }, "allowed_origins": [] } }`。需要提供 GET 返回的完整运行配置，成功后返回保存的设置。
+
+两个接口都要求身份属于 `administrators`，工作区授权不会授予设置权限。响应包含 token 文件路径，但不会返回 token 内容或 S3 环境凭据。缺少认证返回 401，设置权限不足返回 403，版本过期或检测到外部文件修改返回 409。校验失败时，当前配置和文件保持原有内容。页面检测到新版本时会保留尚未保存的表单内容，由用户选择重新载入。
 
 ## S3 字段
 
@@ -114,4 +138,4 @@ jq -n --arg operation "$(jq -r '.id' "$AGENTFS_DIRECTORY/demo-import.json")" '{o
 
 在源机器执行推送，然后在目标机器使用相同 workspace ID 调用 `sync`，设置 `direction: "pull"`。拉取会导入历史和远端分支引用。可以使用已保留的版本创建本地分支；需要接管已有可写分支时，完成在线 `ownership_transfer`。详见[操作说明](operations.zh-CN.md)和 [MCP 参考](mcp.zh-CN.md)。
 
-配置定义见[守护进程](../apps/agentfsd/src/config.rs)、[S3 适配器](../crates/agentfs-s3/src/lib.rs)，依赖版本见 [Cargo.lock](../Cargo.lock)。
+配置定义见[文件结构](../crates/agentfs-config/src/file.rs)、[运行配置管理](../crates/agentfs-config/src/store.rs)和 [S3 适配器](../crates/agentfs-s3/src/lib.rs)，依赖版本见 [Cargo.lock](../Cargo.lock)。

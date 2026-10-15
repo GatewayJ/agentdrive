@@ -2,19 +2,52 @@
 
 [English](architecture.md) | [简体中文](architecture.zh-CN.md)
 
-`agentfsd` is the composition root. It creates concrete adapters, injects them into the engine, and serves the resulting `Services` facade. The engine imports model and port crates; persistence, native drivers, S3, and protocol dependencies stay in adapters.
+`agentfsd` is the composition root. It creates concrete adapters, injects them into the engine, and serves the resulting `Services` facade. The engine imports model, port, and configuration crates; persistence, native drivers, S3, and protocol dependencies stay in adapters.
 
 | Crate | Responsibility |
 | --- | --- |
 | `agentfs-model` | IDs, paths, objects, revisions, branches, sessions, operations, merge records, errors |
+| `agentfs-config` | Configuration schema, defaults, validation, atomic file replacement, administrator access, and shared runtime snapshots |
 | `agentfs-ports` | Storage, filesystem, mount, clock, validation, directory, and application interfaces |
 | `agentfs-engine` | File semantics and workspace, revision, session, replication, cache, ownership, merge workflows |
 | `agentfs-local` | A process lock, SQLite metadata, immutable objects, working files, leases, verified reads |
 | `agentfs-s3` | Streaming immutable object transport and conditional reference updates |
 | `agentfs-platform` | FUSE/WinFsp callbacks, contained host-directory access, container validation, clock |
-| `agentfs-mcp` | Typed tools, authenticated HTTP routing, client, stdio forwarding |
+| `agentfs-mcp` | Typed tools, authenticated HTTP routing, dashboard and settings HTTP API, client, stdio forwarding |
 | `agentfs-test-support` | Deterministic clocks, mount and storage doubles, injected outages and lost acknowledgements |
 | `agentfsd` / `agentfs` | Daemon lifecycle and command-line client |
+
+## Module responsibilities
+
+| Module | Responsibility |
+| --- | --- |
+| `engine/runtime` | Workspace authorization, local identity, mutation coordination and shared runtime state |
+| `engine/files` | File operations, open handles, permission and generation checks |
+| `engine/content`, `engine/trees` | Verified content reads, immutable indexes and object closure traversal |
+| `engine/snapshots`, `engine/revisions` | Capture working changes, save revisions, create branches and restore content |
+| `engine/workspaces` | Workspace creation, status and host-directory import/export |
+| `engine/sessions`, `engine/mounts` | Bind agent sessions to selected branches, persist turn results and coordinate mount transitions |
+| `engine/replica`, `engine/ownership` | Synchronization jobs, conditional remote publication and writer ownership transfer |
+| `engine/cache` | Prefetch, pin and reclaim eligible local objects using the current cache policy |
+| `engine/merge` | Prepare candidates, resolve conflicts, run configured checks and apply validated results |
+| `engine/operations` | Durable request deduplication, progress and result receipts |
+| `config/types` | Cache, validation and S3 configuration types and policy validation |
+| `config/file` | File schema, defaults, token-file loading and initial directory creation |
+| `config/store` | Validate candidate settings, serialize writers, save configuration and publish `ArcSwap` snapshots |
+| `mcp/gateway`, `mcp/server` | Authenticate HTTP requests and dispatch typed application tools |
+| `mcp/web`, `mcp/dashboard` | Workspace/lifecycle/settings HTTP endpoints and browser views |
+| `apps/agentfs/integration` | ACP and Codex app-server event forwarding and persistence lifecycle |
+| `apps/agentfsd/main` | Construct adapters, start HTTP and background workers, shut down cleanly |
+
+`agentfs-ports` describes the interfaces used by the engine. Storage and platform adapters implement those interfaces. The configuration crate depends on model types and does not construct database, mount, S3 or HTTP services. The daemon supplies one `LiveConfig` handle to the engine and HTTP gateway. Only `ConfigStore` publishes replacement snapshots; consumers obtain a consistent snapshot for each operation.
+
+## Configuration lifecycle
+
+`ConfigStore::open` reads and validates the file. `StartupConfig` supplies storage paths, mounts, transport and credentials during construction. Cache policy, named validation checks and allowed HTTP origins are held together in one `ArcSwap<Snapshot>`. Cache collection and merge validation retain one snapshot for the operation; HTTP authorization checks the snapshot for each request.
+
+A daemon worker checks the configuration file once per second. A dashboard save uses the same store and writer lock, checks the expected file revision, writes and synchronizes a temporary file in the same directory, replaces the configuration file, and publishes the snapshot. On Unix the directory is also synchronized. File errors, invalid values and changes to startup settings preserve the active configuration and report an error. Configuration revision checks reject stale API writers and detected external file edits; external editors do not participate in the daemon's writer lock. Use atomic file replacement when editing externally.
+
+Settings administration uses the startup `administrators` list, default `["owner"]`, independently of workspace grants. The settings API never reads or returns token contents. Changing credentials, administrator membership, storage bindings, listen address or Docker executable requires a restart. See [configuration](configuration.md) for the fields and HTTP interface.
 
 ## Local persistence
 

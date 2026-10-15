@@ -1,4 +1,4 @@
-'use strict';
+import { createSettingsPage } from './settings.js';
 const $ = (id) => document.getElementById(id);
 const fragment = new URLSearchParams(location.hash.slice(1));
 if (fragment.has('token')) {
@@ -23,15 +23,15 @@ function short(id) { return id ? id.slice(0, 8) : '—'; }
 function date(ns) { return new Date(ns / 1e6); }
 function clock(ns) { return date(ns).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}); }
 function showLogin() { $('login').hidden = false; $('app').hidden = true; }
-async function api(path) {
-  const response = await fetch(path, {headers:{Authorization:`Bearer ${token}`}, cache:'no-store'});
+async function api(path, options = {}) {
+  const response = await fetch(path, {...options, headers:{...options.headers, Authorization:`Bearer ${token}`}, cache:'no-store'});
   if (response.status === 401) {
     sessionStorage.removeItem('agentfs-token'); token = ''; showLogin();
     throw new Error('访问令牌无效，请重新连接。');
   }
   if (!response.ok) {
     const result = await response.json().catch(() => null);
-    throw new Error(result?.error?.message || `请求失败：${response.status}`);
+    throw Object.assign(new Error(result?.error?.message || `请求失败：${response.status}`), {status:response.status});
   }
   return response.json();
 }
@@ -157,9 +157,39 @@ async function refresh(force=false) {
     $('error').textContent = error.message; $('error').hidden = false; $('login-error').textContent = error.message; $('connection').textContent = '连接需要检查';
   } finally { if (request === generation) { loading = false; $('refresh').disabled = false; } }
 }
-$('login-form').addEventListener('submit', event => { event.preventDefault(); token=$('token').value.trim(); sessionStorage.setItem('agentfs-token',token); $('token').value=''; $('login').hidden=true; $('app').hidden=false; refresh(true); });
-$('logout').addEventListener('click', () => { generation++; token=''; loading=false; sessionStorage.removeItem('agentfs-token'); snapshot=null; showLogin(); });
+const settingsPage = createSettingsPage({api, element, $});
+function isSettings() { return location.pathname === '/settings'; }
+async function refreshPage() {
+  if (!token) return;
+  if (isSettings()) await settingsPage.load();
+  else await refresh();
+}
+function showPage() {
+  const settings = isSettings();
+  $('history-page').hidden = settings;
+  $('settings-page').hidden = !settings;
+  $('history-breadcrumb').hidden = settings;
+  $('settings-breadcrumb').hidden = !settings;
+  $('history-nav').classList.toggle('nav-active', !settings);
+  $('settings-nav').classList.toggle('nav-active', settings);
+  for (const [id, active] of [['history-nav', !settings], ['settings-nav', settings]]) {
+    if (active) $(id).setAttribute('aria-current', 'page');
+    else $(id).removeAttribute('aria-current');
+  }
+  $('view-mode').textContent = settings ? '全局配置' : '只读浏览';
+  $('workspace').closest('.workspace-picker').hidden = settings;
+  document.title = settings ? 'AgentFS · 设置' : 'AgentFS · 分支与版本';
+  refreshPage();
+}
+for (const id of ['history-nav', 'settings-nav']) $(id).addEventListener('click', event => {
+  if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  event.preventDefault(); history.pushState(null, '', $(id).getAttribute('href')); showPage();
+});
+window.addEventListener('popstate', showPage);
+$('login-form').addEventListener('submit', event => { event.preventDefault(); token=$('token').value.trim(); sessionStorage.setItem('agentfs-token',token); $('token').value=''; settingsPage.clear(); $('login').hidden=true; $('app').hidden=false; showPage(); });
+$('logout').addEventListener('click', () => { generation++; token=''; loading=false; sessionStorage.removeItem('agentfs-token'); snapshot=null; settingsPage.clear(); showLogin(); });
 $('workspace').addEventListener('change', () => { selectedBranch=null; selectedRevision=null; refresh(true); });
-$('refresh').addEventListener('click', () => refresh());
-if (token) { $('login').hidden=true; $('app').hidden=false; refresh(); } else showLogin();
-setInterval(() => { if (!document.hidden) refresh(); },15000);
+$('refresh').addEventListener('click', refreshPage);
+showPage();
+if (token) { $('login').hidden=true; $('app').hidden=false; } else showLogin();
+setInterval(() => { if (!document.hidden) refreshPage(); },15000);

@@ -17,9 +17,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentfs-config"
+version = "0.1.0"
+dependencies = [
+ "agentfs-model",
+ "arc-swap",
+ "parking_lot",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "agentfs-engine"
 version = "0.1.0"
 dependencies = [
+ "agentfs-config",
  "agentfs-local",
  "agentfs-model",
  "agentfs-ports",
@@ -56,6 +73,7 @@ dependencies = [
 name = "agentfs-mcp"
 version = "0.1.0"
 dependencies = [
+ "agentfs-config",
  "agentfs-engine",
  "agentfs-local",
  "agentfs-model",
@@ -92,6 +110,7 @@ dependencies = [
 name = "agentfs-platform"
 version = "0.1.0"
 dependencies = [
+ "agentfs-config",
  "agentfs-engine",
  "agentfs-local",
  "agentfs-model",
@@ -116,6 +135,7 @@ dependencies = [
 name = "agentfs-ports"
 version = "0.1.0"
 dependencies = [
+ "agentfs-config",
  "agentfs-model",
  "async-trait",
  "bytes",
@@ -128,6 +148,7 @@ dependencies = [
 name = "agentfs-s3"
 version = "0.1.0"
 dependencies = [
+ "agentfs-config",
  "agentfs-model",
  "agentfs-ports",
  "async-trait",
@@ -160,6 +181,7 @@ dependencies = [
 name = "agentfsd"
 version = "0.1.0"
 dependencies = [
+ "agentfs-config",
  "agentfs-engine",
  "agentfs-local",
  "agentfs-mcp",
@@ -169,13 +191,10 @@ dependencies = [
  "agentfs-s3",
  "axum",
  "clap",
- "serde",
- "serde_json",
  "tokio",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
@@ -250,6 +269,15 @@ dependencies = [
  "anstyle",
  "once_cell_polyfill",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "arc-swap"
+version = "1.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]

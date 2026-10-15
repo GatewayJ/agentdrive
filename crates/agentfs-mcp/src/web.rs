@@ -1,3 +1,4 @@
+use agentfs_config::{ConfigStore, Settings, SettingsUpdate};
 use agentfs_model::*;
 use agentfs_ports::*;
 use axum::{
@@ -9,7 +10,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 pub(crate) fn api(services: Services) -> Router {
     Router::new()
@@ -19,12 +20,39 @@ pub(crate) fn api(services: Services) -> Router {
         .with_state(services)
 }
 
+pub(crate) fn settings_api(settings: Arc<ConfigStore>) -> Router {
+    Router::new()
+        .route("/api/settings", get(get_settings).put(update_settings))
+        .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024))
+        .with_state(settings)
+}
+
+async fn get_settings(
+    State(settings): State<Arc<ConfigStore>>,
+    Extension(actor): Extension<Principal>,
+) -> std::result::Result<Json<Settings>, ApiError> {
+    Ok(Json(settings.settings(&actor)?))
+}
+
+async fn update_settings(
+    State(settings): State<Arc<ConfigStore>>,
+    Extension(actor): Extension<Principal>,
+    Json(update): Json<SettingsUpdate>,
+) -> std::result::Result<Json<Settings>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || settings.update(&actor, update))
+        .await
+        .map_err(|error| Error::new(ErrorCode::Io, error.to_string()))??;
+    Ok(Json(result))
+}
+
 pub(crate) fn assets() -> Router {
     Router::new()
         .route("/favicon.svg", get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], include_str!("../dashboard/favicon.svg")) }))
         .route("/", get(|| async { Html(include_str!("../dashboard/index.html")) }))
+        .route("/settings", get(|| async { Html(include_str!("../dashboard/index.html")) }))
         .route("/dashboard", get(|| async { Html(include_str!("../dashboard/index.html")) }))
         .route("/dashboard.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/dashboard.js")) }))
+        .route("/settings.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/settings.js")) }))
         .route("/dashboard.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], include_str!("../dashboard/dashboard.css")) }))
         .layer(axum::middleware::map_response(|mut response: Response| async move {
             response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'".parse().unwrap());

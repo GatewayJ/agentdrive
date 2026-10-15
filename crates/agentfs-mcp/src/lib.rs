@@ -4,5 +4,5 @@ mod gateway;
 mod server;
 mod web;
 pub use client::{Client, stdio_proxy};
-pub use gateway::{Credential, GatewayConfig, router};
+pub use gateway::{GatewayConfig, router};
 pub use server::{McpServer, tool_catalog};

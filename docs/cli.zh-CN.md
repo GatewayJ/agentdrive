@@ -93,7 +93,7 @@ agentfs dashboard --open
 
 `session_open` 接受 `key` 及可选的 `branch`、`mount_path`、`durability`。默认使用工作区当前选择的分支。`session_pause`、`session_resume`、`session_close` 管理已有会话。[Agent 集成](integrations.zh-CN.md)负责自动关联会话、设置工作目录、保存回合、取消及恢复。
 
-`dashboard` 打印浏览器地址，无需读取凭据或连接 daemon。`dashboard --open` 需要凭据，通过 URL fragment 传递访问令牌；页面读取后立即移除 fragment，并将令牌保存在 session storage 中。数据请求使用 Bearer 身份验证。页面提供分支树和版本信息，每 15 秒刷新。
+`dashboard` 打印浏览器地址，无需读取凭据或连接 daemon。`dashboard --open` 需要凭据，通过 URL fragment 传递访问令牌；页面读取后立即移除 fragment，并将令牌保存在 session storage 中。数据请求使用 Bearer 身份验证。页面提供分支树和版本信息，每 15 秒刷新。 管理员可以通过左侧“设置”进入 `/settings`，修改运行配置并查看需要重启的启动配置，详见[配置说明](configuration.zh-CN.md)。
 
 ## 从文件读取请求
 

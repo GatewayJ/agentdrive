@@ -51,3 +51,5 @@ Run `agentfs dashboard --open` to open the daemon's root URL. The browser receiv
 Read-only JSON endpoints are `GET /api/workspaces` and `GET /api/workspaces/{workspace}`. The latter returns `status` and `revisions`. Revision details distinguish the revision's original branch from the branch whose history is being browsed. Parent IDs preserve merge ancestry.
 
 Protocol references: [ACP sessions](https://agentclientprotocol.com/protocol/v1/session-setup), [ACP prompt turns](https://agentclientprotocol.com/protocol/v1/prompt-turn), and [Codex app-server](https://developers.openai.com/codex/app-server/).
+
+Administrators can open **Settings** at `/settings` to edit runtime configuration and inspect startup settings; see [configuration](configuration.md).

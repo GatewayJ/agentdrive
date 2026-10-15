@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+agentfs-config.workspace = true
 rmcp.workspace = true
 axum.workspace = true
 sha2.workspace = true

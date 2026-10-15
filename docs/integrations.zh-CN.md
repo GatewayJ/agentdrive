@@ -51,3 +51,5 @@ Codex 的 `turn/start`、`review/start` 在转发前开始记录。`turn/started
 只读 JSON 接口为 `GET /api/workspaces` 和 `GET /api/workspaces/{workspace}`。后者返回 `status` 和 `revisions`。版本信息显示创建该版本的原始分支，父版本 ID 保留合并关系。
 
 协议参考：[ACP 会话](https://agentclientprotocol.com/protocol/v1/session-setup)、[ACP 回合](https://agentclientprotocol.com/protocol/v1/prompt-turn)、[Codex app-server](https://developers.openai.com/codex/app-server/)。
+
+管理员可以通过左侧“设置”进入 `/settings`，修改运行配置并查看需要重启的启动配置，详见[配置说明](configuration.zh-CN.md)。

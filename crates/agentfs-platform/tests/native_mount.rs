@@ -3,6 +3,7 @@
     windows,
     all(target_os = "macos", feature = "macos-mount")
 ))]
+use agentfs_config::{LiveConfig, RuntimeConfig};
 use agentfs_engine::{Adapters, Engine, EngineConfig};
 use agentfs_local::LocalBackend;
 use agentfs_model::*;
@@ -11,7 +12,6 @@ use agentfs_platform::{
 };
 use agentfs_ports::*;
 use std::{
-    collections::BTreeMap,
     io::{Read, Seek, SeekFrom, Write},
     sync::Arc,
 };
@@ -47,9 +47,8 @@ async fn native_mount_supports_file_io_durable_snapshots_and_read_only_history()
             validation: Arc::new(ContainerValidation::new("docker".into())),
         },
         EngineConfig {
-            cache: CacheConfig::default(),
+            live: LiveConfig::new(RuntimeConfig::default()).unwrap(),
             identity: local_identity(),
-            validation: BTreeMap::new(),
         },
     )
     .await

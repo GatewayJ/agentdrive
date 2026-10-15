@@ -1,31 +1,40 @@
-use agentfs_mcp::Credential;
+use crate::{CacheConfig, RuntimeConfig, S3Config, ValidationConfig};
 use agentfs_model::*;
-use agentfs_ports::ValidationConfig;
-use agentfs_s3::S3Config;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
-    io::{Read, Write},
+    io::Write,
     net::SocketAddr,
     path::{Path, PathBuf},
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    pub data_dir: PathBuf,
-    pub listen: SocketAddr,
-    pub mount_roots: Vec<PathBuf>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub directory_roots: Vec<PathBuf>,
-    pub credentials: Vec<TokenFile>,
+    #[serde(flatten)]
+    pub startup: StartupConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_origins: Vec<String>,
     #[serde(default, skip_serializing_if = "is_default_cache")]
     pub cache: CacheConfig,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub validation: BTreeMap<String, ValidationConfig>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartupConfig {
+    pub data_dir: PathBuf,
+    pub listen: SocketAddr,
+    pub mount_roots: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub directory_roots: Vec<PathBuf>,
+    pub credentials: Vec<TokenFile>,
+    #[serde(
+        default = "administrators",
+        skip_serializing_if = "is_default_administrators"
+    )]
+    pub administrators: Vec<Principal>,
     #[serde(default = "docker", skip_serializing_if = "is_default_docker")]
     pub docker: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -40,32 +49,49 @@ fn is_default_cache(cache: &CacheConfig) -> bool {
 fn is_default_docker(path: &Path) -> bool {
     path == Path::new("docker")
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TokenFile {
     pub principal: Principal,
     pub token_file: PathBuf,
 }
 impl Config {
-    pub fn load(path: &Path) -> Result<Self> {
-        let mut bytes = Vec::new();
-        fs::File::open(path)?
-            .take(1024 * 1024 + 1)
-            .read_to_end(&mut bytes)?;
-        if bytes.len() > 1024 * 1024 {
-            return Err(Error::invalid("configuration exceeds 1 MiB"));
-        }
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         let config: Self =
-            serde_json::from_slice(&bytes).map_err(|error| Error::invalid(error.to_string()))?;
-        if !config.listen.ip().is_loopback() {
+            serde_json::from_slice(bytes).map_err(|error| Error::invalid(error.to_string()))?;
+        config.validate()?;
+        Ok(config)
+    }
+    pub fn runtime(&self) -> RuntimeConfig {
+        RuntimeConfig {
+            cache: self.cache.clone(),
+            validation: self.validation.clone(),
+            allowed_origins: self.allowed_origins.clone(),
+        }
+    }
+    pub(crate) fn with_runtime(startup: StartupConfig, runtime: RuntimeConfig) -> Self {
+        Self {
+            startup,
+            cache: runtime.cache,
+            validation: runtime.validation,
+            allowed_origins: runtime.allowed_origins,
+        }
+    }
+    fn validate(&self) -> Result<()> {
+        if !self.startup.listen.ip().is_loopback() {
             return Err(Error::invalid(
                 "MCP must listen on a loopback address; use an authenticated TLS proxy for remote access",
             ));
         }
-        for path in std::iter::once(&config.data_dir)
-            .chain(config.mount_roots.iter())
-            .chain(config.directory_roots.iter())
-            .chain(config.credentials.iter().map(|entry| &entry.token_file))
+        for path in std::iter::once(&self.startup.data_dir)
+            .chain(self.startup.mount_roots.iter())
+            .chain(self.startup.directory_roots.iter())
+            .chain(
+                self.startup
+                    .credentials
+                    .iter()
+                    .map(|entry| &entry.token_file),
+            )
         {
             if !path.is_absolute() {
                 return Err(Error::invalid(
@@ -73,9 +99,16 @@ impl Config {
                 ));
             }
         }
-        config.cache.validate()?;
-        Ok(config)
+        if self.startup.credentials.is_empty() {
+            return Err(Error::invalid("at least one credential is required"));
+        }
+        if self.startup.docker.as_os_str().is_empty() {
+            return Err(Error::invalid("docker executable must not be empty"));
+        }
+        self.runtime().validate()
     }
+}
+impl StartupConfig {
     pub fn credentials(&self) -> Result<Vec<Credential>> {
         self.credentials
             .iter()
@@ -146,20 +179,47 @@ pub fn initialize(directory: &Path, listen: SocketAddr) -> Result<PathBuf> {
     );
     create_file(&token_file, token.as_bytes())?;
     let config = Config {
-        data_dir: directory.join("state"),
-        listen,
-        mount_roots: vec![mounts],
-        directory_roots: vec![exchange],
-        credentials: vec![TokenFile {
-            principal: "owner".to_owned().try_into()?,
-            token_file,
-        }],
+        startup: StartupConfig {
+            data_dir: directory.join("state"),
+            listen,
+            mount_roots: vec![mounts],
+            directory_roots: vec![exchange],
+            credentials: vec![TokenFile {
+                principal: "owner".to_owned().try_into()?,
+                token_file,
+            }],
+            administrators: administrators(),
+            docker: docker(),
+            remote: None,
+        },
         allowed_origins: vec![],
         cache: CacheConfig::default(),
         validation: BTreeMap::new(),
-        docker: docker(),
-        remote: None,
     };
     create_file(&config_path, &serde_json::to_vec_pretty(&config)?)?;
     Ok(config_path)
+}
+
+fn administrators() -> Vec<Principal> {
+    vec![
+        "owner"
+            .to_owned()
+            .try_into()
+            .expect("valid built-in principal"),
+    ]
+}
+fn is_default_administrators(value: &[Principal]) -> bool {
+    value == administrators()
+}
+
+pub struct Credential {
+    pub principal: Principal,
+    pub token: String,
+}
+impl std::fmt::Debug for Credential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credential")
+            .field("principal", &self.principal)
+            .finish_non_exhaustive()
+    }
 }

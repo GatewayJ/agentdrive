@@ -1,6 +1,7 @@
+use agentfs_config::S3Config;
 use agentfs_model::*;
 use agentfs_ports::*;
-use agentfs_s3::{S3Backend, S3Config};
+use agentfs_s3::S3Backend;
 use bytes::Bytes;
 use object_store::{
     aws::AmazonS3Builder,

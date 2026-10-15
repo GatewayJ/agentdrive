@@ -1,4 +1,5 @@
 use crate::{OperationService, Runtime, TreeService};
+use agentfs_config::LiveConfig;
 use agentfs_model::*;
 use agentfs_ports::*;
 use async_trait::async_trait;
@@ -9,7 +10,7 @@ pub struct CacheService {
     runtime: Arc<Runtime>,
     trees: Arc<TreeService>,
     operations: Arc<OperationService>,
-    config: CacheConfig,
+    config: Arc<LiveConfig>,
 }
 
 impl CacheService {
@@ -17,15 +18,14 @@ impl CacheService {
         runtime: Arc<Runtime>,
         trees: Arc<TreeService>,
         operations: Arc<OperationService>,
-        config: CacheConfig,
-    ) -> Result<Arc<Self>> {
-        config.validate()?;
-        Ok(Arc::new(Self {
+        config: Arc<LiveConfig>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
             runtime,
             trees,
             operations,
             config,
-        }))
+        })
     }
 
     async fn selection(
@@ -254,6 +254,8 @@ impl CacheApi for CacheService {
 
     async fn collect(&self) -> Result<u64> {
         let _exclusive = self.runtime.objects.write().await;
+        let snapshot = self.config.load();
+        let config = &snapshot.values.cache;
         let mut entries = Vec::new();
         let mut protected = BTreeSet::new();
         for workspace in self.runtime.state.workspaces().await? {
@@ -301,13 +303,13 @@ impl CacheApi for CacheService {
             .ok_or_else(|| Error::integrity("cache size overflow"))?;
         let initial = self.trees.content.local.stats().await?;
         let mut free = initial.available_bytes;
-        if total <= self.config.max_bytes && free >= self.config.min_free_bytes {
+        if total <= config.max_bytes && free >= config.min_free_bytes {
             return Ok(0);
         }
         entries.sort_by_key(|entry| entry.last_access_ns);
         let mut freed = 0u64;
         for entry in entries {
-            if total <= self.config.target_bytes && free >= self.config.min_free_bytes {
+            if total <= config.target_bytes && free >= config.min_free_bytes {
                 break;
             }
             if entry.remote_confirmed

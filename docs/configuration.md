@@ -4,7 +4,7 @@
 
 ## Daemon configuration
 
-Run `agentfsd init --directory /absolute/path/to/agentfs` to create `agentfs.json`, a private token file, and the mount/exchange directories. Edit the generated configuration, then start `agentfsd serve --config /absolute/path/to/agentfs/agentfs.json`. Configuration is read at startup; changes require a daemon restart.
+Run `agentfsd init --directory /absolute/path/to/agentfs` to create `agentfs.json`, a private token file, and the mount/exchange directories. Edit the generated configuration, then start `agentfsd serve --config /absolute/path/to/agentfs/agentfs.json`. The daemon loads the file at startup and checks it every second for runtime changes.
 
 The generated file contains `data_dir`, `listen`, `mount_roots`, `directory_roots`, and `credentials`. Optional settings use the defaults below and can be added when needed.
 
@@ -15,6 +15,7 @@ The generated file contains `data_dir`, `listen`, `mount_roots`, `directory_root
 | `mount_roots` | Required array of allowed absolute mount roots; initialization creates `<directory>/mounts`. |
 | `directory_roots` | Allowed absolute import/export roots; omitted means `[]`. Initialization creates and permits `<directory>/exchange`. |
 | `credentials` | Required array of `{ "principal": "owner", "token_file": "/absolute/path/token" }`. At least one credential is required. |
+| `administrators` | Principals allowed to read and change daemon settings, default `["owner"]`. Independent of workspace grants; changes require a restart. |
 | `allowed_origins` | HTTP Origin allowlist, default `[]`. CLI and stdio connections do not send an Origin. |
 | `cache` | Optional object; omitted fields default to `max_bytes: 2147483648`, `target_bytes: 1610612736`, `min_free_bytes: 67108864`. Override individual fields as needed; the resulting `target_bytes` must be below `max_bytes`. |
 | `validation` | Map of named container checks, default `{}`; see [operations](operations.md). |
@@ -23,9 +24,32 @@ The generated file contains `data_dir`, `listen`, `mount_roots`, `directory_root
 
 For example, adding `"cache": { "max_bytes": 3221225472 }` sets the cache limit to 3 GiB while retaining the default target size and free-space threshold. When selecting a limit at or below the default target, also supply a smaller `target_bytes`.
 
-All state, root, and token paths must be absolute. Create allowed roots before starting the daemon. JSON strings do not expand `~`, `$HOME`, or environment variables. Windows paths use escaped backslashes, such as `"C:\\Users\\alice\\agentfs\\state"`, or forward slashes. Unknown top-level configuration fields and unknown `cache` or `remote` fields are rejected. The configuration file is limited to 1 MiB.
+All state, root, and token paths must be absolute. Create allowed roots before starting the daemon. JSON strings do not expand `~`, `$HOME`, or environment variables. Windows paths use escaped backslashes, such as `"C:\\Users\\alice\\agentfs\\state"`, or forward slashes. Unknown top-level configuration fields and unknown `cache`, `validation` entry or `remote` fields are rejected. The configuration file is limited to 1 MiB.
 
 Token files must be regular files, at most 4096 bytes, containing at least 32 non-whitespace bytes after trimming. On Unix, group and other permissions must be absent; initialization creates mode `0600`. Tokens must be unique. A token selects the configured `principal`; workspace ownership and grants determine that principal's access. Protect configuration and state using the daemon user's filesystem permissions.
+
+## Runtime updates and dashboard settings
+
+Open **Settings** in the dashboard sidebar, or visit `/settings`. Authenticate with an administrator token. The form edits cache sizes in MiB, named container validation checks, and allowed HTTP origins. Saving persists the changes to the same `agentfs.json` used to start the daemon and publishes one configuration snapshot. The configuration retains its existing top-level structure; optional defaults remain omitted when saving.
+
+| Configuration | Effective time |
+| --- | --- |
+| `cache` | Next cache collection; the background worker runs every 30 seconds |
+| `validation` | Next validation operation; an operation already running retains its configuration |
+| `allowed_origins` | Next HTTP request, including existing MCP sessions |
+| `data_dir`, `listen`, `mount_roots`, `directory_roots`, `remote` | After a daemon restart |
+| `credentials`, token-file contents, `administrators`, `docker`, process environment | After a daemon restart |
+
+Origins use the exact `scheme://host[:port]` form for HTTP or HTTPS, without a path, trailing slash, credentials, wildcard, or an explicit default port. Same-origin dashboard requests and requests without Origin remain supported. Bearer authentication still applies. This setting controls Origin checks and does not enable CORS response headers.
+
+External file edits are checked once per second. Each candidate is validated before publication. Invalid JSON, invalid limits, unavailable files, and changes to any startup field retain the complete active configuration and appear as an error on the settings page. When changing a startup field, restart the daemon to apply the whole file. Correcting the file clears the error on the next check. Prefer replacing the file atomically to avoid submitting partially written JSON. The daemon does not watch token-file contents.
+
+The authenticated HTTP interface provides:
+
+- `GET /api/settings`: active `runtime`, read-only `startup` fields, `config_path`, a `revision`, and `reload_error`.
+- `PUT /api/settings`: `{ "revision": "<revision from GET>", "runtime": { "cache": { ... }, "validation": { ... }, "allowed_origins": [] } }`. Supply the complete runtime object returned by GET. A successful response returns the saved settings.
+
+Both endpoints require membership in `administrators`; workspace grants do not grant settings access. Responses contain token-file paths but never token contents or S3 environment credentials. Missing authentication returns 401, insufficient settings access returns 403, and a stale revision or a detected external file edit returns 409. Validation failure preserves the active settings and file. The UI preserves unsaved form values when it detects a newer revision and offers an explicit reload action.
 
 ## S3 fields
 
@@ -114,4 +138,4 @@ Configure each daemon with the same S3 endpoint, bucket, prefix, and signing reg
 
 Push on the source, then call `sync` with `direction: "pull"` and the same workspace ID on the destination. Pull imports history and remote branch references. Use a retained revision to create a local branch, or complete an online `ownership_transfer` before adopting an existing writable branch. See [operations](operations.md) and the [MCP reference](mcp.md).
 
-Configuration definitions: [daemon](../apps/agentfsd/src/config.rs), [S3 adapter](../crates/agentfs-s3/src/lib.rs), and dependency version in [Cargo.lock](../Cargo.lock).
+Configuration definitions: [schema](../crates/agentfs-config/src/file.rs), [runtime store](../crates/agentfs-config/src/store.rs), and [S3 adapter](../crates/agentfs-s3/src/lib.rs). Dependency versions are recorded in [Cargo.lock](../Cargo.lock).

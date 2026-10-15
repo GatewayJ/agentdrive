@@ -1,4 +1,4 @@
-mod config;
+use agentfs_config::{ConfigStore, initialize};
 use agentfs_engine::{Adapters, Engine, EngineConfig};
 use agentfs_local::LocalBackend;
 use agentfs_mcp::{GatewayConfig, router};
@@ -50,18 +50,19 @@ async fn main() {
 async fn run(arguments: Arguments) -> Result<()> {
     match arguments.command {
         Command::Init { directory, listen } => {
-            let path = config::initialize(&directory, listen)?;
+            let path = initialize(&directory, listen)?;
             println!("{}", path.display());
             Ok(())
         }
-        Command::Serve { config } => serve(config::Config::load(&config)?).await,
+        Command::Serve { config } => serve(ConfigStore::open(&config)?).await,
     }
 }
-async fn serve(config: config::Config) -> Result<()> {
+async fn serve(settings: Arc<ConfigStore>) -> Result<()> {
+    let config = settings.startup();
     let credentials = config.credentials()?;
     let local = Arc::new(LocalBackend::open(&config.data_dir)?);
-    let driver = NativeMountDriver::new(config.mount_roots)?;
-    let remote = config.remote.map(S3Backend::new).transpose()?;
+    let driver = NativeMountDriver::new(config.mount_roots.clone())?;
+    let remote = config.remote.clone().map(S3Backend::new).transpose()?;
     let engine = Engine::open(
         Adapters {
             state: local.clone(),
@@ -73,13 +74,12 @@ async fn serve(config: config::Config) -> Result<()> {
             remote_refs: remote.map(|store| store as Arc<dyn RemoteRefStore>),
             clock: Arc::new(SystemClock::default()),
             mounts: driver,
-            directories: HostDirectories::new(config.directory_roots)?,
-            validation: Arc::new(ContainerValidation::new(config.docker)),
+            directories: HostDirectories::new(config.directory_roots.clone())?,
+            validation: Arc::new(ContainerValidation::new(config.docker.clone())),
         },
         EngineConfig {
-            cache: config.cache,
+            live: settings.live(),
             identity: local_identity(),
-            validation: config.validation,
         },
     )
     .await?;
@@ -91,12 +91,41 @@ async fn serve(config: config::Config) -> Result<()> {
         credentials,
         GatewayConfig {
             allowed_hosts: vec![address.to_string(), format!("localhost:{}", address.port())],
-            allowed_origins: config.allowed_origins,
+            settings: settings.clone(),
             cancellation: cancellation.clone(),
         },
     )?;
     tracing::info!(endpoint = %format!("http://{address}/mcp"), location = %engine.runtime.location, "AgentFS is ready");
     let mut workers = tokio::task::JoinSet::new();
+    {
+        let cancellation = cancellation.clone();
+        workers.spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut last_error = None;
+            loop {
+                tokio::select! { _ = cancellation.cancelled() => break, _ = interval.tick() => {} }
+                let settings = settings.clone();
+                let result = tokio::task::spawn_blocking(move || settings.reload())
+                    .await
+                    .map_err(|error| Error::new(ErrorCode::Io, error.to_string()))
+                    .and_then(|result| result);
+                match result {
+                    Ok(changed) => {
+                        if changed { tracing::info!("runtime configuration reloaded"); }
+                        last_error = None;
+                    }
+                    Err(error) => {
+                        let message = error.to_string();
+                        if last_error.as_ref() != Some(&message) {
+                            tracing::warn!(error = %message, "configuration reload failed; previous settings remain active");
+                            last_error = Some(message);
+                        }
+                    }
+                }
+            }
+        });
+    }
     for kind in ["autosave", "sync", "cache"] {
         let engine = engine.clone();
         let cancellation = cancellation.clone();

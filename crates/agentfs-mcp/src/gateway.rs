@@ -1,10 +1,11 @@
 use crate::McpServer;
+use agentfs_config::{ConfigStore, Credential};
 use agentfs_model::{Error, Principal, Result};
 use agentfs_ports::Services;
 use axum::{
     Router,
     body::Body,
-    extract::{Request, State},
+    extract::{Extension, Request, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
     routing::any,
@@ -18,21 +19,10 @@ use tokio_util::sync::CancellationToken;
 
 type HttpService = StreamableHttpService<McpServer, LocalSessionManager>;
 
-pub struct Credential {
-    pub principal: Principal,
-    pub token: String,
-}
-impl std::fmt::Debug for Credential {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Credential")
-            .field("principal", &self.principal)
-            .finish_non_exhaustive()
-    }
-}
 #[derive(Clone, Debug)]
 pub struct GatewayConfig {
     pub allowed_hosts: Vec<String>,
-    pub allowed_origins: Vec<String>,
+    pub settings: Arc<ConfigStore>,
     pub cancellation: CancellationToken,
 }
 
@@ -62,8 +52,8 @@ pub fn router(
             Arc::new(LocalSessionManager::default()),
             StreamableHttpServerConfig::default()
                 .with_allowed_hosts(config.allowed_hosts.clone())
-                .with_allowed_origins(config.allowed_origins.clone())
-                .enforce_origin_validation()
+                // Origin 由共享 HTTP 中间件按当前配置检查。
+                .disable_allowed_origins()
                 .with_max_request_body_bytes(8 * 1024 * 1024)
                 .with_json_response(true)
                 .with_cancellation_token(config.cancellation.clone()),
@@ -73,37 +63,25 @@ pub fn router(
         }
     }
     let api = crate::web::api(services)
+        .merge(crate::web::settings_api(config.settings.clone()))
+        .merge(
+            Router::new()
+                .route("/mcp", any(handle))
+                .with_state(Arc::new(routes)),
+        )
         .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024))
         .route_layer(axum::middleware::from_fn_with_state(
             Arc::new(WebAuth { principals, config }),
             authenticate_web,
         ));
-    Ok(Router::new()
-        .route("/mcp", any(handle))
-        .with_state(Arc::new(routes))
-        .merge(api)
-        .merge(crate::web::assets()))
+    Ok(api.merge(crate::web::assets()))
 }
 async fn handle(
     State(routes): State<Arc<BTreeMap<[u8; 32], HttpService>>>,
+    Extension(digest): Extension<[u8; 32]>,
     request: Request,
 ) -> Response {
-    let token = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "));
-    let Some(service) =
-        token.and_then(|token| routes.get(&<[u8; 32]>::from(Sha256::digest(token.as_bytes()))))
-    else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            [(header::WWW_AUTHENTICATE, "Bearer")],
-            "authentication required",
-        )
-            .into_response();
-    };
-    service.handle(request).await.map(Body::new)
+    routes[&digest].handle(request).await.map(Body::new)
 }
 
 struct WebAuth {
@@ -129,11 +107,12 @@ async fn authenticate_web(
     {
         return (StatusCode::FORBIDDEN, "host is not allowed").into_response();
     }
+    let snapshot = auth.config.settings.live().load();
     if let Some(origin) = request.headers().get(header::ORIGIN) {
         let origin = origin.to_str().unwrap_or("");
         if origin != format!("http://{host}")
-            && !auth
-                .config
+            && !snapshot
+                .values
                 .allowed_origins
                 .iter()
                 .any(|allowed| allowed == origin)
@@ -141,16 +120,15 @@ async fn authenticate_web(
             return (StatusCode::FORBIDDEN, "origin is not allowed").into_response();
         }
     }
-    let actor = request
+    let digest = request
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .and_then(|token| {
-            auth.principals
-                .get(&<[u8; 32]>::from(Sha256::digest(token.as_bytes())))
-        });
-    let Some(actor) = actor else {
+        .map(|token| <[u8; 32]>::from(Sha256::digest(token.as_bytes())));
+    let Some((digest, actor)) =
+        digest.and_then(|digest| auth.principals.get(&digest).map(|actor| (digest, actor)))
+    else {
         return (
             StatusCode::UNAUTHORIZED,
             [(header::WWW_AUTHENTICATE, "Bearer")],
@@ -159,6 +137,7 @@ async fn authenticate_web(
             .into_response();
     };
     request.extensions_mut().insert(actor.clone());
+    request.extensions_mut().insert(digest);
     let mut response = next.run(request).await;
     response
         .headers_mut()

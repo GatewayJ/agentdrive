@@ -1,6 +1,7 @@
 use crate::{
     OperationService, RevisionService, Runtime, revisions::same_entry, runtime::check_guard,
 };
+use agentfs_config::LiveConfig;
 use agentfs_model::*;
 use agentfs_ports::*;
 use async_trait::async_trait;
@@ -16,14 +17,17 @@ pub struct MergeService {
     operations: Arc<OperationService>,
     transitions: Arc<dyn RevisionTransition>,
     runner: Arc<dyn ValidationRunner>,
-    configurations: BTreeMap<String, ValidationConfig>,
+    configurations: Arc<LiveConfig>,
     candidates: Mutex<()>,
 }
 
 impl std::fmt::Debug for MergeService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MergeService")
-            .field("configurations", &self.configurations.keys())
+            .field(
+                "configurations",
+                &self.configurations.load().values.validation.keys(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -35,7 +39,7 @@ impl MergeService {
         operations: Arc<OperationService>,
         transitions: Arc<dyn RevisionTransition>,
         runner: Arc<dyn ValidationRunner>,
-        configurations: BTreeMap<String, ValidationConfig>,
+        configurations: Arc<LiveConfig>,
     ) -> Arc<Self> {
         Arc::new(Self {
             runtime,
@@ -643,6 +647,7 @@ impl MergeApi for MergeService {
         context: RequestContext,
         request: ValidateMerge,
     ) -> Result<OperationRecord> {
+        let configuration = self.configurations.load();
         let candidate = self.candidate(&context.principal, request.merge).await?;
         let operation = match self
             .operations
@@ -696,8 +701,9 @@ impl MergeApi for MergeService {
                     .await?;
             }
             let validation = if let Some(name) = request.configuration {
-                let config = self
-                    .configurations
+                let config = configuration
+                    .values
+                    .validation
                     .get(&name)
                     .ok_or_else(|| {
                         Error::new(

@@ -42,16 +42,7 @@ async fn capture(
 impl ValidationRunner for ContainerValidation {
     async fn run(&self, request: ValidationRequest) -> Result<ValidationRecord> {
         let config = &request.config;
-        if config.image.is_empty()
-            || config.image.starts_with('-')
-            || config.image.chars().any(char::is_whitespace)
-            || config.timeout_seconds == 0
-            || config.timeout_seconds > 3600
-            || config.max_output_bytes == 0
-            || config.max_output_bytes > MAX_METADATA_BYTES
-        {
-            return Err(Error::invalid("invalid validation limits or image"));
-        }
+        config.validate()?;
         let temporary = tempfile::tempdir()?;
         let directory = Dir::open_ambient_dir(temporary.path(), ambient_authority())?;
         let mut tree = request.tree;

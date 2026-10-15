@@ -1,7 +1,7 @@
 use crate::FileSystem;
+use agentfs_config::ValidationConfig;
 use agentfs_model::*;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Arc};
 
 pub trait Clock: Send + Sync {
@@ -28,15 +28,6 @@ pub trait MountDriver: Send + Sync {
     async fn unmount(&self, binding: &MountBinding) -> Result<()>;
     async fn status(&self, binding: &MountBinding) -> Result<NativeMountState>;
     fn capability(&self) -> &'static str;
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct ValidationConfig {
-    pub image: String,
-    pub program: PathBuf,
-    pub arguments: Vec<String>,
-    pub timeout_seconds: u64,
-    pub max_output_bytes: usize,
 }
 
 #[derive(Clone)]

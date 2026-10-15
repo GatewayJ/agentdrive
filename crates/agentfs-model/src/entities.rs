@@ -513,33 +513,6 @@ pub struct CacheStatus {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct CacheConfig {
-    pub max_bytes: u64,
-    pub target_bytes: u64,
-    pub min_free_bytes: u64,
-}
-
-impl Default for CacheConfig {
-    fn default() -> Self {
-        Self {
-            max_bytes: 2 * 1024 * 1024 * 1024,
-            target_bytes: 1536 * 1024 * 1024,
-            min_free_bytes: 64 * 1024 * 1024,
-        }
-    }
-}
-
-impl CacheConfig {
-    pub fn validate(&self) -> Result<()> {
-        if self.target_bytes >= self.max_bytes {
-            return Err(Error::invalid("cache target must be below its limit"));
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct MergeConflict {
     pub path: WorkspacePath,
     pub base: Option<Inode>,

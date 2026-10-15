@@ -1,10 +1,14 @@
+use agentfs_config::{
+    CacheConfig, ConfigStore, LiveConfig, RuntimeConfig, SettingsUpdate, ValidationConfig,
+    initialize,
+};
 use agentfs_engine::*;
 use agentfs_local::LocalBackend;
 use agentfs_model::*;
 use agentfs_ports::*;
 use agentfs_test_support::*;
 use bytes::Bytes;
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 fn actor() -> Principal {
     "owner".to_owned().try_into().unwrap()
@@ -233,6 +237,31 @@ async fn open(
     Arc<ManualClock>,
     Arc<MemoryMountDriver>,
 ) {
+    open_with_config(
+        directory,
+        remote,
+        LiveConfig::new(RuntimeConfig {
+            cache: CacheConfig {
+                max_bytes: 1,
+                target_bytes: 0,
+                min_free_bytes: 0,
+            },
+            ..Default::default()
+        })
+        .unwrap(),
+    )
+    .await
+}
+async fn open_with_config(
+    directory: &std::path::Path,
+    remote: Option<Arc<MemoryRemote>>,
+    live: Arc<LiveConfig>,
+) -> (
+    Arc<LocalBackend>,
+    Arc<Engine>,
+    Arc<ManualClock>,
+    Arc<MemoryMountDriver>,
+) {
     let local = Arc::new(LocalBackend::open(directory).unwrap());
     let clock = Arc::new(ManualClock::default());
     let driver = Arc::new(MemoryMountDriver::default());
@@ -251,13 +280,8 @@ async fn open(
             validation: Arc::new(TestValidation),
         },
         EngineConfig {
-            cache: CacheConfig {
-                max_bytes: 1,
-                target_bytes: 0,
-                min_free_bytes: 0,
-            },
+            live,
             identity: identity(),
-            validation: BTreeMap::new(),
         },
     )
     .await
@@ -1912,4 +1936,182 @@ async fn branch_switch_preserves_edits_and_waits_for_active_turns_and_handles() 
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn cache_and_merge_validation_use_reloaded_configuration() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = initialize(
+        &directory.path().join("configuration"),
+        "127.0.0.1:7421".parse().unwrap(),
+    )
+    .unwrap();
+    let config = ConfigStore::open(&path).unwrap();
+    let (local, engine, clock, driver) = open_with_config(
+        directory.path(),
+        Some(Arc::new(MemoryRemote::default())),
+        config.live(),
+    )
+    .await;
+    let harness = Harness {
+        directory,
+        local,
+        engine,
+        clock,
+        driver,
+    };
+    let workspace = harness.workspace().await;
+    let (source, source_fs) = harness.session(workspace.id, "source", None).await;
+    let old_file = harness.write_new(&source_fs, "old", b"old content").await;
+    harness.commit(source.branch).await;
+    let old_object = harness
+        .local
+        .node(source.branch, old_file.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .inode
+        .content
+        .unwrap();
+    harness
+        .engine
+        .services
+        .files
+        .unlink(&source_fs, InodeId::ROOT, "old", false)
+        .await
+        .unwrap();
+    harness.write_new(&source_fs, "new", b"new content").await;
+    let source_revision = harness.commit(source.branch).await;
+    harness.sync(workspace.id, SyncDirection::Push).await;
+    assert_eq!(harness.engine.services.cache.collect().await.unwrap(), 0);
+    assert!(
+        harness
+            .local
+            .contains(workspace.id, &old_object)
+            .await
+            .unwrap()
+    );
+    let initial = config.settings(&actor()).unwrap();
+    let mut runtime = initial.runtime;
+    runtime.cache = CacheConfig {
+        max_bytes: 1,
+        target_bytes: 0,
+        min_free_bytes: 0,
+    };
+    runtime.validation.insert(
+        "check".into(),
+        ValidationConfig {
+            image: "pass".into(),
+            program: "/bin/true".into(),
+            arguments: vec![],
+            timeout_seconds: 60,
+            max_output_bytes: 4096,
+        },
+    );
+    config
+        .update(
+            &actor(),
+            SettingsUpdate {
+                revision: initial.revision,
+                runtime,
+            },
+        )
+        .unwrap();
+    assert!(harness.engine.services.cache.collect().await.unwrap() > 0);
+    assert!(
+        !harness
+            .local
+            .contains(workspace.id, &old_object)
+            .await
+            .unwrap()
+    );
+    let (target, _) = harness.session(workspace.id, "target", None).await;
+    let target = harness.local.branch(target.branch).await.unwrap().unwrap();
+    let prepared = success(
+        harness
+            .engine
+            .services
+            .merge
+            .prepare(
+                context(),
+                PrepareMerge {
+                    workspace: workspace.id,
+                    source: source_revision,
+                    target: BranchGuard::from(&target),
+                    base: None,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    let CommandResult::Merge { candidate } = prepared.result.unwrap() else {
+        panic!("merge result")
+    };
+    let request = ValidateMerge {
+        merge: candidate.id,
+        candidate: candidate.revision,
+        configuration: Some("check".into()),
+    };
+    let validated = success(
+        harness
+            .engine
+            .services
+            .merge
+            .validate(context(), request.clone())
+            .await
+            .unwrap(),
+    );
+    let CommandResult::Merge { candidate: passed } = validated.result.unwrap() else {
+        panic!("merge result")
+    };
+    assert!(passed.validation.as_ref().unwrap().passed);
+    let current = config.settings(&actor()).unwrap();
+    let mut runtime = current.runtime;
+    runtime.validation.get_mut("check").unwrap().image = "fail".into();
+    config
+        .update(
+            &actor(),
+            SettingsUpdate {
+                revision: current.revision,
+                runtime,
+            },
+        )
+        .unwrap();
+    let validated = success(
+        harness
+            .engine
+            .services
+            .merge
+            .validate(context(), request.clone())
+            .await
+            .unwrap(),
+    );
+    let CommandResult::Merge { candidate: failed } = validated.result.unwrap() else {
+        panic!("merge result")
+    };
+    assert!(!failed.validation.as_ref().unwrap().passed);
+    assert_ne!(
+        passed.validation.unwrap().config_version,
+        failed.validation.unwrap().config_version
+    );
+    let current = config.settings(&actor()).unwrap();
+    let mut runtime = current.runtime;
+    runtime.validation.clear();
+    config
+        .update(
+            &actor(),
+            SettingsUpdate {
+                revision: current.revision,
+                runtime,
+            },
+        )
+        .unwrap();
+    let rejected = harness
+        .engine
+        .services
+        .merge
+        .validate(context(), request)
+        .await
+        .unwrap();
+    assert_eq!(rejected.error.unwrap().code, ErrorCode::NotFound);
 }

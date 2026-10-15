@@ -11,6 +11,9 @@ authors = ["gatewayJ <835269233@qq.com>"]
 license = "Apache-2.0"
 
 [workspace.dependencies]
+agentfs-config = { path = "crates/agentfs-config" }
+arc-swap = "1.9.2"
+url = "2"
 agentfs-model = { path = "crates/agentfs-model" }
 agentfs-ports = { path = "crates/agentfs-ports" }
 agentfs-engine = { path = "crates/agentfs-engine" }

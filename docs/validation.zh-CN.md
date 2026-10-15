@@ -72,6 +72,9 @@ python3 tests/replica_smoke.py
 
 ```sh
 python3 tests/lifecycle_smoke.py
+python3 tests/config_smoke.py
 ```
 
 该脚本需要原生挂载支持，覆盖 ACP 和 Codex app-server 协议中的完成、取消、失败、进程中断、重复请求、自动保存、daemon 重启、重连，以及已有挂载上的 CLI 分支切换。常规 Rust 测试还覆盖响应正文丢失后的重试、共享分支的回合互斥、切换时的文件句柄检查、分支选择持久化和 HTTP 权限。浏览器检查覆盖分支树、版本信息、令牌登录和小屏幕布局。本机 Codex app-server 的 initialize 与 thread/start 已验证工作目录指向 OpenCSG Workspace 挂载；完整任务流程通过协议测试程序验证。
+
+`config_smoke.py` 使用临时目录运行 daemon，验证文件热更新、错误配置保留、启动配置修改提示、HTTP 保存、版本冲突和重启恢复。该脚本无需挂载驱动。

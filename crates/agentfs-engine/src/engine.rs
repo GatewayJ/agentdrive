@@ -1,7 +1,8 @@
 use crate::*;
+use agentfs_config::LiveConfig;
 use agentfs_model::*;
 use agentfs_ports::*;
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 pub struct Adapters {
     pub state: Arc<dyn LocalStateStore>,
@@ -25,9 +26,8 @@ impl std::fmt::Debug for Adapters {
 
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
-    pub cache: CacheConfig,
+    pub live: Arc<LiveConfig>,
     pub identity: LocalIdentity,
-    pub validation: BTreeMap<String, ValidationConfig>,
 }
 
 #[derive(Debug)]
@@ -89,14 +89,19 @@ impl Engine {
             operations.clone(),
             mounts.clone(),
         );
-        let cache = CacheService::new(runtime.clone(), trees, operations.clone(), config.cache)?;
+        let cache = CacheService::new(
+            runtime.clone(),
+            trees,
+            operations.clone(),
+            config.live.clone(),
+        );
         let merge = MergeService::new(
             runtime.clone(),
             revisions.clone(),
             operations.clone(),
             mounts.clone(),
             adapters.validation,
-            config.validation,
+            config.live,
         );
         let workspace = WorkspaceService::new(
             runtime.clone(),

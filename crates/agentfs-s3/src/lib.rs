@@ -1,4 +1,5 @@
 //! S3 and RustFS storage with immutable content and conditional reference updates.
+use agentfs_config::S3Config;
 use agentfs_model::*;
 use agentfs_ports::*;
 use async_trait::async_trait;
@@ -19,25 +20,6 @@ use tokio_util::io::StreamReader;
 
 const MIN_PART_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_PART_BYTES: u64 = 64 * 1024 * 1024;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct S3Config {
-    pub bucket: String,
-    #[serde(default = "default_prefix")]
-    pub prefix: String,
-    #[serde(default = "default_region")]
-    pub region: String,
-    pub endpoint: Option<String>,
-    #[serde(default)]
-    pub allow_http: bool,
-}
-fn default_prefix() -> String {
-    "agentfs/v1".into()
-}
-fn default_region() -> String {
-    "us-east-1".into()
-}
 
 pub struct S3Backend {
     client: AmazonS3,

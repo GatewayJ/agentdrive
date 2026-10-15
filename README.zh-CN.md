@@ -13,7 +13,7 @@ OpenCSG Workspace 为 Agent 提供可持久保存的工作区、显式管理的�
 - 跨平台文件名称、按内容寻址的对象、分页的目录和 inode 索引，以及 SQLite 事务。
 - Linux FUSE、macOS macFUSE 和 Windows WinFsp 适配；快照、分支恢复、会话和轮次历史。
 - S3/RustFS 同步、限制内存用量的流式传输、离线缓存保留、在线所有权交接，以及经过验证的三方合并候选结果。
-- ACP 和 Codex app-server 生命周期集成、分支命令，以及只读的分支和版本 Dashboard。
+- ACP 和 Codex app-server 生命周期集成、分支命令，以及提供分支历史与运行配置管理的 Dashboard。
 - 通过需要身份验证的 Streamable HTTP 提供 32 个具有明确类型的 MCP 工具，同时提供 stdio 代理和 JSON CLI。
 
 ## 构建
@@ -67,7 +67,7 @@ agentfs branch switch --workspace "$WORKSPACE" --branch "$BRANCH"
 agentfs dashboard --open
 ```
 
-创建分支会保存来源分支的当前内容，并保持工作区原有选择。切换会保存原分支，检查活动回合和文件句柄，再更新工作区选择和关联会话。重启后仍然保留选择。Dashboard 展示分支关系、commit 说明、创建者、时间和父版本。
+创建分支会保存来源分支的当前内容，并保持工作区原有选择。切换会保存原分支，检查活动回合和文件句柄，再更新工作区选择和关联会话。重启后仍然保留选择。Dashboard 展示分支关系、commit 说明、创建者、时间和父版本。管理员可以在“设置”页面修改缓存策略、验证任务和 HTTP Origin 允许列表，运行中的 daemon 会使用更新后的配置，详见[配置说明](docs/configuration.zh-CN.md)。
 
 应用通过 `agentfs integrate` 启动 ACP agent 或 Codex app-server，由集成程序管理会话、工作目录、回合结束、取消及重连恢复。回合期间仍然执行自动保存。完整命令和事件行为见[Agent 集成](docs/integrations.zh-CN.md)。
 

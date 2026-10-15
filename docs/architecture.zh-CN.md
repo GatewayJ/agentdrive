@@ -2,19 +2,52 @@
 
 [English](architecture.md) | [简体中文](architecture.zh-CN.md)
 
-`agentfsd` 负责组装应用：创建具体适配器，将其注入 engine，并通过生成的 `Services` 提供服务。engine 依赖 model 和 ports crate；持久化、原生驱动、S3 和协议依赖由适配器管理。
+`agentfsd` 负责组装应用：创建具体适配器，将其注入 engine，并通过生成的 `Services` 提供服务。engine 依赖 model、ports 和 config crate；持久化、原生驱动、S3 和协议依赖由适配器管理。
 
 | Crate | 职责 |
 | --- | --- |
 | `agentfs-model` | ID、路径、对象、版本、分支、会话、操作、合并记录和错误 |
+| `agentfs-config` | 配置定义、默认值、校验、文件原子替换、管理员授权和运行时配置快照 |
 | `agentfs-ports` | 存储、文件系统、挂载、时钟、验证、目录和应用接口 |
 | `agentfs-engine` | 文件行为，以及工作区、版本、会话、同步、缓存、所有权和合并流程 |
 | `agentfs-local` | 进程锁定、SQLite 元数据、不可变对象、工作文件、租约和读取验证 |
 | `agentfs-s3` | 不可变对象的流式传输和引用的条件更新 |
 | `agentfs-platform` | FUSE/WinFsp 回调、受目录范围限制的主机目录访问、容器验证和时钟 |
-| `agentfs-mcp` | 具有明确类型的工具、带身份验证的 HTTP 路由、客户端和 stdio 转发 |
+| `agentfs-mcp` | 具有明确类型的工具、带身份验证的 HTTP 路由、Dashboard 与设置接口、客户端和 stdio 转发 |
 | `agentfs-test-support` | 可控时钟、挂载和存储测试替代对象、服务中断和确认丢失的故障注入 |
 | `agentfsd` / `agentfs` | 守护进程生命周期和命令行客户端 |
+
+## 模块职责
+
+| 模块 | 职责 |
+| --- | --- |
+| `engine/runtime` | 工作区授权、本地身份、修改顺序与共享运行状态 |
+| `engine/files` | 文件操作、打开的句柄、权限与 generation 检查 |
+| `engine/content`、`engine/trees` | 内容读取验证、不可变索引与关联对象遍历 |
+| `engine/snapshots`、`engine/revisions` | 捕获工作内容、保存版本、创建分支与恢复内容 |
+| `engine/workspaces` | 创建工作区、查询状态，以及主机目录的导入导出 |
+| `engine/sessions`、`engine/mounts` | 将 Agent 会话关联到当前分支、保存回合结果、协调挂载切换 |
+| `engine/replica`、`engine/ownership` | 同步任务、远程条件写入与写入所有权交接 |
+| `engine/cache` | 预取、固定缓存，以及按照当前配置回收允许清理的内容 |
+| `engine/merge` | 准备合并候选内容、解决冲突、执行配置的检查与应用验证结果 |
+| `engine/operations` | 请求去重、操作进度与持久化结果记录 |
+| `config/types` | 缓存、验证与 S3 的配置类型及策略校验 |
+| `config/file` | 配置文件结构、默认值、token 文件读取与初始化目录 |
+| `config/store` | 校验候选配置、控制写入顺序、保存文件与发布 `ArcSwap` 快照 |
+| `mcp/gateway`、`mcp/server` | 验证 HTTP 请求身份并调用应用接口 |
+| `mcp/web`、`mcp/dashboard` | 工作区、生命周期、设置的 HTTP 接口与浏览器页面 |
+| `apps/agentfs/integration` | ACP、Codex app-server 事件转发与持久化生命周期 |
+| `apps/agentfsd/main` | 创建适配器、运行 HTTP 服务和后台任务、正常关闭服务 |
+
+`agentfs-ports` 定义 engine 使用的接口，存储和平台适配器负责实现接口。配置模块依赖 model 中的数据类型，数据库、挂载、S3 和 HTTP 服务由 daemon 创建。daemon 将同一个 `LiveConfig` 传给 engine 和 HTTP 入口；`ConfigStore` 统一发布配置，使用配置的模块为每次操作取得完整快照。
+
+## 配置生命周期
+
+`ConfigStore::open` 读取并校验文件。`StartupConfig` 在服务创建时提供存储目录、挂载、连接与凭据配置。缓存策略、具有名称的验证任务和 HTTP Origin 允许列表由同一个 `ArcSwap<Snapshot>` 保存。缓存清理和合并验证在操作期间保持同一份快照；HTTP 身份验证为每次请求取得当前快照。
+
+daemon 每秒检查配置文件。Dashboard 保存与文件加载使用同一个 `ConfigStore` 和写入锁。保存时检查配置版本，在同目录写入并同步临时文件，替换配置文件，然后发布快照；Unix 还会同步目录。文件错误、无效内容以及启动配置变化都会保留当前有效配置，并提供错误信息。配置版本检查会拒绝过期的 API 保存请求及已经检测到的外部修改；外部编辑器不使用 daemon 的写入锁，建议通过原子替换文件提交修改。
+
+设置管理权限由启动配置中的 `administrators` 决定，默认为 `["owner"]`，与工作区授权分别管理。设置接口不会读取或返回 token 内容。修改凭据、管理员、存储关联、监听地址或 Docker 程序需要重启。字段说明与 HTTP 接口见[配置说明](configuration.zh-CN.md)。
 
 ## 本地持久化
 

@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+agentfs-config.workspace = true
 agentfs-model.workspace = true
 agentfs-ports.workspace = true
 async-trait.workspace = true

@@ -93,7 +93,7 @@ agentfs dashboard --open
 
 `session_open` accepts `key`, optional `branch`, `mount_path`, and `durability`. The default branch is the workspace selection. `session_pause`, `session_resume`, and `session_close` manage existing attachments. [Agent integrations](integrations.md) automate attachment, turn persistence, working directory selection, cancellation, and recovery.
 
-`dashboard` prints the browser URL without reading credentials or connecting to the daemon. `dashboard --open` requires credentials and opens the URL with the selected token in a URL fragment; the page removes the fragment immediately and keeps the token in session storage. Data requests use bearer authentication. The dashboard provides branch trees and revision details, with refresh every 15 seconds.
+`dashboard` prints the browser URL without reading credentials or connecting to the daemon. `dashboard --open` requires credentials and opens the URL with the selected token in a URL fragment; the page removes the fragment immediately and keeps the token in session storage. Data requests use bearer authentication. The dashboard provides branch trees and revision details, with refresh every 15 seconds. Administrators can open **Settings** at `/settings` to edit runtime configuration and inspect startup settings; see [configuration](configuration.md).
 
 ## Read a saved request from a file
 
