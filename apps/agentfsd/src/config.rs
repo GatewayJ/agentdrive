@@ -17,21 +17,28 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub listen: SocketAddr,
     pub mount_roots: Vec<PathBuf>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub directory_roots: Vec<PathBuf>,
     pub credentials: Vec<TokenFile>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_origins: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default_cache")]
     pub cache: CacheConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub validation: BTreeMap<String, ValidationConfig>,
-    #[serde(default = "docker")]
+    #[serde(default = "docker", skip_serializing_if = "is_default_docker")]
     pub docker: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub remote: Option<S3Config>,
 }
 fn docker() -> PathBuf {
     "docker".into()
+}
+fn is_default_cache(cache: &CacheConfig) -> bool {
+    cache == &CacheConfig::default()
+}
+fn is_default_docker(path: &Path) -> bool {
+    path == Path::new("docker")
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

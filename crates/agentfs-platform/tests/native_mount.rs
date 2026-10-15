@@ -162,7 +162,7 @@ async fn native_mount_supports_file_io_durable_snapshots_and_read_only_history()
                 CommitRevision {
                     message: None,
                     guard: BranchGuard::from(&branch),
-                    kind: RevisionKind::Commit,
+                    kind: CommitKind::Commit,
                     durability: Durability::Local,
                 },
             )

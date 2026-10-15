@@ -277,7 +277,7 @@ pub fn tool_catalog() -> Vec<Tool> {
     vec![
         tool::<Command<CreateWorkspace>>(
             "workspace_create",
-            "Create a workspace and its protected main branch.",
+            "Create a workspace with a writable, selected main branch.",
             false,
         ),
         tool::<Empty>(

@@ -16,28 +16,28 @@ mod trees;
 mod workspaces;
 
 pub use content::ContentService;
-pub use operations::OperationService;
+pub(crate) use operations::OperationService;
 pub use runtime::Runtime;
-pub use trees::TreeService;
+pub(crate) use trees::TreeService;
 
-pub use files::FileService;
-pub use snapshots::SnapshotService;
+pub(crate) use files::FileService;
+pub(crate) use snapshots::SnapshotService;
 
-pub use replica::ReplicaService;
+pub(crate) use replica::ReplicaService;
 
-pub use revisions::RevisionService;
+pub(crate) use revisions::RevisionService;
 
-pub use revisions::VersionService;
-pub use workspaces::WorkspaceService;
+pub(crate) use revisions::VersionService;
+pub(crate) use workspaces::WorkspaceService;
 
-pub use mounts::MountService;
+pub(crate) use mounts::MountService;
 
-pub use sessions::SessionService;
+pub(crate) use sessions::SessionService;
 
-pub use cache::CacheService;
+pub(crate) use cache::CacheService;
 
-pub use ownership::OwnershipService;
+pub(crate) use ownership::OwnershipService;
 
-pub use merge::MergeService;
+pub(crate) use merge::MergeService;
 
 pub use engine::{Adapters, Engine, EngineConfig};

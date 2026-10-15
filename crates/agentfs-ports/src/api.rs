@@ -64,9 +64,25 @@ pub struct WorkspaceStatus {
 pub struct CommitRevision {
     pub message: Option<String>,
     pub guard: BranchGuard,
-    pub kind: RevisionKind,
+    pub kind: CommitKind,
     #[serde(default)]
     pub durability: Durability,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CommitKind {
+    Commit,
+    Checkpoint,
+}
+
+impl From<CommitKind> for RevisionKind {
+    fn from(kind: CommitKind) -> Self {
+        match kind {
+            CommitKind::Commit => Self::Commit,
+            CommitKind::Checkpoint => Self::Checkpoint,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]

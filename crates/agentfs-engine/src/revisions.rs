@@ -513,14 +513,6 @@ impl RevisionApi for VersionService {
         context: RequestContext,
         request: CommitRevision,
     ) -> Result<OperationRecord> {
-        if !matches!(
-            request.kind,
-            RevisionKind::Commit | RevisionKind::Checkpoint
-        ) {
-            return Err(Error::invalid(
-                "explicit save kind must be commit or checkpoint",
-            ));
-        }
         let branch = self.revisions.runtime.branch(request.guard.branch).await?;
         self.revisions
             .runtime
@@ -549,7 +541,7 @@ impl RevisionApi for VersionService {
         let save = SaveRevision {
             message: request.message,
             guard: request.guard,
-            kind: request.kind,
+            kind: request.kind.into(),
             parents: None,
             replace_root: None,
             turn: None,

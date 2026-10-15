@@ -513,6 +513,7 @@ pub struct CacheStatus {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
 pub struct CacheConfig {
     pub max_bytes: u64,
     pub target_bytes: u64,

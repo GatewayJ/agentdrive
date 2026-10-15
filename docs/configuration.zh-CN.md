@@ -6,6 +6,8 @@
 
 运行 `agentfsd init --directory /absolute/path/to/agentfs`，创建 `agentfs.json`、私有 token 文件，以及挂载和文件交换目录。修改生成的配置后，运行 `agentfsd serve --config /absolute/path/to/agentfs/agentfs.json`。配置在启动时读取，修改后需要重新启动守护进程。
 
+生成的文件包含 `data_dir`、`listen`、`mount_roots`、`directory_roots` 和 `credentials`。其他可选设置使用下表中的默认值，按需添加即可。
+
 | 字段 | 含义与默认值 |
 | --- | --- |
 | `data_dir` | 必填，本地状态的绝对路径；初始化选择 `<directory>/state`。每个状态目录只能由一个守护进程使用。 |
@@ -14,12 +16,14 @@
 | `directory_roots` | 允许导入和导出的绝对根目录；省略时为 `[]`。初始化创建并允许使用 `<directory>/exchange`。 |
 | `credentials` | 必填，格式为 `{ "principal": "owner", "token_file": "/absolute/path/token" }` 的数组，至少需要一项凭据。 |
 | `allowed_origins` | HTTP Origin 允许列表，默认 `[]`。CLI 和 stdio 连接不会发送 Origin。 |
-| `cache` | 可选对象，默认 `max_bytes: 2147483648`、`target_bytes: 1610612736`、`min_free_bytes: 67108864`。提供该对象时，需要填写全部三个字段；`target_bytes` 必须小于 `max_bytes`。 |
+| `cache` | 可选对象，省略的字段使用默认值：`max_bytes: 2147483648`、`target_bytes: 1610612736`、`min_free_bytes: 67108864`。可以单独覆盖任意字段；最终的 `target_bytes` 必须小于 `max_bytes`。 |
 | `validation` | 具有名称的容器检查配置，默认 `{}`，详见[操作说明](operations.zh-CN.md)。 |
 | `docker` | Docker 可执行程序名称或路径，默认 `docker`。 |
 | `remote` | 下文的 S3 配置。省略或设置为 `null` 时仅使用本地存储。 |
 
-状态目录、允许的根目录和 token 路径必须使用绝对路径。启动前应创建允许的根目录。JSON 字符串不会展开 `~`、`$HOME` 或环境变量。Windows 路径使用转义后的反斜线，例如 `"C:\\Users\\alice\\agentfs\\state"`，也可以使用正斜线。未知的顶层配置字段和 `remote` 字段会被拒绝。配置文件上限为 1 MiB。
+例如，添加 `"cache": { "max_bytes": 3221225472 }` 可以将缓存上限设为 3 GiB，其余字段继续使用默认值。如果上限小于或等于默认的目标容量，需要同时提供更小的 `target_bytes`。
+
+状态目录、允许的根目录和 token 路径必须使用绝对路径。启动前应创建允许的根目录。JSON 字符串不会展开 `~`、`$HOME` 或环境变量。Windows 路径使用转义后的反斜线，例如 `"C:\\Users\\alice\\agentfs\\state"`，也可以使用正斜线。未知的顶层配置字段，以及未知的 `cache` 或 `remote` 字段会被拒绝。配置文件上限为 1 MiB。
 
 token 文件必须是普通文件，最多 4096 字节，去除首尾空白后至少包含 32 个非空白字节。Unix 环境下，文件不能授予所属组和其他用户访问权限；初始化会创建权限为 `0600` 的文件。各 token 必须唯一。token 选择配置中的 `principal`，工作区所有权和授权决定该身份的访问范围。请使用守护进程用户的文件系统权限保护配置和状态。
 

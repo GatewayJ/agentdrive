@@ -28,17 +28,6 @@ pub trait OperationCoordinator: Send + Sync {
 }
 
 #[async_trait]
-pub trait Authorization: Send + Sync {
-    async fn authorize(
-        &self,
-        actor: &Principal,
-        workspace: WorkspaceId,
-        branch: Option<BranchId>,
-        permission: Permission,
-    ) -> Result<Workspace>;
-}
-
-#[async_trait]
 pub trait ContentResolver: Send + Sync {
     async fn open(&self, workspace: WorkspaceId, reference: &ObjectRef) -> Result<ObjectStream>;
     async fn read_range(
@@ -148,6 +137,4 @@ pub trait DurabilityService: Send + Sync {
 pub trait WorkingTree: Send + Sync {
     async fn replace(&self, branch: BranchId, root: &ObjectRef) -> Result<Vec<Node>>;
     fn open_handles(&self, mount: MountId) -> usize;
-    fn branch_dirty_time(&self, branch: BranchId) -> Option<(u64, u64)>;
-    fn clear_dirty_time(&self, branch: BranchId, through_seq: u64);
 }

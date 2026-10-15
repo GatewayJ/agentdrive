@@ -28,13 +28,9 @@ dependencies = [
  "bytes",
  "parking_lot",
  "serde",
- "serde_json",
- "sha2",
  "tempfile",
  "tokio",
- "tokio-util",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -53,8 +49,6 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
- "tracing",
- "uuid",
  "windows-sys 0.61.2",
 ]
 
@@ -67,10 +61,8 @@ dependencies = [
  "agentfs-model",
  "agentfs-ports",
  "agentfs-test-support",
- "async-trait",
  "axum",
  "bytes",
- "futures",
  "reqwest",
  "rmcp",
  "schemars",
@@ -80,7 +72,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
- "tracing",
 ]
 
 [[package]]
@@ -92,7 +83,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "thiserror 2.0.21",
  "unicode-casefold",
  "unicode-normalization",
  "uuid",
@@ -114,8 +104,6 @@ dependencies = [
  "libc",
  "parking_lot",
  "rustix",
- "serde",
- "serde_json",
  "tempfile",
  "tokio",
  "tracing",
@@ -153,7 +141,6 @@ dependencies = [
  "sha2",
  "tokio",
  "tokio-util",
- "tracing",
  "uuid",
 ]
 
@@ -166,7 +153,6 @@ dependencies = [
  "async-trait",
  "bytes",
  "parking_lot",
- "tempfile",
  "tokio",
 ]
 

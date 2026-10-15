@@ -6,6 +6,8 @@
 
 Run `agentfsd init --directory /absolute/path/to/agentfs` to create `agentfs.json`, a private token file, and the mount/exchange directories. Edit the generated configuration, then start `agentfsd serve --config /absolute/path/to/agentfs/agentfs.json`. Configuration is read at startup; changes require a daemon restart.
 
+The generated file contains `data_dir`, `listen`, `mount_roots`, `directory_roots`, and `credentials`. Optional settings use the defaults below and can be added when needed.
+
 | Field | Meaning and default |
 | --- | --- |
 | `data_dir` | Required absolute path for local state; initialization selects `<directory>/state`. One daemon per state directory. |
@@ -14,12 +16,14 @@ Run `agentfsd init --directory /absolute/path/to/agentfs` to create `agentfs.jso
 | `directory_roots` | Allowed absolute import/export roots; omitted means `[]`. Initialization creates and permits `<directory>/exchange`. |
 | `credentials` | Required array of `{ "principal": "owner", "token_file": "/absolute/path/token" }`. At least one credential is required. |
 | `allowed_origins` | HTTP Origin allowlist, default `[]`. CLI and stdio connections do not send an Origin. |
-| `cache` | Optional object; defaults to `max_bytes: 2147483648`, `target_bytes: 1610612736`, `min_free_bytes: 67108864`. If supplied, include all three fields; `target_bytes` must be below `max_bytes`. |
+| `cache` | Optional object; omitted fields default to `max_bytes: 2147483648`, `target_bytes: 1610612736`, `min_free_bytes: 67108864`. Override individual fields as needed; the resulting `target_bytes` must be below `max_bytes`. |
 | `validation` | Map of named container checks, default `{}`; see [operations](operations.md). |
 | `docker` | Docker executable name or path, default `docker`. |
 | `remote` | S3 configuration below. Omitted or `null` means local storage only. |
 
-All state, root, and token paths must be absolute. Create allowed roots before starting the daemon. JSON strings do not expand `~`, `$HOME`, or environment variables. Windows paths use escaped backslashes, such as `"C:\\Users\\alice\\agentfs\\state"`, or forward slashes. Unknown top-level configuration fields and unknown `remote` fields are rejected. The configuration file is limited to 1 MiB.
+For example, adding `"cache": { "max_bytes": 3221225472 }` sets the cache limit to 3 GiB while retaining the default target size and free-space threshold. When selecting a limit at or below the default target, also supply a smaller `target_bytes`.
+
+All state, root, and token paths must be absolute. Create allowed roots before starting the daemon. JSON strings do not expand `~`, `$HOME`, or environment variables. Windows paths use escaped backslashes, such as `"C:\\Users\\alice\\agentfs\\state"`, or forward slashes. Unknown top-level configuration fields and unknown `cache` or `remote` fields are rejected. The configuration file is limited to 1 MiB.
 
 Token files must be regular files, at most 4096 bytes, containing at least 32 non-whitespace bytes after trimming. On Unix, group and other permissions must be absent; initialization creates mode `0600`. Tokens must be unique. A token selects the configured `principal`; workspace ownership and grants determine that principal's access. Protect configuration and state using the daemon user's filesystem permissions.
 

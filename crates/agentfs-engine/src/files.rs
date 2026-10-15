@@ -308,12 +308,15 @@ impl FileSystem for FileService {
             ".." => parent.path.parent().unwrap_or_else(WorkspacePath::root),
             name => parent.path.join(name)?,
         };
-        let node = self
-            .nodes(&mount)
-            .await?
-            .into_iter()
-            .find(|node| node.path.lookup_key() == path.lookup_key())
-            .ok_or_else(|| Error::new(ErrorCode::NotFound, "directory entry does not exist"))?;
+        let node = if mount.revision.is_some() {
+            self.nodes(&mount)
+                .await?
+                .into_iter()
+                .find(|node| node.path.lookup_key() == path.lookup_key())
+        } else {
+            self.runtime.state.node_at(mount.branch, &path).await?
+        }
+        .ok_or_else(|| Error::new(ErrorCode::NotFound, "directory entry does not exist"))?;
         Ok(Self::local_attributes(&mount, node.inode))
     }
 
@@ -908,16 +911,6 @@ impl WorkingTree for FileService {
             .values()
             .filter(|handle| handle.mount == mount)
             .count()
-    }
-    fn branch_dirty_time(&self, branch: BranchId) -> Option<(u64, u64)> {
-        self.runtime
-            .dirty
-            .lock()
-            .get(&branch)
-            .map(|value| (value.first, value.last))
-    }
-    fn clear_dirty_time(&self, branch: BranchId, through_seq: u64) {
-        self.runtime.clear_dirty(branch, through_seq);
     }
 }
 

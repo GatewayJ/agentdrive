@@ -194,7 +194,7 @@ impl Harness {
                     CommitRevision {
                         message: None,
                         guard: BranchGuard::from(&branch),
-                        kind: RevisionKind::Commit,
+                        kind: CommitKind::Commit,
                         durability: Durability::Local,
                     },
                 )
@@ -378,6 +378,120 @@ async fn append_is_atomic_and_rename_preserves_open_handles() {
         .await
         .unwrap();
     harness.engine.services.files.fsync(&fs).await.unwrap();
+}
+
+#[tokio::test]
+async fn lookup_preserves_normalized_names_and_revision_contents() {
+    let harness = Harness::new(None).await;
+    let workspace = harness.workspace().await;
+    let (session, fs) = harness.session(workspace.id, "lookup", None).await;
+    let files = &harness.engine.services.files;
+    let directory = files
+        .create(&fs, InodeId::ROOT, "Parent", FileKind::Directory, 0o755)
+        .await
+        .unwrap();
+    let file = files
+        .create(&fs, directory.id, "CAFÉ", FileKind::File, 0o644)
+        .await
+        .unwrap();
+    let revision = harness.commit(session.branch).await;
+    let mounted = success(
+        harness
+            .engine
+            .services
+            .mounts
+            .prepare(
+                context(),
+                PrepareMount {
+                    workspace: workspace.id,
+                    branch: session.branch,
+                    revision: Some(revision),
+                    path: harness.directory.path().join("history"),
+                    access: AccessMode::ReadOnly,
+                    durability: Durability::Local,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    let Some(CommandResult::Mount { binding }) = mounted.result else {
+        panic!("mount result missing");
+    };
+    let history = FsContext {
+        mount: binding.id,
+        generation: binding.generation,
+        identity: identity(),
+    };
+    for context in [&fs, &history] {
+        assert_eq!(
+            files
+                .lookup(context, InodeId::ROOT, "pArEnT")
+                .await
+                .unwrap()
+                .id,
+            directory.id
+        );
+        assert_eq!(
+            files
+                .lookup(context, directory.id, "cafe\u{301}")
+                .await
+                .unwrap()
+                .id,
+            file.id
+        );
+        assert_eq!(
+            files.lookup(context, directory.id, ".").await.unwrap().id,
+            directory.id
+        );
+        assert_eq!(
+            files.lookup(context, directory.id, "..").await.unwrap().id,
+            InodeId::ROOT
+        );
+        assert_eq!(
+            files.lookup(context, InodeId::ROOT, "..").await.unwrap().id,
+            InodeId::ROOT
+        );
+        assert_eq!(
+            files
+                .lookup(context, directory.id, "missing")
+                .await
+                .unwrap_err()
+                .code,
+            ErrorCode::NotFound
+        );
+    }
+    files
+        .rename(&fs, directory.id, "CAFÉ", directory.id, "Renamed", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        files.lookup(&fs, directory.id, "renamed").await.unwrap().id,
+        file.id
+    );
+    assert_eq!(
+        files
+            .lookup(&fs, directory.id, "CAFÉ")
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
+    assert_eq!(
+        files
+            .lookup(&history, directory.id, "cafe\u{301}")
+            .await
+            .unwrap()
+            .id,
+        file.id
+    );
+    assert_eq!(
+        files
+            .lookup(&history, directory.id, "renamed")
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::NotFound
+    );
 }
 
 #[tokio::test]
@@ -656,7 +770,7 @@ async fn remote_outage_preserves_local_save_and_sync_confirms_lost_responses() {
             CommitRevision {
                 message: None,
                 guard: BranchGuard::from(&branch),
-                kind: RevisionKind::Commit,
+                kind: CommitKind::Commit,
                 durability: Durability::Remote,
             },
         )

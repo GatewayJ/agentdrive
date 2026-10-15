@@ -3,7 +3,10 @@ use agentfs_mcp::{Client, stdio_proxy};
 use agentfs_model::{BranchId, Error, OperationId, Result, RevisionId, WorkspaceId};
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
-use std::{io::Read, path::PathBuf};
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 #[derive(Debug, Parser)]
 #[command(version, about = "AgentFS MCP client")]
@@ -90,21 +93,20 @@ async fn main() {
         }
     }
 }
+fn read_token(path: Option<&Path>) -> Result<String> {
+    match path {
+        Some(path) => Ok(std::fs::read_to_string(path)?.trim().to_owned()),
+        None => std::env::var("AGENTFS_TOKEN")
+            .map_err(|_| Error::invalid("set AGENTFS_TOKEN_FILE, --token-file, or AGENTFS_TOKEN")),
+    }
+}
 async fn run(arguments: Arguments) -> Result<bool> {
-    let token = match arguments.token_file {
-        Some(path) => std::fs::read_to_string(path)?.trim().to_owned(),
-        None => std::env::var("AGENTFS_TOKEN").map_err(|_| {
-            Error::invalid("set AGENTFS_TOKEN_FILE, --token-file, or AGENTFS_TOKEN")
-        })?,
-    };
     let command = match arguments.command {
-        Command::Integrate(options) => {
-            return integration::run(&arguments.endpoint, token, options).await;
-        }
         Command::Dashboard { open } => {
             let mut url = integration::base_url(&arguments.endpoint)?;
             println!("{url}");
             if open {
+                let token = read_token(arguments.token_file.as_deref())?;
                 let mut fragment = reqwest::Url::parse("http://localhost/")
                     .map_err(|error| Error::invalid(error.to_string()))?;
                 fragment.query_pairs_mut().append_pair("token", &token);
@@ -127,6 +129,10 @@ async fn run(arguments: Arguments) -> Result<bool> {
         }
         command => command,
     };
+    let token = read_token(arguments.token_file.as_deref())?;
+    if let Command::Integrate(options) = command {
+        return integration::run(&arguments.endpoint, token, options).await;
+    }
     let client = Client::connect(&arguments.endpoint, token).await?;
     let result = async {
         match command {
