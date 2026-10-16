@@ -11,10 +11,10 @@ OpenCSG Workspace 为 Agent 提供可持久保存的工作区、显式管理的�
 功能包括：
 
 - 跨平台文件名称、按内容寻址的对象、分页的目录和 inode 索引，以及 SQLite 事务。
-- Linux FUSE、macOS macFUSE 和 Windows WinFsp 适配；快照、分支恢复、会话和轮次历史。
+- Linux FUSE、macOS macFUSE 和 Windows WinFsp 适配；快照、分支恢复和版本历史。
 - S3/RustFS 同步、限制内存用量的流式传输、离线缓存保留、在线所有权交接，以及可以编辑文件的三方合并候选结果。
 - ACP 和 Codex app-server 生命周期集成、分支命令，以及提供分支历史与运行配置管理的 Dashboard。
-- 通过需要身份验证的 Streamable HTTP 提供 32 个具有明确类型的 MCP 工具，同时提供 stdio 代理和 JSON CLI。
+- 通过需要身份验证的 Streamable HTTP 提供 29 个具有明确类型的 MCP 工具，同时提供 stdio 代理和 JSON CLI。
 
 ## 构建
 
@@ -58,18 +58,19 @@ export AGENTFS_TOKEN_FILE="$HOME/.local/share/agentfs/token"
 
 ## 分支、Agent 与 Dashboard
 
-新工作区默认选择可写的 `main` 分支。新会话使用工作区当前选择的分支。通过 MCP 的 `branch_create`、`branch_switch` 或 CLI 显式创建和切换：
+新工作区默认选择可写的 `main` 分支。同一 location 挂载同一 workspace 时复用本机所选分支；新 location 首次挂载时，从主分支最近发布的内容创建并选择自己的分支。通过 MCP 的 `branch_create`、`branch_switch` 或 CLI 显式创建和切换：
 
 ```sh
+agentfs mount --workspace "$WORKSPACE" "$AGENTFS_DIRECTORY/mounts/project"
 agentfs branch list --workspace "$WORKSPACE"
 agentfs branch create --workspace "$WORKSPACE" --name feat/task
 agentfs branch switch --workspace "$WORKSPACE" --branch "$BRANCH"
 agentfs dashboard --open
 ```
 
-创建分支会保存来源分支的当前内容，并保持工作区原有选择。切换会保存原分支，检查活动回合和文件句柄，再更新工作区选择和关联会话。重启后仍然保留选择。Dashboard 展示分支关系、commit 说明、创建者、时间和父版本。管理员可以在“设置”页面修改缓存策略、S3 存储和 HTTP Origin 允许列表，运行中的 daemon 会使用更新后的配置，详见[配置说明](docs/configuration.zh-CN.md)。
+创建分支会保存来源分支的当前内容，并保持工作区原有选择。切换会保存原分支，检查文件句柄，再更新本机分支选择和挂载目录。共享目录的多个 Agent 使用同一个分支。重启后仍然保留选择。Dashboard 展示分支关系、commit 说明、创建者、时间和父版本。管理员可以在“设置”页面修改缓存策略、S3 存储和 HTTP Origin 允许列表，运行中的 daemon 会使用更新后的配置，详见[配置说明](docs/configuration.zh-CN.md)。
 
-应用通过 `agentfs integrate` 启动 ACP agent 或 Codex app-server，由集成程序管理会话、工作目录、回合结束、取消及重连恢复。回合期间仍然执行自动保存。完整命令和事件行为见[Agent 集成](docs/integrations.zh-CN.md)。
+已有 Agent 可以通过 `agentfs mcp` 接入并使用挂载目录。`agentfs integrate` 支持 ACP agent 和 Codex app-server，负责工作目录以及完成、取消和失败时的保存。自动保存由文件修改触发，Agent 断开后保留共享挂载。完整命令和事件行为见[Agent 集成](docs/integrations.zh-CN.md)。
 
 需要并发保护的变更会检查分支 owner、epoch、generation 和 head。这些值应从 `workspace_status` 获取，请勿自行编造。需要停止当前挂载的操作会返回 `waiting_for_quiesce`。请停止使用该目录的进程，关闭相关文件句柄，并使进程退出该目录，然后携带 operation ID 和预期的 binding generation 调用 `mount_release`。详见[操作与恢复](docs/operations.zh-CN.md)。
 
@@ -93,7 +94,7 @@ agentfs dashboard --open
 
 凭据可以通过 Dashboard 保存，也可以通过 `object_store` 支持的 AWS 环境变量或角色凭据提供程序配置。bucket 必须已经存在，并支持条件对象写入、带条件的分段上传完成操作，以及强一致读取。凭据权限应限制在选定的 bucket/prefix 内。本地开发 endpoint 可以明确启用 `allow_http`。
 
-本地与 S3 存储可以在运行期间切换：启用 S3 时复制已保留的历史，返回本地模式时下载缺少的历史内容。准备或保存配置失败时，当前连接继续有效。`meta.db` 是本地 SQLite 数据库，不会作为文件上传。S3 保存文件内容、目录和 inode 索引、版本历史及分支引用；拉取时将已发布的记录导入每台机器自己的数据库。会话关联、挂载、缓存状态和工作文件保存在本地。
+本地与 S3 存储可以在运行期间切换：启用 S3 时复制已保留的历史，返回本地模式时下载缺少的历史内容。准备或保存配置失败时，当前连接继续有效。`meta.db` 是本地 SQLite 数据库，不会作为文件上传。S3 保存文件内容、目录和 inode 索引、版本历史及分支引用；拉取时将已发布的记录导入每台机器自己的数据库。location 身份、分支选择、挂载、缓存状态和工作文件保存在本地。
 
 全部配置字段、AWS S3/RustFS 示例、支持的凭据来源、环境变量优先级和多台机器配置见[配置与 S3](docs/configuration.zh-CN.md)。
 
@@ -105,6 +106,6 @@ CI 会在 Linux、macOS 和 Windows 上运行 workspace 测试，并执行 Linux
 
 文件操作支持普通文件和目录、分支内原子追加、重命名、权限、时间戳、截断和 fsync。文件内容以整个文件为单位保存为不可变对象；编辑后的文件通过流式处理重新生成对象。分支和合并操作会在内存中构建元数据树。每个工作区可配置的 inode 数量上限为一百万；容量限制应根据可用内存和磁盘空间设置。
 
-能力查询响应会说明支持的行为。当前接口不支持 symbolic link、hard link、扩展属性、内存映射写入、advisory locking、自动文本冲突解决、远端对象物理回收，以及全局会话位置仲裁。删除已打开的文件，或替换已打开的目标文件，会返回 busy 错误。同一路径的并发变更会产生明确的合并冲突。挂载使用守护进程的操作系统身份，工作区访问授权控制 MCP 请求。
+能力查询响应会说明支持的行为。当前接口不支持 symbolic link、hard link、扩展属性、内存映射写入、advisory locking、自动文本冲突解决和远端对象物理回收。删除已打开的文件，或替换已打开的目标文件，会返回 busy 错误。同一路径的并发变更会产生明确的合并冲突。挂载使用守护进程的操作系统身份，工作区访问授权控制 MCP 请求。
 
 更多说明见[文档目录](docs/README.zh-CN.md)、[架构](docs/architecture.zh-CN.md)、[操作与恢复](docs/operations.zh-CN.md)和[验证](docs/validation.zh-CN.md)。OpenCSG Workspace 使用 Apache-2.0 许可证；仓库内附带的 WinFsp Rust wrapper 保留其 MIT 许可证。

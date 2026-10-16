@@ -94,10 +94,17 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
         .await
         .unwrap();
     let tools = owner.tools().await.unwrap().tools;
-    assert_eq!(tools.len(), 32);
+    assert_eq!(tools.len(), 29);
     assert!(!tools.iter().any(|tool| matches!(
         tool.name.as_ref(),
-        "turn_begin" | "turn_end" | "branch_fork" | "merge_validate"
+        "turn_begin"
+            | "turn_end"
+            | "branch_fork"
+            | "merge_validate"
+            | "session_open"
+            | "session_resume"
+            | "session_pause"
+            | "session_close"
     )));
     assert!(tools.iter().any(|tool| tool.name == "branch_switch"));
     assert!(
@@ -214,9 +221,8 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
     assert_eq!(view["status"]["branches"].as_array().unwrap().len(), 1);
     assert!(view["status"]["selected_branch"].is_string());
     assert_eq!(view["revisions"].as_array().unwrap().len(), 1);
-    let key = json!({"workspace":workspace,"location":view["status"]["location"],"app_namespace":"test","session_id":"bridge"});
     let lifecycle = format!("{base}/api/lifecycle");
-    let attachment = json!({"request_id":"attach", "event":"attach", "key":key, "mount_path":temporary.path().join("mount")});
+    let attachment = json!({"request_id":"attach", "event":"attach", "workspace":workspace, "mount_path":temporary.path().join("mount")});
     let first: Value = http
         .post(&lifecycle)
         .bearer_auth(owner_token)
@@ -254,24 +260,28 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
             .status(),
         409
     );
-    let begin = json!({"request_id":"begin", "event":"begin", "key":key, "turn_id":"turn"});
+    let check = json!({"request_id":"check", "event":"check", "workspace":workspace,
+        "mount_path": first["mount_path"]});
     assert!(
         http.post(&lifecycle)
             .bearer_auth(owner_token)
-            .json(&begin)
+            .json(&check)
             .send()
             .await
             .unwrap()
             .status()
             .is_success()
     );
-    let end = json!({"request_id":"end", "event":"end", "key":key, "turn_id":"turn", "status":"completed"});
+    let save = json!({"request_id":"save", "event":"save", "mount": first["binding"]["id"],
+        "expected_binding_generation":first["binding"]["generation"]});
     let saved: Value = http
         .post(&lifecycle)
         .bearer_auth(owner_token)
-        .json(&end)
+        .json(&save)
         .send()
         .await
+        .unwrap()
+        .error_for_status()
         .unwrap()
         .json()
         .await
@@ -279,71 +289,33 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
     let repeated: Value = http
         .post(&lifecycle)
         .bearer_auth(owner_token)
-        .json(&end)
+        .json(&save)
         .send()
         .await
+        .unwrap()
+        .error_for_status()
         .unwrap()
         .json()
         .await
         .unwrap();
     assert_eq!(saved, repeated);
     assert_eq!(saved["local_saved"], true);
-    let detach = json!({"request_id":"detach", "event":"detach", "key":key});
-    assert!(
-        http.post(&lifecycle)
-            .bearer_auth(owner_token)
-            .json(&detach)
-            .send()
-            .await
-            .unwrap()
-            .status()
-            .is_success()
-    );
     let mut reconnect = attachment;
-    reconnect["request_id"] = json!("reconnect");
-    assert!(
-        http.post(&lifecycle)
-            .bearer_auth(owner_token)
-            .json(&reconnect)
-            .send()
-            .await
-            .unwrap()
-            .status()
-            .is_success()
-    );
-    let begin = json!({"request_id":"begin-next", "event":"begin", "key":key, "turn_id":"next"});
-    assert!(
-        http.post(&lifecycle)
-            .bearer_auth(owner_token)
-            .json(&begin)
-            .send()
-            .await
-            .unwrap()
-            .status()
-            .is_success()
-    );
-    assert!(
-        http.post(&lifecycle)
-            .bearer_auth(owner_token)
-            .json(&detach)
-            .send()
-            .await
-            .unwrap()
-            .status()
-            .is_success()
-    );
-    let session = engine
-        .services
-        .sessions
-        .get(
-            &"owner".to_owned().try_into().unwrap(),
-            &serde_json::from_value(key).unwrap(),
-        )
+    reconnect["request_id"] = json!("another-agent");
+    let connected: Value = http
+        .post(&lifecycle)
+        .bearer_auth(owner_token)
+        .json(&reconnect)
+        .send()
         .await
         .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
         .unwrap();
-    assert_eq!(session.active_turn.as_deref(), Some("next"));
-    assert_eq!(session.state, SessionState::Active);
+    assert_eq!(connected["binding"]["id"], first["binding"]["id"]);
+    assert_eq!(connected["binding"]["branch"], first["binding"]["branch"]);
     let page = http.get(&base).send().await.unwrap();
     assert_eq!(page.status(), 200);
     assert!(

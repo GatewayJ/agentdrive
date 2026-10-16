@@ -149,19 +149,6 @@ impl MergeService {
                 "merge target has uncommitted changes",
             ));
         }
-        if self
-            .runtime
-            .state
-            .sessions(branch.workspace)
-            .await?
-            .iter()
-            .any(|session| session.branch == branch.id && session.active_turn.is_some())
-        {
-            return Err(Error::new(
-                ErrorCode::BranchBusy,
-                "merge target has an active turn",
-            ));
-        }
         let Some(base_id) = self
             .common_base(
                 request.workspace,

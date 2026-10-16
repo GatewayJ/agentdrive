@@ -73,19 +73,6 @@ impl OwnershipService {
                     "release the writable mount before transferring ownership",
                 ));
             }
-            if self
-                .runtime
-                .state
-                .sessions(branch.workspace)
-                .await?
-                .iter()
-                .any(|session| session.branch == branch.id && session.active_turn.is_some())
-            {
-                return Err(Error::new(
-                    ErrorCode::BranchBusy,
-                    "finish the active turn before transferring ownership",
-                ));
-            }
             if operation.pending.is_none() {
                 if branch.state != BranchState::Writable {
                     return Err(Error::new(
@@ -136,7 +123,7 @@ impl OwnershipService {
             owner: next.owner,
             authority_epoch: next.authority_epoch,
         });
-        let job = self.replica.build_job(&next, None, &result, None).await?;
+        let job = self.replica.build_job(&next, None, &result).await?;
         content
             .register_publication(
                 branch.workspace,

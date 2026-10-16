@@ -43,7 +43,6 @@ pub struct Capabilities {
     pub remote_configured: bool,
     pub automatic_text_merge: bool,
     pub physical_remote_gc: bool,
-    pub single_location_session: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
@@ -124,59 +123,6 @@ pub struct ExportRevision {
     pub revision: RevisionId,
     pub destination: PathBuf,
     pub paths: Option<Vec<WorkspacePath>>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct OpenSession {
-    pub key: SessionKey,
-    pub branch: Option<BranchId>,
-    pub mount_path: Option<PathBuf>,
-    #[serde(default)]
-    pub durability: Durability,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum RecoveryAction {
-    Continue,
-    Interrupt,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ResumeSession {
-    pub key: SessionKey,
-    pub mount_path: Option<PathBuf>,
-    pub recovery_action: Option<RecoveryAction>,
-    pub turn_id: Option<String>,
-    #[serde(default)]
-    pub durability: Durability,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct SessionAction {
-    pub key: SessionKey,
-    #[serde(default)]
-    pub durability: Durability,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct BeginTurn {
-    pub key: SessionKey,
-    pub turn_id: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EndTurn {
-    pub key: SessionKey,
-    pub turn_id: String,
-    pub status: TurnStatus,
-    #[serde(default)]
-    pub durability: Durability,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, schemars::JsonSchema)]
@@ -299,10 +245,20 @@ pub struct ApplyMerge {
 #[serde(deny_unknown_fields)]
 pub struct PrepareMount {
     pub workspace: WorkspaceId,
-    pub branch: BranchId,
+    pub branch: Option<BranchId>,
     pub revision: Option<RevisionId>,
     pub path: PathBuf,
+    #[serde(default)]
     pub access: AccessMode,
+    #[serde(default)]
+    pub durability: Durability,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SaveMount {
+    pub mount: MountId,
+    pub expected_binding_generation: u64,
     #[serde(default)]
     pub durability: Durability,
 }
@@ -374,33 +330,6 @@ pub trait RevisionApi: Send + Sync {
 }
 
 #[async_trait]
-pub trait SessionApi: Send + Sync {
-    async fn get(&self, actor: &Principal, key: &SessionKey) -> Result<Option<SessionBinding>>;
-    async fn open(&self, context: RequestContext, request: OpenSession) -> Result<OperationRecord>;
-    async fn resume(
-        &self,
-        context: RequestContext,
-        request: ResumeSession,
-    ) -> Result<OperationRecord>;
-    async fn pause(
-        &self,
-        context: RequestContext,
-        request: SessionAction,
-    ) -> Result<OperationRecord>;
-    async fn close(
-        &self,
-        context: RequestContext,
-        request: SessionAction,
-    ) -> Result<OperationRecord>;
-    async fn turn_begin(
-        &self,
-        context: RequestContext,
-        request: BeginTurn,
-    ) -> Result<OperationRecord>;
-    async fn turn_end(&self, context: RequestContext, request: EndTurn) -> Result<OperationRecord>;
-}
-
-#[async_trait]
 pub trait ReplicaApi: Send + Sync {
     async fn sync(&self, context: RequestContext, request: SyncRequest) -> Result<OperationRecord>;
 }
@@ -454,6 +383,7 @@ pub trait MountApi: Send + Sync {
         context: RequestContext,
         request: PrepareMount,
     ) -> Result<OperationRecord>;
+    async fn save(&self, context: RequestContext, request: SaveMount) -> Result<OperationRecord>;
     async fn release(
         &self,
         context: RequestContext,
@@ -478,7 +408,6 @@ pub trait OperationApi: Send + Sync {
 pub struct Services {
     pub workspace: Arc<dyn WorkspaceApi>,
     pub revisions: Arc<dyn RevisionApi>,
-    pub sessions: Arc<dyn SessionApi>,
     pub replica: Arc<dyn ReplicaApi>,
     pub cache: Arc<dyn CacheApi>,
     pub ownership: Arc<dyn OwnershipApi>,

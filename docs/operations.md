@@ -20,7 +20,7 @@ A remote error can accompany `local_saved: true`. Keep the existing operation ID
 
 ## Mount changes
 
-Restore, merge apply, and session changes may require an attached filesystem to become quiet. An operation in `waiting_for_quiesce` carries its original mount generation. Stop the agent and other processes using that mount, close open files, and leave the directory in any shell. Call `mount_release` with that operation ID and `expected_binding_generation`. Repeating release uses its own stable request ID.
+Restore, merge apply, and branch switching may require an attached filesystem to become quiet. An operation in `waiting_for_quiesce` carries its original mount generation. Stop the agent and other processes using that mount, close open files, and leave the directory in any shell. Call `mount_release` with that operation ID and `expected_binding_generation`. Repeating release uses its own stable request ID.
 
 The operation verifies the original branch guard again before changing the attachment. A stale target fails without applying the candidate. Generation checks prevent a handle from continuing against a replacement branch. A successful local commit followed by mount failure returns `committed_mount_pending`; the durable result is retained for recovery. Cancellation is accepted only while the original attachment remains unchanged and no local commit has completed.
 
@@ -28,21 +28,21 @@ A normal daemon shutdown stops HTTP traffic and background tasks, saves modified
 
 ## Process restart
 
-Startup restores working metadata from the last acknowledged immutable branch root and removes disposable working copies. Writes that had not reached fsync, autosave, a revision operation, or a saved turn can be lost after abrupt process termination. A failed write followed by failed metadata persistence stops the affected branch for recovery.
+Startup restores working metadata from the last acknowledged immutable branch root and removes disposable working copies. Writes that had not reached fsync, autosave, a revision operation, or mount_save can be lost after abrupt process termination. A failed write followed by failed metadata persistence stops the affected branch for recovery.
 
-An interrupted session requires `session_resume` with an explicit `recovery_action` and the affected `turn_id` when an active turn exists. `continue` resumes the recorded turn; `interrupt` records interruption before resuming. Native mounts are inspected before reuse. An unknown existing filesystem at a path requires operator cleanup; the service does not force-unmount an unrelated filesystem.
+The local branch selection survives shutdown and restart. Run `agentfs mount --workspace <workspace-id> <path>` or call `mount_prepare` again to reuse it. Native mounts are inspected before reuse; a matching binding retains its ID and generation. An unknown existing filesystem at a path requires operator cleanup; the service does not force-unmount an unrelated filesystem.
 
 Keep the state directory on a local filesystem with correct file flush and atomic rename behavior. Filesystem and storage hardware must honor flush requests. Unix object publication flushes file data and directories; Windows flushes file data and uses write-through namespace publication. Remote confirmation is the additional durability boundary when remote storage is configured.
 
 ## Replication, cache, and ownership
 
-`sync` supports `push`, `pull`, and `both`. Pulling a workspace onto a fresh location imports its history. Branch creation and session opening can then use the imported revisions. A remote history reference does not grant local write ownership.
+`sync` supports `push`, `pull`, and `both`. Pulling a workspace onto a fresh location imports its history. The first writable `mount_prepare` also imports a missing workspace and creates this location’s branch from the root branch’s latest published saved revision. Later mounts reuse the local selection. A remote history reference does not grant local write ownership.
 
 Use `cache_prefetch` to download a revision or selected paths. Use `cache_pin` with `enabled: true` to retain a complete selection for offline use; `cache_status` reports both completeness and pin protection. Unpinning permits later collection after other protection is absent. Cache collection only removes remotely confirmed immutable objects without active readers or protected references.
 
 While S3 is enabled, set the local cache capacity in Dashboard Settings or `cache.max_bytes`. Collection starts above that capacity or below the internal 64 MiB free-space threshold and targets 75% of the configured capacity. Protected content can keep usage above the setting. Local mode retains all history; switching from S3 hydrates missing historical content before disabling the remote connection. See [configuration](configuration.md) for storage switching and the local SQLite database's role.
 
-Ownership transfer is online. Finish active turns and release writable mounts on the old location. Submit `ownership_transfer` with the current `BranchGuard` and the destination `LocationId`. The old location stops branch writes before draining publication and updating the conditional reference. Pull at the new location to adopt confirmed ownership. Retain the original transfer operation during an uncertain remote response.
+Ownership transfer is online. Stop writing files and release writable mounts on the old location. Submit `ownership_transfer` with the current `BranchGuard` and the destination `LocationId`. The old location stops branch writes before draining publication and updating the conditional reference. Pull at the new location to adopt confirmed ownership. Retain the original transfer operation during an uncertain remote response.
 
 ## Merging files
 

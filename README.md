@@ -7,10 +7,10 @@ OpenCSG Workspace gives agents durable workspaces, explicit workspace branches, 
 The implementation includes:
 
 - Portable file names, content-addressed objects, paged directory/inode indexes, and SQLite transactions.
-- Linux FUSE, macOS macFUSE, and Windows WinFsp adapters; snapshots, branch restore, session and turn history.
+- Linux FUSE, macOS macFUSE, and Windows WinFsp adapters; snapshots, branch restore, and revision history.
 - S3/RustFS replication, bounded streaming transfers, offline cache pins, online ownership transfer, and editable three-way merge candidates.
 - ACP and Codex app-server lifecycle bridges, explicit branch commands, and a dashboard for branch history and runtime settings.
-- 32 typed MCP tools over authenticated Streamable HTTP, with a stdio proxy and JSON CLI.
+- 29 typed MCP tools over authenticated Streamable HTTP, with a stdio proxy and JSON CLI.
 
 ## Build
 
@@ -54,18 +54,19 @@ Use `agentfs tools` as the source for JSON input schemas. Command tools accept `
 
 ## Branches, agents, and dashboard
 
-A new workspace selects its writable `main` branch. Sessions attach to the selected branch. Create and switch branches explicitly through MCP (`branch_create`, `branch_switch`) or the CLI:
+A new workspace selects its writable `main` branch. Mounting the same workspace at the same location reuses its selected branch. A new location creates and selects its own branch from the root branch's latest published content. Create and switch branches explicitly through MCP (`branch_create`, `branch_switch`) or the CLI:
 
 ```sh
+agentfs mount --workspace "$WORKSPACE" "$AGENTFS_DIRECTORY/mounts/project"
 agentfs branch list --workspace "$WORKSPACE"
 agentfs branch create --workspace "$WORKSPACE" --name feat/task
 agentfs branch switch --workspace "$WORKSPACE" --branch "$BRANCH"
 agentfs dashboard --open
 ```
 
-Creation captures current working content without changing the selection. Switching saves the previous branch, checks active turns and native file handles, and updates the workspace selection and attached sessions. The selection survives daemon restarts. The dashboard shows branch ancestry, commit messages, authors, timestamps, and parent revisions. Administrators can use **Settings** to update cache policy, S3 storage and allowed HTTP origins while the daemon is running; see [configuration](docs/configuration.md).
+Creation captures current working content without changing the selection. Switching saves the previous branch, checks native file handles, and updates this location's selection and mount. Agents sharing the directory use the same branch. The selection survives daemon restarts. The dashboard shows branch ancestry, commit messages, authors, timestamps, and parent revisions. Administrators can use **Settings** to update cache policy, S3 storage and allowed HTTP origins while the daemon is running; see [configuration](docs/configuration.md).
 
-Configure the agent application's stdio command through `agentfs integrate`. It manages session attachment, the working directory, turn boundaries, cancellation, and reconnect recovery. See [agent integrations](docs/integrations.md) for ACP and Codex app-server commands and protocol behavior. Automatic saves remain enabled throughout each turn.
+Existing agents can connect through `agentfs mcp` and use a mounted directory. `agentfs integrate` manages the working directory and saves on completion, cancellation, failure, and reconnect. See [agent integrations](docs/integrations.md) for ACP and Codex app-server commands and protocol behavior. File changes trigger automatic saves, and shared mounts remain available after agent disconnection.
 
 The branch owner, epoch, generation, and head are checked for guarded changes. Obtain current values from `workspace_status`; do not manufacture them. Operations that need an active mount to stop return `waiting_for_quiesce`. Stop processes using that directory, close their handles and current working directories, then call `mount_release` with the operation ID and expected binding generation. See [operations and recovery](docs/operations.md).
 
@@ -89,7 +90,7 @@ Enable S3 and save its connection settings and credentials in Dashboard **Settin
 
 Credentials can be saved through Dashboard Settings or supplied through the AWS environment/role providers supported by `object_store`. The bucket must already exist and support conditional object writes, conditional multipart completion, and strongly consistent reads. Restrict credentials to the selected bucket/prefix. Local development endpoints may explicitly enable `allow_http`.
 
-Switching between local and S3 storage takes effect without restarting: enabling S3 copies retained history, and returning to local storage downloads missing history. Preparation or configuration-save failures preserve the active connection. `meta.db` is a local SQLite database and is never uploaded as a file. S3 stores file contents, directory/inode indexes, revision history and branch references; pulling imports the published records into each machine's own database. Session attachments, mounts, cache state and working files stay local.
+Switching between local and S3 storage takes effect without restarting: enabling S3 copies retained history, and returning to local storage downloads missing history. Preparation or configuration-save failures preserve the active connection. `meta.db` is a local SQLite database and is never uploaded as a file. S3 stores file contents, directory/inode indexes, revision history and branch references; pulling imports the published records into each machine's own database. Location identity, branch selection, mounts, cache state and working files stay local.
 
 See [configuration and S3](docs/configuration.md) for every field, AWS S3/RustFS examples, supported credential sources, environment precedence, and multi-machine setup.
 
@@ -101,6 +102,6 @@ CI runs workspace tests on Linux, macOS, and Windows; native mount tests on Linu
 
 File operations cover regular files and directories, atomic branch append, rename, permissions, timestamps, truncate, and fsync. File contents are stored as whole-file immutable objects; edited files are resealed by streaming. Metadata trees are materialized in memory for branch and merge operations. The configurable maximum is one million inodes per workspace; size limits should reflect available memory and disk.
 
-The advertised capability response describes the supported behavior. Symbolic links, hard links, extended attributes, memory-mapped writes, advisory locking, automatic text conflict resolution, physical remote garbage collection, and global session-location arbitration are outside the implemented interface. Unlinking an open file or replacing an open destination returns a busy error. Concurrent changes to the same path become explicit merge conflicts. Mounts are owned by the daemon's OS identity; workspace access grants govern MCP requests.
+The advertised capability response describes the supported behavior. Symbolic links, hard links, extended attributes, memory-mapped writes, advisory locking, automatic text conflict resolution, and physical remote garbage collection are outside the implemented interface. Unlinking an open file or replacing an open destination returns a busy error. Concurrent changes to the same path become explicit merge conflicts. Mounts are owned by the daemon's OS identity; workspace access grants govern MCP requests.
 
 See the [documentation index](docs/README.md), [architecture](docs/architecture.md), [operations and recovery](docs/operations.md), and [validation](docs/validation.md). OpenCSG Workspace is licensed under Apache-2.0; the vendored WinFsp Rust wrapper retains its MIT license.

@@ -136,12 +136,6 @@ impl LocalBackend {
     }
 }
 
-fn session_key(key: &SessionKey) -> Result<String> {
-    Ok(object_ref(ObjectKind::RecordIndex, &encode(key)?)
-        .id
-        .to_string())
-}
-
 fn pin_key(pin: &CachePin) -> Result<String> {
     Ok(object_ref(
         ObjectKind::RecordIndex,
@@ -303,27 +297,6 @@ impl LocalStateStore for LocalBackend {
         )
         .await
     }
-    async fn session(&self, key: &SessionKey) -> Result<Option<SessionBinding>> {
-        self.one(
-            "SELECT data FROM sessions WHERE id=?1",
-            vec![session_key(key)?],
-        )
-        .await
-    }
-    async fn sessions(&self, workspace: WorkspaceId) -> Result<Vec<SessionBinding>> {
-        self.many(
-            "SELECT data FROM sessions WHERE workspace=?1 ORDER BY id",
-            vec![workspace.to_string()],
-        )
-        .await
-    }
-    async fn turns(&self, workspace: WorkspaceId) -> Result<Vec<TurnRecord>> {
-        self.many(
-            "SELECT data FROM turns WHERE workspace=?1 ORDER BY id",
-            vec![workspace.to_string()],
-        )
-        .await
-    }
     async fn operation(&self, id: OperationId) -> Result<Option<OperationRecord>> {
         self.one(
             "SELECT data FROM operations WHERE id=?1",
@@ -461,15 +434,6 @@ impl LocalStateStore for LocalBackend {
                 let existing: Option<Revision> = read_one(&transaction, "SELECT data FROM revisions WHERE id=?1", &[revision.id.to_string()])?;
                 if existing.as_ref().is_some_and(|old| old != revision) { return Err(Error::integrity("immutable revision was changed")); }
                 upsert(&transaction, "revisions", revision.id.to_string(), revision.workspace, revision)?;
-            }
-            for session in &commit.sessions { upsert(&transaction, "sessions", session_key(&session.key)?, session.key.workspace, session)?; }
-            for turn in &commit.turns {
-                let key = object_ref(ObjectKind::RecordIndex, &encode(&(&turn.session, &turn.turn_id))?).id.to_string();
-                let existing: Option<TurnRecord> = read_one(&transaction, "SELECT data FROM turns WHERE id=?1", std::slice::from_ref(&key))?;
-                if existing.as_ref().is_some_and(|old| old.status.is_end() && old != turn) {
-                    return Err(Error::new(ErrorCode::TurnResultConflict, "turn already has a different final result"));
-                }
-                upsert(&transaction, "turns", key, turn.session.workspace, turn)?;
             }
             for operation in &commit.operations { put_operation(&transaction, operation)?; }
             for mount in &commit.mounts {

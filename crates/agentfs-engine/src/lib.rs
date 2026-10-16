@@ -10,7 +10,6 @@ mod ownership;
 mod replica;
 mod revisions;
 mod runtime;
-mod sessions;
 mod snapshots;
 mod storage;
 mod trees;
@@ -32,8 +31,6 @@ pub(crate) use revisions::VersionService;
 pub(crate) use workspaces::WorkspaceService;
 
 pub(crate) use mounts::MountService;
-
-pub(crate) use sessions::SessionService;
 
 pub(crate) use cache::CacheService;
 

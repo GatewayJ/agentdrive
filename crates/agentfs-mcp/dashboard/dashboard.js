@@ -12,7 +12,7 @@ let selectedRevision = null;
 let loading = false;
 let generation = 0;
 const labels = {commit:'Commit', autosave:'自动保存', checkpoint:'检查点', candidate:'合并候选'};
-const titles = {commit:'保存工作内容', autosave:'自动保存工作进度', checkpoint:'保存会话状态', candidate:'准备合并内容'};
+const titles = {commit:'保存工作内容', autosave:'自动保存工作进度', checkpoint:'保存检查点', candidate:'准备合并内容'};
 function element(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;

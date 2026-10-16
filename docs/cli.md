@@ -22,6 +22,7 @@ Run `init` once for a new directory. It prints the generated configuration path 
 | `agentfs tools` | Lists the tool catalog, including `inputSchema` and annotations, as JSON. |
 | `agentfs call <TOOL>` | Optional `--json <JSON>` (default `{}`) and `--request-id <ID>`. |
 | `agentfs mcp` | Runs a stdio MCP proxy connected to the existing daemon. |
+| `agentfs mount` | Required `--workspace <ID>` and directory; optional `--request-id <ID>`. Relative paths resolve from the CLI working directory. |
 
 Both binaries provide `--help` and `--version`; subcommands provide `--help`.
 
@@ -80,18 +81,19 @@ jq -n --arg workspace "$WORKSPACE" --arg revision "$REVISION" --arg destination 
 
 Creation returns `result.workspace`. Import creates a new branch and returns `result.branch`; its `formal_head` is the imported revision. New workspaces select a writable `main` branch. `revision_read` returns `{ "bytes": [0, 1, ...], "length": ... }`, with integer bytes and a maximum requested size of 4 MiB. Export requires an existing parent directory and a destination that does not already exist.
 
-## Branches and sessions
+## Mounts and branches
 
 ```sh
+agentfs mount --workspace "$WORKSPACE" "$AGENTFS_DIRECTORY/mounts/project"
 agentfs branch list --workspace "$WORKSPACE"
 agentfs branch create --workspace "$WORKSPACE" --name feat/task --request-id "$RUN_ID-branch"
 agentfs branch switch --workspace "$WORKSPACE" --branch "$BRANCH" --request-id "$RUN_ID-switch"
 agentfs dashboard --open
 ```
 
-`branch create` accepts optional `--source <REVISION>` or `--source-branch <BRANCH>`; omission captures the selected branch's current working content. It returns the new branch in `result.branch` and preserves the current selection. `branch switch` changes the workspace selection and existing attachments to the previous branch. Active turns must finish. The CLI attempts release of an existing mount. If it is busy, close users of the directory and retry with the original request ID; MCP callers use `mount_release` to continue pending switches. Both commands generate a request ID when omitted; reuse an explicit ID for retries.
+`branch create` accepts optional `--source <REVISION>` or `--source-branch <BRANCH>`; omission captures the selected branch's current working content. It returns the new branch in `result.branch` and preserves the current selection. `branch switch` changes this location's workspace selection and mounted directory. The CLI attempts release of an existing mount. If it is busy, close users of the directory and retry with the original request ID; MCP callers use `mount_release` to continue pending switches. Both commands generate a request ID when omitted; reuse an explicit ID for retries.
 
-`session_open` accepts `key`, optional `branch`, `mount_path`, and `durability`. The default branch is the workspace selection. `session_pause`, `session_resume`, and `session_close` manage existing attachments. [Agent integrations](integrations.md) automate attachment, turn persistence, working directory selection, cancellation, and recovery.
+`mount` takes a workspace ID and directory; repeated calls reuse the mount. The same location uses its selected branch. A new location creates its branch from the root branch's latest published revision. With S3 configured, a remote workspace ID can be mounted directly. A branch permits one writable mount; unmount it before moving directories. Agent disconnection preserves the directory. See [agent integrations](integrations.md) for MCP setup and task saving.
 
 `dashboard` prints the browser URL without reading credentials or connecting to the daemon. `dashboard --open` requires credentials and opens the URL with the selected token in a URL fragment; the page removes the fragment immediately and keeps the token in session storage. Data requests use bearer authentication. The dashboard provides branch trees and revision details, with refresh every 15 seconds. Administrators can open **Settings** at `/settings` to edit runtime configuration and inspect startup settings; see [configuration](configuration.md).
 

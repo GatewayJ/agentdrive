@@ -215,76 +215,6 @@ pub struct Revision {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
-)]
-pub struct SessionKey {
-    pub workspace: WorkspaceId,
-    pub app_namespace: String,
-    pub session_id: String,
-    pub location: LocationId,
-}
-
-impl SessionKey {
-    pub fn validate(&self) -> Result<()> {
-        for value in [&self.app_namespace, &self.session_id] {
-            if value.is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
-                return Err(Error::invalid("invalid session identity"));
-            }
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionState {
-    Active,
-    Paused,
-    Closed,
-    RecoveryRequired,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct SessionBinding {
-    pub key: SessionKey,
-    pub principal: Principal,
-    pub branch: BranchId,
-    pub mount: Option<MountId>,
-    pub state: SessionState,
-    pub active_turn: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum TurnStatus {
-    Running,
-    Paused,
-    Completed,
-    Failed,
-    Cancelled,
-    Interrupted,
-}
-
-impl TurnStatus {
-    pub fn is_end(self) -> bool {
-        matches!(
-            self,
-            Self::Completed | Self::Failed | Self::Cancelled | Self::Interrupted
-        )
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct TurnRecord {
-    pub session: SessionKey,
-    pub turn_id: String,
-    pub begin_revision: RevisionId,
-    pub result_revision: Option<RevisionId>,
-    pub status: TurnStatus,
-    pub operation: OperationId,
-}
-
-#[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
@@ -294,9 +224,12 @@ pub enum Durability {
     Remote,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum AccessMode {
+    #[default]
     ReadWrite,
     ReadOnly,
 }
@@ -389,11 +322,14 @@ pub enum CommandResult {
         revision: RevisionId,
         branch: BranchId,
     },
-    Session {
-        binding: SessionBinding,
+    // 保留旧版操作结果的读取能力。
+    #[serde(rename = "session")]
+    LegacySession {
+        binding: serde_json::Value,
     },
-    Turn {
-        record: TurnRecord,
+    #[serde(rename = "turn")]
+    LegacyTurn {
+        record: serde_json::Value,
     },
     Mount {
         binding: MountBinding,
@@ -446,7 +382,6 @@ pub enum PendingAction {
     MountChange {
         old: Option<MountBinding>,
         new: Option<MountBinding>,
-        session: Option<Box<SessionBinding>>,
     },
     ApplyRevision {
         target: BranchGuard,
@@ -465,7 +400,8 @@ pub enum PendingAction {
 #[serde(tag = "kind", content = "record", rename_all = "snake_case")]
 pub enum HistoryRecord {
     Revision(Revision),
-    Turn(TurnRecord),
+    #[serde(rename = "turn")]
+    LegacyTurn(serde_json::Value),
     Operation(Box<OperationRecord>),
 }
 

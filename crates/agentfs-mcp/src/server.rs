@@ -46,10 +46,6 @@ impl McpServer {
             "branch_create" => command!(ForkBranch, revisions, fork),
             "branch_switch" => command!(SwitchBranch, mounts, switch_branch),
             "branch_restore" => command!(RestoreBranch, revisions, restore),
-            "session_open" => command!(OpenSession, sessions, open),
-            "session_resume" => command!(ResumeSession, sessions, resume),
-            "session_pause" => command!(SessionAction, sessions, pause),
-            "session_close" => command!(SessionAction, sessions, close),
             "sync" => command!(SyncRequest, replica, sync),
             "cache_prefetch" => command!(RevisionRange, cache, prefetch),
             "cache_pin" => command!(PinRequest, cache, pin),
@@ -58,6 +54,7 @@ impl McpServer {
             "merge_resolve" => command!(ResolveMerge, merge, resolve),
             "merge_apply" => command!(ApplyMerge, merge, apply),
             "mount_prepare" => command!(PrepareMount, mounts, prepare),
+            "mount_save" => command!(SaveMount, mounts, save),
             "mount_release" => command!(ReleaseMount, mounts, release),
             "workspace_list" => {
                 let _: Empty = parse(arguments)?;
@@ -337,32 +334,12 @@ pub fn tool_catalog() -> Vec<Tool> {
         ),
         tool::<Command<SwitchBranch>>(
             "branch_switch",
-            "Select the workspace branch and update idle session attachments; active mounts require release.",
+            "Select this location's workspace branch; occupied mounts require release.",
             false,
         ),
         tool::<Command<RestoreBranch>>(
             "branch_restore",
             "Restore a branch to a revision with an explicit mount handoff when occupied.",
-            false,
-        ),
-        tool::<Command<OpenSession>>(
-            "session_open",
-            "Attach a session to the selected workspace branch or an explicit branch.",
-            false,
-        ),
-        tool::<Command<ResumeSession>>(
-            "session_resume",
-            "Resume saved working state; interrupted turns require a recovery decision.",
-            false,
-        ),
-        tool::<Command<SessionAction>>(
-            "session_pause",
-            "Save and pause a session, releasing its mount after caller quiescence.",
-            false,
-        ),
-        tool::<Command<SessionAction>>(
-            "session_close",
-            "Save and close a session, releasing its mount after caller quiescence.",
             false,
         ),
         tool::<Command<SyncRequest>>(
@@ -412,7 +389,12 @@ pub fn tool_catalog() -> Vec<Tool> {
         ),
         tool::<Command<PrepareMount>>(
             "mount_prepare",
-            "Prepare a read-only revision or writable branch mount within configured mount roots.",
+            "挂载工作区；默认复用当前 location 的分支，首次连接远程工作区时自动创建分支。相同路径复用现有挂载。",
+            false,
+        ),
+        tool::<Command<SaveMount>>(
+            "mount_save",
+            "Save the files of the specified mount generation.",
             false,
         ),
         tool::<Command<ReleaseMount>>(

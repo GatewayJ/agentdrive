@@ -109,20 +109,16 @@ struct LifecycleInput {
 #[serde(tag = "event", rename_all = "snake_case")]
 enum LifecycleEvent {
     Attach {
-        key: SessionKey,
+        workspace: WorkspaceId,
         mount_path: PathBuf,
     },
-    Begin {
-        key: SessionKey,
-        turn_id: String,
+    Check {
+        workspace: WorkspaceId,
+        mount_path: PathBuf,
     },
-    End {
-        key: SessionKey,
-        turn_id: String,
-        status: TurnStatus,
-    },
-    Detach {
-        key: SessionKey,
+    Save {
+        mount: MountId,
+        expected_binding_generation: u64,
     },
 }
 
@@ -131,197 +127,6 @@ fn checked(record: OperationRecord) -> Result<OperationRecord> {
         Some(error) => Err(error),
         None => Ok(record),
     }
-}
-
-fn step(context: &RequestContext, suffix: &str) -> RequestContext {
-    let fingerprint = object_ref(
-        ObjectKind::RecordIndex,
-        format!("{}:{suffix}", context.request_id).as_bytes(),
-    );
-    RequestContext {
-        principal: context.principal.clone(),
-        request_id: format!("lifecycle-{}", fingerprint.id),
-    }
-}
-
-async fn finish_mount(
-    services: &Services,
-    context: &RequestContext,
-    record: OperationRecord,
-) -> Result<OperationRecord> {
-    let record = checked(record)?;
-    if record.phase != OperationPhase::WaitingForQuiesce {
-        return Ok(record);
-    }
-    let generation = match &record.pending {
-        Some(PendingAction::MountChange { old: Some(old), .. }) => old.generation,
-        _ => {
-            return Err(Error::new(
-                ErrorCode::MountBusy,
-                "mount change requires explicit release",
-            ));
-        }
-    };
-    checked(
-        services
-            .mounts
-            .release(
-                step(context, "release"),
-                ReleaseMount {
-                    operation: record.id,
-                    expected_binding_generation: generation,
-                },
-            )
-            .await?,
-    )?;
-    checked(
-        services
-            .operations
-            .get(&context.principal, record.id)
-            .await?,
-    )
-}
-
-async fn attach(
-    services: &Services,
-    context: &RequestContext,
-    key: SessionKey,
-    mount_path: PathBuf,
-) -> Result<Value> {
-    if !mount_path.is_absolute() {
-        return Err(Error::invalid("mount_path must be absolute"));
-    }
-    let existing = services.sessions.get(&context.principal, &key).await?;
-    for suffix in ["open", "resume"] {
-        match services
-            .operations
-            .by_request(&context.principal, &step(context, suffix).request_id)
-            .await
-        {
-            Ok(record) => {
-                let record = checked(record)?;
-                let Some(CommandResult::Session { binding: original }) = &record.result else {
-                    return Err(Error::new(
-                        ErrorCode::RecoveryRequired,
-                        "session attachment has no saved result",
-                    ));
-                };
-                if original.key != key {
-                    return Err(Error::new(
-                        ErrorCode::RequestIdConflict,
-                        "attachment request id belongs to another session",
-                    ));
-                }
-                let status = services
-                    .workspace
-                    .status(&context.principal, key.workspace)
-                    .await?;
-                let original_path = status
-                    .mounts
-                    .iter()
-                    .find(|mount| Some(mount.id) == original.mount)
-                    .map(|mount| &mount.path)
-                    .or(match &record.pending {
-                        Some(PendingAction::MountChange { new: Some(new), .. }) => Some(&new.path),
-                        _ => None,
-                    });
-                let requested_path = tokio::fs::canonicalize(&mount_path)
-                    .await
-                    .unwrap_or_else(|_| mount_path.clone());
-                if original_path != Some(&requested_path) {
-                    return Err(Error::new(
-                        ErrorCode::RequestIdConflict,
-                        "attachment request id has a different mount path",
-                    ));
-                }
-                finish_mount(services, context, record).await?;
-                let binding = services
-                    .sessions
-                    .get(&context.principal, &key)
-                    .await?
-                    .ok_or_else(|| Error::integrity("session attachment is missing"))?;
-                let status = services
-                    .workspace
-                    .status(&context.principal, key.workspace)
-                    .await?;
-                let mount = status
-                    .mounts
-                    .iter()
-                    .find(|mount| {
-                        Some(mount.id) == binding.mount && mount.state == MountState::Ready
-                    })
-                    .ok_or_else(|| {
-                        Error::new(ErrorCode::MountBusy, "session mount is not ready")
-                    })?;
-                return Ok(json!({"binding": binding, "mount_path": mount.path}));
-            }
-            Err(error) if error.code == ErrorCode::NotFound => {}
-            Err(error) => return Err(error),
-        }
-    }
-    if let Some(binding) = &existing
-        && binding.state == SessionState::Active
-        && let Some(turn_id) = &binding.active_turn
-    {
-        checked(
-            services
-                .sessions
-                .turn_end(
-                    step(context, "interrupt"),
-                    EndTurn {
-                        key: key.clone(),
-                        turn_id: turn_id.clone(),
-                        status: TurnStatus::Interrupted,
-                        durability: Durability::Local,
-                    },
-                )
-                .await?,
-        )?;
-    }
-    let operation = if let Some(binding) = existing {
-        services
-            .sessions
-            .resume(
-                step(context, "resume"),
-                ResumeSession {
-                    key: key.clone(),
-                    mount_path: Some(mount_path.clone()),
-                    recovery_action: Some(RecoveryAction::Interrupt),
-                    turn_id: binding.active_turn,
-                    durability: Durability::Local,
-                },
-            )
-            .await?
-    } else {
-        services
-            .sessions
-            .open(
-                step(context, "open"),
-                OpenSession {
-                    key: key.clone(),
-                    branch: None,
-                    mount_path: Some(mount_path.clone()),
-                    durability: Durability::Local,
-                },
-            )
-            .await?
-    };
-    finish_mount(services, context, operation).await?;
-    let binding = services
-        .sessions
-        .get(&context.principal, &key)
-        .await?
-        .ok_or_else(|| Error::integrity("session attachment is missing"))?;
-    let status = services
-        .workspace
-        .status(&context.principal, key.workspace)
-        .await?;
-    let mount = status
-        .mounts
-        .iter()
-        .find(|mount| Some(mount.id) == binding.mount && mount.state == MountState::Ready)
-        .ok_or_else(|| Error::new(ErrorCode::MountBusy, "session mount is not ready"))?;
-    Ok(json!({"binding": binding, "mount_path": mount.path}))
 }
 
 async fn lifecycle(
@@ -335,104 +140,67 @@ async fn lifecycle(
     };
     context.validate()?;
     let value = match input.event {
-        LifecycleEvent::Attach { key, mount_path } => {
-            attach(&services, &context, key, mount_path).await?
-        }
-        LifecycleEvent::Begin { key, turn_id } => json!(checked(
-            services
-                .sessions
-                .turn_begin(context, BeginTurn { key, turn_id })
-                .await?
-        )?),
-        LifecycleEvent::End {
-            key,
-            turn_id,
-            status,
-        } => json!(checked(
-            services
-                .sessions
-                .turn_end(
-                    context,
-                    EndTurn {
-                        key,
-                        turn_id,
-                        status,
-                        durability: Durability::Local
-                    }
-                )
-                .await?
-        )?),
-        LifecycleEvent::Detach { key } => {
-            let paused = match services
-                .operations
-                .by_request(&context.principal, &step(&context, "pause").request_id)
-                .await
-            {
-                Ok(record) => Some(checked(record)?),
-                Err(error) if error.code == ErrorCode::NotFound => None,
-                Err(error) => return Err(error.into()),
-            };
-            let paused = if let Some(record) = paused {
-                Some(record)
-            } else if let Some(binding) = services.sessions.get(&context.principal, &key).await? {
-                if let Some(turn_id) = binding.active_turn {
-                    checked(
-                        services
-                            .sessions
-                            .turn_end(
-                                step(&context, "interrupt"),
-                                EndTurn {
-                                    key: key.clone(),
-                                    turn_id,
-                                    status: TurnStatus::Interrupted,
-                                    durability: Durability::Local,
-                                },
-                            )
-                            .await?,
-                    )?;
-                }
-                Some(checked(
-                    services
-                        .sessions
-                        .pause(
-                            step(&context, "pause"),
-                            SessionAction {
-                                key: key.clone(),
-                                durability: Durability::Local,
-                            },
-                        )
-                        .await?,
-                )?)
-            } else {
-                None
-            };
-            if let Some(record) = paused {
-                let Some(CommandResult::Session { binding }) = record.result else {
-                    return Err(Error::integrity("session detachment has no saved result").into());
-                };
-                if binding.key != key {
-                    return Err(Error::new(
-                        ErrorCode::RequestIdConflict,
-                        "detachment request id belongs to another session",
+        LifecycleEvent::Attach {
+            workspace,
+            mount_path,
+        } => {
+            let record = checked(
+                services
+                    .mounts
+                    .prepare(
+                        context,
+                        PrepareMount {
+                            workspace,
+                            branch: None,
+                            revision: None,
+                            path: mount_path,
+                            access: AccessMode::ReadWrite,
+                            durability: Durability::Local,
+                        },
                     )
-                    .into());
-                }
-                let status = services
-                    .workspace
-                    .status(&context.principal, key.workspace)
-                    .await?;
-                if let Some(mount) = status.mounts.iter().find(|mount| {
-                    Some(mount.id) == binding.mount && mount.state != MountState::Released
-                }) {
-                    checked(
-                        services
-                            .mounts
-                            .unmount(step(&context, "unmount"), mount.id, mount.generation)
-                            .await?,
-                    )?;
-                }
-            }
-            json!({"saved": true})
+                    .await?,
+            )?;
+            let Some(CommandResult::Mount { binding }) = record.result else {
+                return Err(Error::new(ErrorCode::MountBusy, "mount is not ready").into());
+            };
+            json!({"mount_path": binding.path, "binding": binding})
+        }
+        LifecycleEvent::Check {
+            workspace,
+            mount_path,
+        } => {
+            let status = services
+                .workspace
+                .status(&context.principal, workspace)
+                .await?;
+            let binding = status
+                .mounts
+                .into_iter()
+                .find(|mount| {
+                    mount.path == mount_path
+                        && mount.state == MountState::Ready
+                        && mount.access == AccessMode::ReadWrite
+                })
+                .ok_or_else(|| Error::new(ErrorCode::StaleBinding, "mount is not ready"))?;
+            json!({"binding": binding})
+        }
+        LifecycleEvent::Save {
+            mount,
+            expected_binding_generation,
+        } => {
+            json!(checked(
+                services
+                    .mounts
+                    .save(
+                        context,
+                        SaveMount {
+                            mount,
+                            expected_binding_generation,
+                            durability: Durability::Local,
+                        }
+                    )
+                    .await?
+            )?)
         }
     };
     Ok(Json(value))

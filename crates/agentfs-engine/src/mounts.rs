@@ -46,6 +46,9 @@ impl MountService {
         request: &PrepareMount,
         generation: u64,
     ) -> Result<(Option<MountBinding>, MountBinding)> {
+        let branch = request
+            .branch
+            .ok_or_else(|| Error::integrity("mount branch is unresolved"))?;
         let path = self.driver.normalize_path(&request.path).await?;
         let mounts = self.runtime.state.mounts().await?;
         let old = mounts
@@ -59,7 +62,7 @@ impl MountService {
         }
         if request.access == AccessMode::ReadWrite
             && mounts.iter().any(|mount| {
-                mount.branch == request.branch
+                mount.branch == branch
                     && mount.access == AccessMode::ReadWrite
                     && mount.state != MountState::Released
                     && old.as_ref().is_none_or(|old| old.id != mount.id)
@@ -73,7 +76,7 @@ impl MountService {
         let new = MountBinding {
             id: MountId::new(),
             workspace: request.workspace,
-            branch: request.branch,
+            branch,
             revision: request.revision,
             generation,
             path,
@@ -86,35 +89,130 @@ impl MountService {
         Ok((old, new))
     }
 
-    pub(crate) async fn attach_session(
-        &self,
-        mut operation: OperationRecord,
-        old: Option<MountBinding>,
-        new: Option<MountBinding>,
-        session: SessionBinding,
-    ) -> Result<OperationRecord> {
-        operation.pending = Some(PendingAction::MountChange {
-            old: old.clone(),
-            new,
-            session: Some(Box::new(session)),
-        });
-        operation.mount_ready = Some(false);
-        operation.phase = if old.is_some() {
-            OperationPhase::WaitingForQuiesce
-        } else {
-            OperationPhase::CommittedMountPending
-        };
-        self.runtime
+    // 调用方持有 lifecycle 锁，分支创建与本机选择在同一个事务中提交。
+    async fn location_branch(&self, actor: &Principal, workspace: WorkspaceId) -> Result<Branch> {
+        if let Some(id) = self.runtime.state.selected_branch(workspace).await? {
+            let branch = self.runtime.branch(id).await?;
+            branch.check_write(self.runtime.location, branch.authority_epoch)?;
+            return Ok(branch);
+        }
+        let mut local: Vec<_> = self
+            .runtime
             .state
-            .commit(LocalCommit {
-                operations: vec![operation.clone()],
-                ..Default::default()
+            .branches(workspace)
+            .await?
+            .into_iter()
+            .filter(|branch| {
+                branch.owner == self.runtime.location
+                    && branch.state == BranchState::Writable
+                    && !branch.protected
             })
-            .await?;
-        if old.is_some() {
-            Ok(operation)
+            .collect();
+        let references = if local.is_empty() {
+            let references = self.revisions.publisher.discover(workspace).await?;
+            local = self
+                .runtime
+                .state
+                .branches(workspace)
+                .await?
+                .into_iter()
+                .filter(|branch| {
+                    branch.owner == self.runtime.location
+                        && branch.state == BranchState::Writable
+                        && !branch.protected
+                })
+                .collect();
+            references
         } else {
-            self.execute(operation).await
+            Vec::new()
+        };
+        if local.len() == 1 {
+            let branch = local.into_iter().next().unwrap();
+            self.runtime
+                .state
+                .commit(LocalCommit {
+                    selections: vec![WorkspaceSelection {
+                        workspace,
+                        branch: branch.id,
+                    }],
+                    ..Default::default()
+                })
+                .await?;
+            return Ok(branch);
+        }
+        if !local.is_empty() {
+            return Err(Error::invalid("select a local branch with branch_switch"));
+        }
+        let info = self
+            .runtime
+            .authorize(actor, workspace, None, Permission::Write)
+            .await?;
+        let initial = self
+            .revisions
+            .trees
+            .revision(workspace, info.initial_revision)
+            .await?;
+        let source_branch = initial.branch.ok_or_else(|| {
+            Error::new(
+                ErrorCode::RecoveryRequired,
+                "workspace has no root branch; select an explicit branch",
+            )
+        })?;
+        info.authorize(actor, Some(source_branch), Permission::Read)?;
+        let remote = references
+            .into_iter()
+            .find(|reference| reference.branch == source_branch && !reference.deleted)
+            .ok_or_else(|| {
+                Error::new(ErrorCode::NotFound, "workspace root branch is unavailable")
+            })?;
+        let source = remote.autosave_head.unwrap_or(remote.formal_head);
+        let revision = self.revisions.trees.revision(workspace, source).await?;
+        if revision.root != remote.working_root {
+            return Err(Error::integrity(
+                "root branch saved revision does not match its working tree",
+            ));
+        }
+        let name = format!("location-{}", self.runtime.location);
+        let context = match self
+            .operations
+            .start(
+                RequestContext {
+                    principal: actor.clone(),
+                    request_id: OperationId::new().to_string(),
+                },
+                "location_branch_create",
+                &(workspace, source, &name),
+                Some(workspace),
+                None,
+            )
+            .await?
+        {
+            OperationStart::New(context) => context,
+            OperationStart::Existing(_) => {
+                return Err(Error::integrity("generated request already exists"));
+            }
+        };
+        let _protection = self.runtime.objects.read().await;
+        let record = self
+            .revisions
+            .fork_locked(
+                context.clone(),
+                workspace,
+                source,
+                name,
+                Some(source_branch),
+                true,
+            )
+            .await;
+        match record {
+            Ok(record) => match record.result {
+                Some(CommandResult::Branch { branch }) => Ok(branch),
+                _ => Err(Error::integrity("created branch result is missing")),
+            },
+            Err(error) => {
+                self.operations.fail(&context, error.clone()).await?;
+                Err(error)
+            }
         }
     }
 
@@ -268,16 +366,6 @@ impl MountService {
                     }
                     let branch = self.runtime.branch(selection.branch).await?;
                     branch.check_write(self.runtime.location, branch.authority_epoch)?;
-                    let mut sessions = self.runtime.state.sessions(selection.workspace).await?;
-                    if sessions.iter().any(|session| {
-                        (session.branch == previous || session.branch == branch.id)
-                            && session.active_turn.is_some()
-                    }) {
-                        return Err(Error::new(
-                            ErrorCode::BranchBusy,
-                            "finish active turns before switching branches",
-                        ));
-                    }
                     if new
                         .as_ref()
                         .is_some_and(|new| new.generation != branch.generation)
@@ -294,15 +382,6 @@ impl MountService {
                         Some(new) => Some(self.install_new(new).await?),
                         None => None,
                     };
-                    sessions.retain(|session| {
-                        session.branch == previous && session.state != SessionState::Closed
-                    });
-                    for session in &mut sessions {
-                        session.branch = branch.id;
-                        if session.mount == old.as_ref().map(|mount| mount.id) {
-                            session.mount = binding.as_ref().map(|mount| mount.id);
-                        }
-                    }
                     operation.pending = None;
                     operation.phase = OperationPhase::Complete;
                     operation.local_saved = true;
@@ -313,14 +392,49 @@ impl MountService {
                         .state
                         .commit(LocalCommit {
                             selections: vec![selection],
-                            sessions,
                             operations: vec![operation.clone()],
                             ..Default::default()
                         })
                         .await?;
                     Ok(operation.clone())
                 }
-                PendingAction::MountChange { old, new, session } => {
+                PendingAction::MountChange { old, new } => {
+                    if let Some(new) = &new {
+                        let branch = self.runtime.branch(new.branch).await?;
+                        if branch.generation != new.generation
+                            || self
+                                .runtime
+                                .state
+                                .mount(new.id)
+                                .await?
+                                .is_some_and(|mount| {
+                                    mount.state == MountState::Released
+                                        || mount.generation != new.generation
+                                })
+                        {
+                            return Err(Error::new(
+                                ErrorCode::StaleBinding,
+                                "pending mount binding has changed",
+                            ));
+                        }
+                        if new.access == AccessMode::ReadWrite {
+                            branch.check_write(self.runtime.location, branch.authority_epoch)?;
+                        }
+                        if self.runtime.state.mounts().await?.iter().any(|mount| {
+                            mount.state != MountState::Released
+                                && mount.id != new.id
+                                && old.as_ref().is_none_or(|old| old.id != mount.id)
+                                && (mount.path == new.path
+                                    || (new.access == AccessMode::ReadWrite
+                                        && mount.access == AccessMode::ReadWrite
+                                        && mount.branch == new.branch))
+                        }) {
+                            return Err(Error::new(
+                                ErrorCode::MountBusy,
+                                "pending mount conflicts with an active binding",
+                            ));
+                        }
+                    }
                     if let Some(old) = &old {
                         self.remove_old(old).await?;
                     }
@@ -329,13 +443,7 @@ impl MountService {
                         None => None,
                     };
                     let mut commit = LocalCommit::default();
-                    if let Some(mut session) = session {
-                        session.mount = binding.as_ref().map(|binding| binding.id);
-                        operation.result = Some(CommandResult::Session {
-                            binding: (*session).clone(),
-                        });
-                        commit.sessions.push(*session);
-                    } else if let Some(binding) = binding {
+                    if let Some(binding) = binding {
                         operation.result = Some(CommandResult::Mount { binding });
                     } else {
                         operation.result = Some(CommandResult::Updated);
@@ -497,19 +605,6 @@ impl MountService {
         } else {
             None
         };
-        if self
-            .runtime
-            .state
-            .sessions(branch.workspace)
-            .await?
-            .iter()
-            .any(|session| session.branch == branch.id && session.active_turn.is_some())
-        {
-            return Err(Error::new(
-                ErrorCode::BranchBusy,
-                "branch has an active turn",
-            ));
-        }
         self.revisions
             .save_locked(
                 OperationContext { operation },
@@ -519,9 +614,6 @@ impl MountService {
                     kind: RevisionKind::Commit,
                     parents,
                     replace_root: Some(revision.root),
-                    turn: None,
-                    session: None,
-                    result: SaveResult::Revision,
                     durability: Durability::Local,
                 },
             )
@@ -591,22 +683,6 @@ impl MountApi for MountService {
                     )
                     .await;
             }
-            if self
-                .runtime
-                .state
-                .sessions(request.workspace)
-                .await?
-                .iter()
-                .any(|session| {
-                    (session.branch == previous || session.branch == request.branch)
-                        && session.active_turn.is_some()
-                })
-            {
-                return Err(Error::new(
-                    ErrorCode::BranchBusy,
-                    "finish active turns before switching branches",
-                ));
-            }
             let old = self
                 .runtime
                 .state
@@ -624,7 +700,7 @@ impl MountApi for MountService {
                         &operation.operation.principal,
                         &PrepareMount {
                             workspace: request.workspace,
-                            branch: request.branch,
+                            branch: Some(request.branch),
                             revision: None,
                             path: old.path,
                             access: AccessMode::ReadWrite,
@@ -684,9 +760,14 @@ impl MountApi for MountService {
     async fn prepare(
         &self,
         context: RequestContext,
-        request: PrepareMount,
+        mut request: PrepareMount,
     ) -> Result<OperationRecord> {
         let _lifecycle = self.runtime.lifecycle.lock().await;
+        request.path = self.driver.normalize_path(&request.path).await?;
+        self.revisions
+            .publisher
+            .load_workspace(&context.principal, request.workspace)
+            .await?;
         let permission = if request.access == AccessMode::ReadWrite {
             Permission::Write
         } else {
@@ -696,22 +777,12 @@ impl MountApi for MountService {
             .authorize(
                 &context.principal,
                 request.workspace,
-                Some(request.branch),
+                request.branch,
                 permission,
             )
             .await?;
-        let branch = self.runtime.branch(request.branch).await?;
-        if request.access == AccessMode::ReadWrite {
-            if request.revision.is_some() {
-                return Err(Error::invalid("revision mounts must be read-only"));
-            }
-            branch.check_write(self.runtime.location, branch.authority_epoch)?;
-        }
-        if let Some(revision) = request.revision {
-            self.revisions
-                .trees
-                .revision(request.workspace, revision)
-                .await?;
+        if request.revision.is_some() && request.access == AccessMode::ReadWrite {
+            return Err(Error::invalid("revision mounts must be read-only"));
         }
         let operation = match self
             .operations
@@ -720,29 +791,141 @@ impl MountApi for MountService {
                 "mount_prepare",
                 &request,
                 Some(request.workspace),
-                Some(request.branch),
+                request.branch,
             )
             .await?
         {
-            OperationStart::Existing(record) => return Ok(record),
+            OperationStart::Existing(record) => {
+                return if matches!(
+                    record.pending,
+                    Some(PendingAction::MountChange { old: None, .. })
+                ) {
+                    self.execute(record).await
+                } else {
+                    Ok(record)
+                };
+            }
             OperationStart::New(context) => context,
         };
         let result = async {
-            let (old, new) = self
+            if self
+                .runtime
+                .state
+                .operations(request.workspace)
+                .await?
+                .iter()
+                .any(|record| matches!(record.pending, Some(PendingAction::BranchSwitch { .. })))
+            {
+                return Err(Error::new(
+                    ErrorCode::Busy,
+                    "workspace has a pending branch switch",
+                ));
+            }
+            let old = self
+                .runtime
+                .state
+                .mounts()
+                .await?
+                .into_iter()
+                .find(|mount| mount.path == request.path && mount.state != MountState::Released);
+            if old
+                .as_ref()
+                .is_some_and(|mount| mount.workspace != request.workspace)
+            {
+                return Err(Error::new(
+                    ErrorCode::MountBusy,
+                    "mount path belongs to another workspace",
+                ));
+            }
+            let branch = match request.branch {
+                Some(id) => self.runtime.branch(id).await?,
+                None if request.access == AccessMode::ReadWrite => {
+                    self.location_branch(&operation.operation.principal, request.workspace)
+                        .await?
+                }
+                None => {
+                    let id = self
+                        .runtime
+                        .state
+                        .selected_branch(request.workspace)
+                        .await?
+                        .ok_or_else(|| {
+                            Error::invalid("read-only mount requires an explicit branch")
+                        })?;
+                    self.runtime.branch(id).await?
+                }
+            };
+            if branch.workspace != request.workspace {
+                return Err(Error::invalid("branch belongs to another workspace"));
+            }
+            self.runtime
+                .authorize(
+                    &operation.operation.principal,
+                    request.workspace,
+                    Some(branch.id),
+                    permission,
+                )
+                .await?;
+            if request.access == AccessMode::ReadWrite {
+                branch.check_write(self.runtime.location, branch.authority_epoch)?;
+            }
+            if let Some(revision) = request.revision {
+                self.revisions
+                    .trees
+                    .revision(request.workspace, revision)
+                    .await?;
+            }
+            request.branch = Some(branch.id);
+            if let Some(old) = old {
+                if old.branch != branch.id
+                    || old.revision != request.revision
+                    || old.access != request.access
+                    || old.durability != request.durability
+                {
+                    return Err(Error::new(
+                        ErrorCode::MountBusy,
+                        "mount path has a different binding; switch or unmount it explicitly",
+                    ));
+                }
+                if old.principal != operation.operation.principal {
+                    return Err(Error::new(
+                        ErrorCode::PermissionDenied,
+                        "mount belongs to another principal",
+                    ));
+                }
+                if old.generation != branch.generation {
+                    return Err(Error::new(
+                        ErrorCode::StaleBinding,
+                        "mount generation changed",
+                    ));
+                }
+                let ready = self.install_new(&old).await?;
+                let mut record = operation.operation.clone();
+                record.branch = Some(branch.id);
+                record.local_saved = true;
+                record.mount_ready = Some(true);
+                record.phase = OperationPhase::Complete;
+                record.result = Some(CommandResult::Mount { binding: ready });
+                self.runtime
+                    .state
+                    .commit(LocalCommit {
+                        operations: vec![record.clone()],
+                        ..Default::default()
+                    })
+                    .await?;
+                return Ok(record);
+            }
+            let (_, new) = self
                 .plan(&operation.operation.principal, &request, branch.generation)
                 .await?;
             let mut record = operation.operation.clone();
+            record.branch = Some(branch.id);
             record.pending = Some(PendingAction::MountChange {
-                old: old.clone(),
+                old: None,
                 new: Some(new),
-                session: None,
             });
             record.mount_ready = Some(false);
-            record.phase = if old.is_some() {
-                OperationPhase::WaitingForQuiesce
-            } else {
-                OperationPhase::Saving
-            };
+            record.phase = OperationPhase::Saving;
             self.runtime
                 .state
                 .commit(LocalCommit {
@@ -750,11 +933,84 @@ impl MountApi for MountService {
                     ..Default::default()
                 })
                 .await?;
-            if old.is_some() {
-                Ok(record)
-            } else {
-                self.execute(record).await
+            self.execute(record).await
+        }
+        .await;
+        match result {
+            Ok(record) => Ok(record),
+            Err(error) => self.operations.fail(&operation, error).await,
+        }
+    }
+
+    async fn save(&self, context: RequestContext, request: SaveMount) -> Result<OperationRecord> {
+        let _lifecycle = self.runtime.lifecycle.lock().await;
+        let mount = self
+            .runtime
+            .state
+            .mount(request.mount)
+            .await?
+            .ok_or_else(|| Error::new(ErrorCode::NotFound, "mount does not exist"))?;
+        self.runtime
+            .authorize(
+                &context.principal,
+                mount.workspace,
+                Some(mount.branch),
+                Permission::Write,
+            )
+            .await?;
+        let operation = match self
+            .operations
+            .start(
+                context,
+                "mount_save",
+                &request,
+                Some(mount.workspace),
+                Some(mount.branch),
+            )
+            .await?
+        {
+            OperationStart::Existing(record) => return Ok(record),
+            OperationStart::New(context) => context,
+        };
+        let result = async {
+            if mount.state != MountState::Ready
+                || mount.generation != request.expected_binding_generation
+            {
+                return Err(Error::new(
+                    ErrorCode::StaleBinding,
+                    "mount is no longer ready at the requested generation",
+                ));
             }
+            if mount.access != AccessMode::ReadWrite {
+                return Err(Error::new(ErrorCode::ReadOnly, "mount is read-only"));
+            }
+            let record = {
+                let _gate = self.runtime.lock_branch(mount.branch).await;
+                let _protection = self.runtime.objects.read().await;
+                let branch = self.runtime.branch(mount.branch).await?;
+                if branch.generation != mount.generation {
+                    return Err(Error::new(
+                        ErrorCode::StaleBinding,
+                        "branch generation changed",
+                    ));
+                }
+                self.revisions
+                    .save_locked(
+                        operation.clone(),
+                        SaveRevision {
+                            message: None,
+                            guard: BranchGuard::from(&branch),
+                            kind: RevisionKind::Autosave,
+                            parents: None,
+                            replace_root: None,
+                            durability: request.durability,
+                        },
+                    )
+                    .await?
+            };
+            self.revisions
+                .finish_durability(record, request.durability)
+                .await
         }
         .await;
         match result {
@@ -882,7 +1138,6 @@ impl MountApi for MountService {
         record.pending = Some(PendingAction::MountChange {
             old: Some(mount),
             new: None,
-            session: None,
         });
         record.phase = OperationPhase::WaitingForQuiesce;
         record.mount_ready = Some(false);
@@ -918,19 +1173,6 @@ impl RevisionTransition for MountService {
                 .await?;
             if merge.is_none() {
                 branch.check_write(self.runtime.location, target.authority_epoch)?;
-            }
-            if self
-                .runtime
-                .state
-                .sessions(branch.workspace)
-                .await?
-                .iter()
-                .any(|session| session.branch == branch.id && session.active_turn.is_some())
-            {
-                return Err(Error::new(
-                    ErrorCode::BranchBusy,
-                    "branch has an active turn",
-                ));
             }
             let mount = self
                 .runtime

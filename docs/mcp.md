@@ -25,11 +25,11 @@ Replace both paths with actual absolute paths; use `agentfs.exe` on Windows. The
 
 For direct Streamable HTTP, use `http://127.0.0.1:7421/mcp` and `Authorization: Bearer <token-file-contents>`. Use an MCP client that performs initialization and preserves the returned session information. The accepted Host values are the bound address and `localhost:<port>`. A supplied Origin must match the request's own HTTP origin or `allowed_origins`; native CLI/stdio connections omit Origin. The daemon binds only to loopback; access from other machines requires an authenticated TLS proxy preserving an accepted Host value.
 
-The server advertises the MCP `tools` capability. It provides 32 tools, including their input JSON schemas and annotations. Read the connected server's catalog with `tools/list` or:
+The server advertises the MCP `tools` capability. It provides 29 tools, including their input JSON schemas and annotations. Read the connected server's catalog with `tools/list` or:
 
 ```sh
 agentfs tools > tools.json
-jq '.tools[] | select(.name == "session_open") | .inputSchema' tools.json
+jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 ```
 
 ## Argument forms and results
@@ -66,7 +66,6 @@ IDs such as `workspace`, `branch`, `revision`, `merge`, `operation`, and `locati
 | Type | Fields and behavior |
 | --- | --- |
 | `BranchGuard` | Required `branch`, `authority_epoch`, `generation`, `expected_head`; optional nullable `mutation_seq`. Obtain the branch from `workspace_status.branches`, map `id` to `branch` and `formal_head` to `expected_head`, and copy the remaining values. Including `mutation_seq` also detects unsaved mutations. Refresh before each new guarded operation. |
-| `SessionKey` | Required `workspace`, `app_namespace`, `session_id`, `location`. Use the current daemon's `workspace_status.location`. Namespace and session ID must be nonempty, without control characters, and at most 512 UTF-8 bytes each. |
 | `durability` | `local` by default; `remote` requests remote confirmation. Inspect the receipt if remote publication fails. |
 | `RevisionRange` | Required `workspace`, `revision`; optional nullable `paths`. Omitted/null selects `/`, including all content. A provided list must be nonempty; directory paths include descendants. |
 | `Grant` | Required `principal` and `permissions`; optional nullable `branch`. Permissions are `read`, `write`, `merge`, `manage`; `manage` authorizes every permission. A null branch applies throughout the workspace. |
@@ -83,12 +82,8 @@ Fields below are inside `request`. A suffix `?` means the field may be omitted. 
 | `workspace_export` | `workspace`, `revision`, `destination`, `paths?` | Exports selected paths into a new allowed host directory. Omitted/null paths select the whole revision. |
 | `revision_commit` | `guard`, `kind`, `message?`, `durability?` | `kind` accepts `commit` or `checkpoint`; returns `result.revision` and `result.branch`. `message` permits up to 4096 UTF-8 bytes without NUL. |
 | `branch_create` | `workspace`, `name`, `source?`, `source_branch?` | Provide at most one source. Omission uses the selected branch; branch sources include unsaved working content. Returns `result.branch` without changing the selection. |
-| `branch_switch` | `workspace`, `branch` | Saves the previous branch and updates the workspace selection and attachments; active turns must finish and existing mounts require `mount_release`. |
+| `branch_switch` | `workspace`, `branch` | Save the previous branch and update this location's selection and mount; occupied mounts require `mount_release`. |
 | `branch_restore` | `guard`, `revision`, `durability?` | Restores a branch, with mount release when required. |
-| `session_open` | `key`, `branch?`, `mount_path?`, `durability?` | Attaches to an existing branch, defaulting to the workspace selection. Omit `mount_path` for an unmounted session. Returns `result.binding`. |
-| `session_resume` | `key`, `mount_path?`, `recovery_action?`, `turn_id?`, `durability?` | For recovery with an active turn, supply that `turn_id` and `recovery_action: "continue"` or `"interrupt"`. |
-| `session_pause` | `key`, `durability?` | Saves and pauses the session, releasing its mount when required. |
-| `session_close` | `key`, `durability?` | Saves and closes the session, releasing its mount when required. |
 | `sync` | `workspace`, `direction`, `branches?` | `direction`: `push`, `pull`, `both`; omission/null of `branches` selects all. `both` pushes before pulling. On pull, discovery imports remote history before filtering branch IDs in the result. |
 | `cache_prefetch` | `workspace`, `revision`, `paths?` | Downloads a `RevisionRange`; `result.status`. |
 | `cache_pin` | `range`, `enabled` | `range` is a `RevisionRange`; `true` downloads and protects content, `false` removes that pin. |
@@ -96,7 +91,8 @@ Fields below are inside `request`. A suffix `?` means the field may be omitted. 
 | `merge_prepare` | `workspace`, `source`, `target`, `base?` | `source` and optional `base` are revision IDs; `target` is a `BranchGuard`; returns `result.candidate`. |
 | `merge_resolve` | `merge`, `candidate`, `resolutions` | `candidate` is the current candidate revision ID; edits any candidate path using `source`, `target`, `delete`, `replace` or `copy` and returns a new candidate. |
 | `merge_apply` | `merge`, `candidate`, `target`, `durability?` | Requires resolved conflicts and a clean target matching its `BranchGuard`; may require mount release. |
-| `mount_prepare` | `workspace`, `branch`, `path`, `access`, `revision?`, `durability?` | `access`: `read_write` or `read_only`. A supplied revision requires `read_only`; writable mounts require local ownership and an unprotected branch. |
+| `mount_prepare` | `workspace`, `path`, `branch?`, `access?`, `revision?`, `durability?` | Defaults to `read_write`. An omitted branch reuses this location's selection; a new location imports the workspace and creates its branch from the latest published root revision. Identical requests reuse the binding. An explicit branch must exist locally; a revision requires `read_only`. |
+| `mount_save` | `mount`, `expected_binding_generation`, `durability?` | Save the mounted files and return a revision receipt. A stale binding returns `STALE_BINDING`. |
 | `mount_release` | `operation`, `expected_binding_generation` | Continues a pending operation after processes release the original mount. The operation ID comes from the pending receipt. |
 | `mount_unmount` | `mount`, `generation` | Uses the binding ID and generation from `workspace_status.mounts`; requests normal unmount. |
 
@@ -128,7 +124,6 @@ Call `workspace_status` for an existing workspace and inspect `capabilities`:
 | `remote_configured` | Whether S3 is currently enabled; a saved profile with `enabled: false` returns `false`. This flag does not test connectivity or credentials. |
 | `automatic_text_merge` | `false`; conflicts require explicit resolution. |
 | `physical_remote_gc` | `false`; automatic deletion of unreferenced historical objects in S3 is disabled. |
-| `single_location_session` | `false`; global coordination does not enforce a single location for each session. Branch ownership still controls writing. |
 
 File editing normally uses the mounted native path; the MCP tools manage workspaces, versions, and lifecycle. The catalog marks the ten queries `readOnlyHint: true` and `destructiveHint: false`; commands and cancellation use the opposite values. All tools currently advertise `idempotentHint: true` and `openWorldHint: true`. These annotations describe tool behavior; authentication, grants, request identities, and state checks enforce access and retries.
 

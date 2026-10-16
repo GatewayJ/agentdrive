@@ -30,8 +30,6 @@ pub struct LocalCommit {
     pub branches: Vec<Branch>,
     pub node_changes: Vec<NodeChange>,
     pub revisions: Vec<Revision>,
-    pub sessions: Vec<SessionBinding>,
-    pub turns: Vec<TurnRecord>,
     pub operations: Vec<OperationRecord>,
     pub mounts: Vec<MountBinding>,
     pub merges: Vec<MergeCandidate>,
@@ -82,9 +80,6 @@ pub trait LocalStateStore: Send + Sync {
     async fn node_at(&self, branch: BranchId, path: &WorkspacePath) -> Result<Option<Node>>;
     async fn revision(&self, id: RevisionId) -> Result<Option<Revision>>;
     async fn revisions(&self, workspace: WorkspaceId) -> Result<Vec<Revision>>;
-    async fn session(&self, key: &SessionKey) -> Result<Option<SessionBinding>>;
-    async fn sessions(&self, workspace: WorkspaceId) -> Result<Vec<SessionBinding>>;
-    async fn turns(&self, workspace: WorkspaceId) -> Result<Vec<TurnRecord>>;
     async fn operation(&self, id: OperationId) -> Result<Option<OperationRecord>>;
     async fn operation_by_request(
         &self,

@@ -75,17 +75,7 @@ pub struct SaveRevision {
     pub kind: RevisionKind,
     pub parents: Option<Vec<RevisionId>>,
     pub replace_root: Option<ObjectRef>,
-    pub turn: Option<TurnRecord>,
-    pub session: Option<SessionBinding>,
     pub durability: Durability,
-    pub result: SaveResult,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum SaveResult {
-    Revision,
-    Session,
-    Turn,
 }
 
 #[async_trait]
@@ -111,6 +101,7 @@ pub trait RevisionTransition: Send + Sync {
 
 #[async_trait]
 pub trait ReplicaPublisher: Send + Sync {
+    async fn load_workspace(&self, actor: &Principal, workspace: WorkspaceId) -> Result<()>;
     async fn publish_workspace(&self, workspace: WorkspaceId) -> Result<()>;
     async fn drain(&self, workspace: WorkspaceId, branch: Option<BranchId>) -> Result<()>;
     async fn build_job(
@@ -118,7 +109,6 @@ pub trait ReplicaPublisher: Send + Sync {
         branch: &Branch,
         new_revision: Option<&Revision>,
         operation: &OperationRecord,
-        turn: Option<&TurnRecord>,
     ) -> Result<SyncJob>;
     async fn discover(&self, workspace: WorkspaceId) -> Result<Vec<BranchRef>>;
 }

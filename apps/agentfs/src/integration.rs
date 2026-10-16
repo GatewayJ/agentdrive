@@ -28,8 +28,6 @@ pub struct Options {
     #[arg(long)]
     workspace: WorkspaceId,
     #[arg(long)]
-    session_id: String,
-    #[arg(long)]
     mount_path: PathBuf,
     #[arg(required = true, last = true)]
     command: Vec<OsString>,
@@ -39,14 +37,15 @@ struct Lifecycle {
     http: reqwest::Client,
     endpoint: String,
     token: String,
-    key: Value,
+    workspace: WorkspaceId,
+    mount_path: PathBuf,
+    binding: Value,
 }
 
 impl Lifecycle {
     async fn event(&self, request_id: &str, event: &str, fields: Value) -> Result<Value> {
         let mut request = fields;
         request["event"] = json!(event);
-        request["key"] = self.key.clone();
         request["request_id"] = json!(request_id);
         for attempt in 0..3 {
             let response = async {
@@ -84,24 +83,28 @@ impl Lifecycle {
         unreachable!()
     }
 
-    async fn begin(&self, turn: &str) -> Result<()> {
-        let receipt = self
-            .event(&format!("{turn}-begin"), "begin", json!({"turn_id": turn}))
+    async fn begin(&mut self, turn: &str) -> Result<()> {
+        let result = self
+            .event(
+                &format!("{turn}-check"),
+                "check",
+                json!({
+                    "workspace": self.workspace, "mount_path": self.mount_path,
+                }),
+            )
             .await?;
-        if receipt["result"]["record"]["status"] != "running" {
-            return Err(Error::new(
-                ErrorCode::TurnResultConflict,
-                "turn already completed",
-            ));
-        }
+        self.binding = result["binding"].clone();
         Ok(())
     }
 
-    async fn end(&self, turn: &str, status: &str) -> Result<()> {
+    async fn end(&self, turn: &str) -> Result<()> {
         self.event(
-            &format!("{turn}-end-{status}"),
-            "end",
-            json!({"turn_id": turn, "status": status}),
+            &format!("{turn}-save"),
+            "save",
+            json!({
+                "mount": self.binding["id"],
+                "expected_binding_generation": self.binding["generation"],
+            }),
         )
         .await?;
         Ok(())
@@ -148,9 +151,9 @@ fn rpc_error(message: &Value, error: &Error) -> Value {
 }
 
 impl Bridge {
-    async fn finish(&mut self, status: &str) -> Result<()> {
+    async fn finish(&mut self) -> Result<()> {
         if let Some(active) = &self.active {
-            self.lifecycle.end(&active.local, status).await?;
+            self.lifecycle.end(&active.local).await?;
             if let Some(external) = &active.external {
                 self.completed
                     .push_back((active.thread.clone(), external.clone()));
@@ -343,13 +346,11 @@ impl Bridge {
                         return Err(Error::invalid("completion does not match the managed turn"));
                     }
                     active.external = Some(external);
-                    let status = match message["params"]["turn"]["status"].as_str() {
-                        Some("completed") => "completed",
-                        Some("failed") => "failed",
-                        Some("interrupted") => "cancelled",
+                    match message["params"]["turn"]["status"].as_str() {
+                        Some("completed" | "failed" | "interrupted") => (),
                         _ => return Err(Error::invalid("unknown app-server turn status")),
-                    };
-                    self.finish(status).await?;
+                    }
+                    self.finish().await?;
                 }
             }
         }
@@ -363,16 +364,16 @@ impl Bridge {
                 .is_some_and(|active| active.request.as_ref() == Some(&request))
             {
                 if message.get("error").is_some() {
-                    self.finish("failed").await?;
+                    self.finish().await?;
                 } else if self.protocol == Protocol::Acp && pending.method == "session/prompt" {
-                    let status = match message["result"]["stopReason"].as_str() {
-                        Some("cancelled") => "cancelled",
-                        Some("end_turn" | "max_tokens" | "max_turn_requests" | "refusal") => {
-                            "completed"
-                        }
+                    match message["result"]["stopReason"].as_str() {
+                        Some(
+                            "cancelled" | "end_turn" | "max_tokens" | "max_turn_requests"
+                            | "refusal",
+                        ) => (),
                         _ => return Err(Error::invalid("unknown ACP stop reason")),
-                    };
-                    self.finish(status).await?;
+                    }
+                    self.finish().await?;
                 } else if self.protocol == Protocol::CodexAppServer
                     && matches!(pending.method.as_str(), "turn/start" | "review/start")
                 {
@@ -466,60 +467,25 @@ pub async fn run(endpoint: &str, token: String, options: Options) -> Result<bool
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|error| Error::invalid(error.to_string()))?;
-    let status: Value = http
-        .get(format!("{base}api/workspaces/{}", options.workspace))
-        .bearer_auth(&token)
-        .send()
-        .await
-        .map_err(|error| Error::new(ErrorCode::Unavailable, error.to_string()))?
-        .error_for_status()
-        .map_err(|error| Error::new(ErrorCode::Unavailable, error.to_string()))?
-        .json()
-        .await
-        .map_err(|error| Error::new(ErrorCode::Unavailable, error.to_string()))?;
-    let namespace = if options.protocol == Protocol::Acp {
-        "acp"
-    } else {
-        "codex-app-server"
-    };
-    let key = json!({"workspace":options.workspace,"app_namespace":namespace,"session_id":options.session_id,"location":status["status"]["location"]});
-    let lock_name = object_ref(ObjectKind::RecordIndex, &serde_json::to_vec(&key)?)
-        .id
-        .to_string();
-    let cache = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|path| PathBuf::from(path).join(".cache")))
-        .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
-        .ok_or_else(|| Error::invalid("a user cache directory is required"))?
-        .join("agentfs/integrations");
-    std::fs::create_dir_all(&cache)?;
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(cache.join(format!("{lock_name}.lock")))?;
-    lock.try_lock().map_err(|_| {
-        Error::new(
-            ErrorCode::Busy,
-            "this integration session is already connected",
-        )
-    })?;
-    let lifecycle = Lifecycle {
+    let mut lifecycle = Lifecycle {
         http,
         endpoint: format!("{base}api/lifecycle"),
         token,
-        key,
+        workspace: options.workspace,
+        mount_path: options.mount_path.clone(),
+        binding: Value::Null,
     };
     let connection = OperationId::new().to_string();
     let attached = lifecycle
         .event(
             &format!("{connection}-attach"),
             "attach",
-            json!({"mount_path":options.mount_path}),
+            json!({"workspace": options.workspace, "mount_path":options.mount_path}),
         )
         .await?;
     let mount_path = PathBuf::from(text(&attached, "mount_path")?);
+    lifecycle.mount_path = mount_path.clone();
+    lifecycle.binding = attached["binding"].clone();
     let mut bridge = Bridge {
         protocol: options.protocol,
         mount_path,
@@ -561,17 +527,7 @@ pub async fn run(endpoint: &str, token: String, options: Options) -> Result<bool
         result?;
         Ok(status.is_none_or(|status| status.success()))
     }.await;
-    let saved = bridge.finish("interrupted").await;
-    let detached = if saved.is_ok() {
-        bridge
-            .lifecycle
-            .event(&format!("{connection}-detach"), "detach", json!({}))
-            .await
-            .map(|_| ())
-    } else {
-        saved
-    };
-    detached?;
+    bridge.finish().await?;
     result
 }
 
@@ -647,14 +603,16 @@ mod tests {
             http: reqwest::Client::new(),
             endpoint,
             token: "test".into(),
-            key: json!({"session_id":"same"}),
+            workspace: WorkspaceId::new(),
+            mount_path: PathBuf::from("/mount"),
+            binding: json!({"id":"mount", "generation":1}),
         };
         assert_eq!(
             lifecycle
                 .event(
                     "stable",
-                    "end",
-                    json!({"turn_id":"turn","status":"completed"})
+                    "save",
+                    json!({"mount":"mount","expected_binding_generation":1})
                 )
                 .await
                 .unwrap(),

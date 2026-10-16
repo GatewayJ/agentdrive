@@ -76,18 +76,15 @@ async fn native_mount_supports_file_io_durable_snapshots_and_read_only_history()
     let opened = success(
         engine
             .services
-            .sessions
-            .open(
+            .mounts
+            .prepare(
                 context(),
-                OpenSession {
-                    key: SessionKey {
-                        workspace: workspace.id,
-                        app_namespace: "tests".into(),
-                        session_id: "native".into(),
-                        location: engine.runtime.location,
-                    },
+                PrepareMount {
+                    workspace: workspace.id,
                     branch: None,
-                    mount_path: Some(path.clone()),
+                    revision: None,
+                    path: path.clone(),
+                    access: AccessMode::ReadWrite,
                     durability: Durability::Local,
                 },
             )
@@ -96,8 +93,8 @@ async fn native_mount_supports_file_io_durable_snapshots_and_read_only_history()
     );
     assert_eq!(opened.mount_ready, Some(true));
     assert_eq!(driver.normalize_path(&path).await.unwrap(), normalized);
-    let session = match opened.result.unwrap() {
-        CommandResult::Session { binding } => binding,
+    let binding = match opened.result.unwrap() {
+        CommandResult::Mount { binding } => binding,
         _ => panic!("wrong result"),
     };
     let operation_path = path.clone();
@@ -150,7 +147,7 @@ async fn native_mount_supports_file_io_durable_snapshots_and_read_only_history()
     })
     .await
     .unwrap();
-    let branch = local.branch(session.branch).await.unwrap().unwrap();
+    let branch = local.branch(binding.branch).await.unwrap().unwrap();
     let committed = success(
         engine
             .services
@@ -180,7 +177,7 @@ async fn native_mount_supports_file_io_durable_snapshots_and_read_only_history()
                 context(),
                 PrepareMount {
                     workspace: workspace.id,
-                    branch: session.branch,
+                    branch: Some(binding.branch),
                     revision: Some(revision),
                     path: history_path.clone(),
                     access: AccessMode::ReadOnly,

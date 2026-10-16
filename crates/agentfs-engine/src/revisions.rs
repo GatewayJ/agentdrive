@@ -202,10 +202,6 @@ impl RevisionService {
             branch.autosave_head = if reuse { None } else { Some(revision_id) };
             branch.dirty = branch.working_root != formal.root;
         }
-        let mut turn = request.turn;
-        if let Some(turn) = &mut turn {
-            turn.result_revision = Some(revision_id);
-        }
         let mut operation = context.operation;
         operation.workspace = Some(branch.workspace);
         operation.branch = Some(branch.id);
@@ -215,22 +211,9 @@ impl RevisionService {
         } else {
             OperationPhase::LocalSaved
         };
-        operation.result = Some(match request.result {
-            SaveResult::Turn => CommandResult::Turn {
-                record: turn
-                    .clone()
-                    .ok_or_else(|| Error::integrity("turn result is missing"))?,
-            },
-            SaveResult::Session => CommandResult::Session {
-                binding: request
-                    .session
-                    .clone()
-                    .ok_or_else(|| Error::integrity("session result is missing"))?,
-            },
-            SaveResult::Revision => CommandResult::Revision {
-                revision: revision_id,
-                branch: branch.id,
-            },
+        operation.result = Some(CommandResult::Revision {
+            revision: revision_id,
+            branch: branch.id,
         });
         let mut merges = Vec::new();
         if let Some(PendingAction::ApplyRevision {
@@ -248,7 +231,7 @@ impl RevisionService {
         }
         let job = self
             .publisher
-            .build_job(&branch, revision.as_ref(), &operation, turn.as_ref())
+            .build_job(&branch, revision.as_ref(), &operation)
             .await?;
         self.runtime
             .state
@@ -261,8 +244,6 @@ impl RevisionService {
                     nodes: captured.nodes,
                 }],
                 operations: vec![operation.clone()],
-                turns: turn.into_iter().collect(),
-                sessions: request.session.into_iter().collect(),
                 merges,
                 sync_jobs: vec![job],
                 ..Default::default()
@@ -286,9 +267,6 @@ impl RevisionService {
             kind: RevisionKind::Autosave,
             parents: None,
             replace_root: None,
-            turn: None,
-            session: None,
-            result: SaveResult::Revision,
             durability: Durability::Local,
         };
         let start = self
@@ -325,6 +303,7 @@ impl RevisionService {
         source: RevisionId,
         name: String,
         source_branch: Option<BranchId>,
+        select: bool,
     ) -> Result<OperationRecord> {
         validate_label(&name, "branch name")?;
         let revision = self.trees.revision(workspace, source).await?;
@@ -363,13 +342,18 @@ impl RevisionService {
         operation.result = Some(CommandResult::Branch {
             branch: branch.clone(),
         });
-        let job = self
-            .publisher
-            .build_job(&branch, None, &operation, None)
-            .await?;
+        let job = self.publisher.build_job(&branch, None, &operation).await?;
         self.runtime
             .state
             .commit(LocalCommit {
+                selections: if select {
+                    vec![WorkspaceSelection {
+                        workspace,
+                        branch: id,
+                    }]
+                } else {
+                    Vec::new()
+                },
                 new_branches: vec![branch],
                 node_changes: vec![NodeChange::Replace {
                     branch: id,
@@ -433,9 +417,6 @@ impl DurabilityService for RevisionService {
                 kind: RevisionKind::Autosave,
                 parents: None,
                 replace_root: None,
-                turn: None,
-                session: None,
-                result: SaveResult::Revision,
                 durability,
             };
             let context = RequestContext {
@@ -544,9 +525,6 @@ impl RevisionApi for VersionService {
             kind: request.kind.into(),
             parents: None,
             replace_root: None,
-            turn: None,
-            session: None,
-            result: SaveResult::Revision,
             durability: request.durability,
         };
         match self.revisions.save(operation.clone(), save).await {
@@ -643,6 +621,7 @@ impl RevisionApi for VersionService {
                     source,
                     request.name,
                     source_branch,
+                    false,
                 )
                 .await
         }

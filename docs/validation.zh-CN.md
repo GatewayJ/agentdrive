@@ -10,7 +10,7 @@ make -j "$(getconf _NPROCESSORS_ONLN)" build
 python3 tests/cli_smoke.py
 ```
 
-流程测试覆盖并发请求重试、原子追加、持有打开句柄时重命名、重启恢复、不可变轮次结果、自动保存时间、远端失败和确认丢失、所有权交接、合并文件编辑、过期挂载变更、缓存保留与回收，以及离线预取。持久化测试覆盖摘要失败、读取租约、事务回滚、请求恢复和未知格式拒绝。MCP 测试验证并发客户端、principal 隔离、身份验证，以及 Host/Origin 策略。CLI 测试启动实际进程，验证 stdio MCP、导入和导出的内容与元数据、允许的路径，以及进程重启。
+流程测试覆盖并发请求重试、原子追加、持有打开句柄时重命名、重启恢复、挂载保存幂等性、并发挂载复用、不同 location 的分支独立性、自动保存时间、远端失败和确认丢失、所有权交接、合并文件编辑、过期挂载变更、缓存保留与回收，以及离线预取。持久化测试覆盖摘要失败、读取租约、事务回滚、请求恢复和未知格式拒绝。MCP 测试验证并发客户端、principal 隔离、身份验证，以及 Host/Origin 策略。CLI 测试启动实际进程，验证 stdio MCP、导入和导出的内容与元数据、允许的路径，以及进程重启。
 
 ## 原生文件系统
 
@@ -41,7 +41,7 @@ python3 tests/replica_smoke.py
 python3 tests/storage_smoke.py
 ```
 
-后端测试覆盖竞争条件下的引用创建、过期条件更新、空文件、摘要拒绝，以及 20 MiB 对象的分段发布。两个守护进程的测试会推送导入的版本，在另一个 location 拉取并导出该版本，并通过实际 S3 后端交接分支所有权。
+后端测试覆盖竞争条件下的引用创建、过期条件更新、空文件、摘要拒绝，以及 20 MiB 对象的分段发布。同步测试会推送导入的版本，在另一个 location 拉取并导出该版本，并通过实际 S3 后端交接分支所有权。启用原生驱动时，还会让三个 location 挂载同一工作区，验证自动导入工作区、从已发布根分支创建自有分支、重复挂载复用分支与关联，以及各自文件内容的独立性。
 
 `storage_smoke.py` 验证 daemon PID 保持不变时的本地/S3 切换、凭据保存、切换失败恢复、配置文件修改、历史导出和重启恢复。
 
@@ -58,7 +58,7 @@ python3 tests/storage_smoke.py
 
 [GitHub Actions](https://github.com/GatewayJ/agentfs/actions) 会为每次提交运行仓库内的测试矩阵。macOS 原生挂载需要安装并启用 macFUSE 驱动，该内核挂载测试尚未在开发环境执行。
 
-[CLI 使用](cli.zh-CN.md)中的创建、导入、读取、导出和会话示例已通过临时守护进程执行验证。[MCP 参数表](mcp.zh-CN.md)已与运行中的守护进程返回的 32 个工具 schema 核对。S3 配置已根据守护进程配置加载器、适配器，以及锁定版本 `object_store` 的凭据和 endpoint 选择逻辑检查。上述文档检查不代表已经在 AWS S3 部署环境完成验证。
+[CLI 使用](cli.zh-CN.md)中的创建、导入、读取、导出和挂载示例已通过临时守护进程执行验证。[MCP 参数表](mcp.zh-CN.md)已与运行中的守护进程返回的 29 个工具 schema 核对。S3 配置已根据守护进程配置加载器、适配器，以及锁定版本 `object_store` 的凭据和 endpoint 选择逻辑检查。上述文档检查不代表已经在 AWS S3 部署环境完成验证。
 
 生命周期、分支及 Dashboard 的补充检查：
 
@@ -67,6 +67,6 @@ python3 tests/lifecycle_smoke.py
 python3 tests/config_smoke.py
 ```
 
-`lifecycle_smoke.py` 需要原生挂载支持，覆盖 ACP 和 Codex app-server 协议中的完成、取消、失败、进程中断、重复请求、自动保存、daemon 重启、重连，以及已有挂载上的 CLI 分支切换。常规 Rust 测试还覆盖响应正文丢失后的重试、共享分支的回合互斥、切换时的文件句柄检查、分支选择持久化和 HTTP 权限。浏览器检查覆盖分支树、版本信息、令牌登录和小屏幕布局。本机 Codex app-server 的 initialize 与 thread/start 已验证工作目录指向 OpenCSG Workspace 挂载；完整任务流程通过协议测试程序验证。
+`lifecycle_smoke.py` 需要原生挂载支持，覆盖 ACP 和 Codex app-server 协议中的完成、取消、失败、进程中断、重复请求、自动保存、daemon 重启、重连、两个 Agent 连接共用挂载，以及已有挂载上的 CLI 分支切换。常规 Rust 测试还覆盖响应正文丢失后的重试、多个连接共用同一个挂载、切换时的文件句柄检查、分支选择持久化和 HTTP 权限。浏览器检查覆盖分支树、版本信息、令牌登录和小屏幕布局。本机 Codex app-server 的 initialize 与 thread/start 已验证工作目录指向 OpenCSG Workspace 挂载；完整任务流程通过协议测试程序验证。
 
 `config_smoke.py` 使用临时目录运行 daemon，验证文件热更新、错误配置保留、启动配置修改提示、单个缓存容量字段的 HTTP 保存、版本冲突和重启恢复。该脚本无需挂载驱动。配置测试覆盖已有文件的读取和快照一致性；engine 缓存测试验证修改容量后按 75% 目标清理，并保留当前分支内容。

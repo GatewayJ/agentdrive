@@ -65,12 +65,6 @@ impl SnapshotService {
                 self.working.discard_branch(workspace.id, branch.id).await?;
             }
             let mut commit = LocalCommit::default();
-            for mut session in self.runtime.state.sessions(workspace.id).await? {
-                if session.state == SessionState::Active || session.active_turn.is_some() {
-                    session.state = SessionState::RecoveryRequired;
-                    commit.sessions.push(session);
-                }
-            }
             for mut operation in self.runtime.state.operations(workspace.id).await? {
                 if matches!(
                     operation.phase,

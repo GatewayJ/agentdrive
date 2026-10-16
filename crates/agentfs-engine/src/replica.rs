@@ -217,18 +217,7 @@ impl ReplicaService {
                         .await?;
                     commit.revisions.push(revision);
                 }
-                HistoryRecord::Turn(turn) => {
-                    if turn.session.workspace != reference.workspace {
-                        return Err(Error::integrity("turn belongs to another workspace"));
-                    }
-                    let existing = self.runtime.state.turns(reference.workspace).await?;
-                    if !existing
-                        .iter()
-                        .any(|old| old.session == turn.session && old.turn_id == turn.turn_id)
-                    {
-                        commit.turns.push(turn);
-                    }
-                }
+                HistoryRecord::LegacyTurn(_) => {}
                 HistoryRecord::Operation(operation) => {
                     if operation.workspace != Some(reference.workspace) {
                         return Err(Error::integrity("operation belongs to another workspace"));
@@ -281,6 +270,59 @@ pub(crate) fn decode_branch_ref(
 
 #[async_trait]
 impl ReplicaPublisher for ReplicaService {
+    async fn load_workspace(&self, actor: &Principal, workspace: WorkspaceId) -> Result<()> {
+        if self.runtime.state.workspace(workspace).await?.is_none() {
+            let _protection = self.runtime.objects.read().await;
+            let refs = self.content.refs().ok_or_else(|| {
+                Error::new(
+                    ErrorCode::RemoteRequired,
+                    "remote storage is not configured",
+                )
+            })?;
+            let value = refs
+                .get(&RefKey::Workspace(workspace))
+                .await?
+                .ok_or_else(|| {
+                    Error::new(ErrorCode::NotFound, "remote workspace does not exist")
+                })?;
+            if value.bytes.len() > MAX_METADATA_BYTES {
+                return Err(Error::integrity("workspace control exceeds format limit"));
+            }
+            let control: WorkspaceControl = decode(&value.bytes)?;
+            if control.workspace.id != workspace
+                || control.workspace.format_version != FORMAT_VERSION
+                || control.initial_revision.id != control.workspace.initial_revision
+                || control.initial_revision.workspace != workspace
+            {
+                return Err(Error::integrity("invalid remote workspace"));
+            }
+            control.workspace.authorize(actor, None, Permission::Read)?;
+            self.content
+                .metadata(workspace, &control.initial_revision.root)
+                .await?;
+            match self
+                .runtime
+                .state
+                .commit(LocalCommit {
+                    new_workspaces: vec![control.workspace],
+                    revisions: vec![control.initial_revision],
+                    ..Default::default()
+                })
+                .await
+            {
+                Ok(()) => (),
+                Err(error)
+                    if error.code == ErrorCode::Conflict
+                        && self.runtime.state.workspace(workspace).await?.is_some() => {}
+                Err(error) => return Err(error),
+            }
+        }
+        self.runtime
+            .authorize(actor, workspace, None, Permission::Read)
+            .await?;
+        Ok(())
+    }
+
     async fn publish_workspace(&self, workspace: WorkspaceId) -> Result<()> {
         let refs = self.content.refs().ok_or_else(|| {
             Error::new(
@@ -391,7 +433,6 @@ impl ReplicaPublisher for ReplicaService {
         branch: &Branch,
         new_revision: Option<&Revision>,
         operation: &OperationRecord,
-        turn: Option<&TurnRecord>,
     ) -> Result<SyncJob> {
         let mut records = BTreeMap::new();
         for revision in self.runtime.state.revisions(branch.workspace).await? {
@@ -405,22 +446,6 @@ impl ReplicaPublisher for ReplicaService {
                 format!("revision/{}", revision.id),
                 HistoryRecord::Revision(revision.clone()),
             );
-        }
-        for record in self.runtime.state.turns(branch.workspace).await? {
-            let key = object_ref(
-                ObjectKind::RecordIndex,
-                &encode(&(&record.session, &record.turn_id))?,
-            )
-            .id;
-            records.insert(format!("turn/{key}"), HistoryRecord::Turn(record));
-        }
-        if let Some(record) = turn {
-            let key = object_ref(
-                ObjectKind::RecordIndex,
-                &encode(&(&record.session, &record.turn_id))?,
-            )
-            .id;
-            records.insert(format!("turn/{key}"), HistoryRecord::Turn(record.clone()));
         }
         for record in self.runtime.state.operations(branch.workspace).await? {
             if record.branch == Some(branch.id) && record.local_saved {
@@ -567,72 +592,7 @@ impl ReplicaPublisher for ReplicaService {
 #[async_trait]
 impl ReplicaApi for ReplicaService {
     async fn sync(&self, context: RequestContext, request: SyncRequest) -> Result<OperationRecord> {
-        if self
-            .runtime
-            .state
-            .workspace(request.workspace)
-            .await?
-            .is_none()
-        {
-            let _protection = self.runtime.objects.read().await;
-            let refs = self.content.refs().ok_or_else(|| {
-                Error::new(
-                    ErrorCode::RemoteRequired,
-                    "remote storage is not configured",
-                )
-            })?;
-            let value = refs
-                .get(&RefKey::Workspace(request.workspace))
-                .await?
-                .ok_or_else(|| {
-                    Error::new(ErrorCode::NotFound, "remote workspace does not exist")
-                })?;
-            if value.bytes.len() > MAX_METADATA_BYTES {
-                return Err(Error::integrity("workspace control exceeds format limit"));
-            }
-            let control: WorkspaceControl = decode(&value.bytes)?;
-            if control.workspace.id != request.workspace
-                || control.workspace.format_version != FORMAT_VERSION
-                || control.initial_revision.id != control.workspace.initial_revision
-                || control.initial_revision.workspace != request.workspace
-            {
-                return Err(Error::integrity("invalid remote workspace"));
-            }
-            control
-                .workspace
-                .authorize(&context.principal, None, Permission::Read)?;
-            self.content
-                .metadata(request.workspace, &control.initial_revision.root)
-                .await?;
-            match self
-                .runtime
-                .state
-                .commit(LocalCommit {
-                    new_workspaces: vec![control.workspace],
-                    revisions: vec![control.initial_revision],
-                    ..Default::default()
-                })
-                .await
-            {
-                Ok(()) => (),
-                Err(error)
-                    if error.code == ErrorCode::Conflict
-                        && self
-                            .runtime
-                            .state
-                            .workspace(request.workspace)
-                            .await?
-                            .is_some() => {}
-                Err(error) => return Err(error),
-            }
-        }
-        self.runtime
-            .authorize(
-                &context.principal,
-                request.workspace,
-                None,
-                Permission::Read,
-            )
+        self.load_workspace(&context.principal, request.workspace)
             .await?;
         let operation = match self
             .operations

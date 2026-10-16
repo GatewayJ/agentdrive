@@ -25,11 +25,11 @@
 
 直接连接 Streamable HTTP 时，使用 `http://127.0.0.1:7421/mcp`，并提供 `Authorization: Bearer <token-file-contents>`。MCP 客户端需要完成初始化并保留返回的会话信息。允许的 Host 为监听地址和 `localhost:<port>`。请求携带 Origin 时，需要与请求地址同源，或匹配 `allowed_origins`；原生 CLI/stdio 连接省略 Origin。守护进程仅监听本机回环地址；其他机器访问时，需要使用经过身份验证的 TLS 代理，并保留允许的 Host 值。
 
-服务声明支持 MCP `tools` 能力，提供 32 个工具及其输入 JSON schema 和 annotations。可以通过 `tools/list` 读取已连接服务的工具目录，或者运行：
+服务声明支持 MCP `tools` 能力，提供 29 个工具及其输入 JSON schema 和 annotations。可以通过 `tools/list` 读取已连接服务的工具目录，或者运行：
 
 ```sh
 agentfs tools > tools.json
-jq '.tools[] | select(.name == "session_open") | .inputSchema' tools.json
+jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 ```
 
 ## 参数形式与结果
@@ -66,7 +66,6 @@ jq '.tools[] | select(.name == "session_open") | .inputSchema' tools.json
 | 类型 | 字段与行为 |
 | --- | --- |
 | `BranchGuard` | 必填 `branch`、`authority_epoch`、`generation`、`expected_head`；可选且允许为空的 `mutation_seq`。从 `workspace_status.branches` 获取分支，将 `id` 用作 `branch`，将 `formal_head` 用作 `expected_head`，并复制其他字段。提供 `mutation_seq` 还可以检查尚未保存的修改。每次新的受保护操作前重新获取当前值。 |
-| `SessionKey` | 必填 `workspace`、`app_namespace`、`session_id`、`location`。使用当前守护进程的 `workspace_status.location`。namespace 和 session ID 必须非空、不含控制字符，各自最多为 512 个 UTF-8 字节。 |
 | `durability` | 默认 `local`；`remote` 请求远端确认。远端发布失败时检查操作结果记录。 |
 | `RevisionRange` | 必填 `workspace`、`revision`；可选且允许为空的 `paths`。省略或设置为 `null` 时选择 `/`，包含全部内容。提供路径列表时不能为空，目录路径包含其后代。 |
 | `Grant` | 必填 `principal` 和 `permissions`；可选且允许为空的 `branch`。权限为 `read`、`write`、`merge`、`manage`；`manage` 允许全部权限。branch 为空时，授权适用于整个工作区。 |
@@ -83,12 +82,8 @@ jq '.tools[] | select(.name == "session_open") | .inputSchema' tools.json
 | `workspace_export` | `workspace`, `revision`, `destination`, `paths?` | 将选定路径导出到允许范围内的新主机目录。省略 paths 或设置为 `null` 时选择整个版本。 |
 | `revision_commit` | `guard`, `kind`, `message?`, `durability?` | `kind` 接受 `commit` 或 `checkpoint`，返回 `result.revision` 和 `result.branch`。 `message` 最多 4096 UTF-8 字节，不能含有 NUL。 |
 | `branch_create` | `workspace`, `name`, `source?`, `source_branch?` | 最多提供一个来源。省略时使用当前分支；分支来源包含尚未保存的工作内容。返回 `result.branch`，保持当前选择。 |
-| `branch_switch` | `workspace`, `branch` | 保存原分支，更新工作区选择和关联会话；活动回合需要完成，已有挂载需要 `mount_release`。 |
+| `branch_switch` | `workspace`, `branch` | 保存原分支，更新当前 location 的分支选择和挂载；已有挂载需要 `mount_release`。 |
 | `branch_restore` | `guard`, `revision`, `durability?` | 恢复分支，需要时通过挂载释放继续操作。 |
-| `session_open` | `key`, `branch?`, `mount_path?`, `durability?` | 关联已有分支；默认使用工作区当前选择。省略 `mount_path` 创建没有挂载的会话。返回 `result.binding`。 |
-| `session_resume` | `key`, `mount_path?`, `recovery_action?`, `turn_id?`, `durability?` | 恢复存在活动轮次的会话时，提供该 `turn_id`，并设置 `recovery_action: "continue"` 或 `"interrupt"`。 |
-| `session_pause` | `key`, `durability?` | 保存并暂停会话，需要时释放挂载。 |
-| `session_close` | `key`, `durability?` | 保存并关闭会话，需要时释放挂载。 |
 | `sync` | `workspace`, `direction`, `branches?` | `direction` 为 `push`、`pull`、`both`；省略 branches 或设置为 `null` 时选择全部。`both` 先推送后拉取。拉取时，发现过程会导入远端历史，再过滤结果中的 branch ID。 |
 | `cache_prefetch` | `workspace`, `revision`, `paths?` | 下载 `RevisionRange`，返回 `result.status`。 |
 | `cache_pin` | `range`, `enabled` | `range` 为 `RevisionRange`；`true` 下载并保护内容，`false` 移除该保留设置。 |
@@ -96,7 +91,8 @@ jq '.tools[] | select(.name == "session_open") | .inputSchema' tools.json
 | `merge_prepare` | `workspace`, `source`, `target`, `base?` | `source` 和可选的 `base` 为 revision ID；`target` 为 `BranchGuard`；返回 `result.candidate`。 |
 | `merge_resolve` | `merge`, `candidate`, `resolutions` | `candidate` 为当前候选 revision ID；通过 `source`、`target`、`delete`、`replace` 或 `copy` 编辑候选中的路径，返回新候选版本。 |
 | `merge_apply` | `merge`, `candidate`, `target`, `durability?` | 要求全部冲突已处理，目标分支没有未保存的修改并符合 `BranchGuard`；可能要求释放挂载。 |
-| `mount_prepare` | `workspace`, `branch`, `path`, `access`, `revision?`, `durability?` | `access` 为 `read_write` 或 `read_only`。提供 revision 时必须选择 `read_only`；可写挂载要求分支由本地拥有且未受保护。 |
+| `mount_prepare` | `workspace`, `path`, `branch?`, `access?`, `revision?`, `durability?` | 默认 `read_write`。省略 branch 时复用本机选择；新 location 自动读取远程 workspace，并从主分支最近发布的版本创建本机分支。同路径相同参数复用 binding。指定 branch 时使用该本机分支；提供 revision 要求 `read_only`。 |
+| `mount_save` | `mount`, `expected_binding_generation`, `durability?` | 保存当前挂载的文件内容，返回版本操作结果；过期 binding 返回 `STALE_BINDING`。 |
 | `mount_release` | `operation`, `expected_binding_generation` | 使用目录的进程释放原始挂载后，继续等待中的操作。operation ID 来自等待中的操作结果记录。 |
 | `mount_unmount` | `mount`, `generation` | 使用 `workspace_status.mounts` 中的 binding ID 和 generation，请求正常卸载。 |
 
@@ -128,7 +124,6 @@ jq '.tools[] | select(.name == "session_open") | .inputSchema' tools.json
 | `remote_configured` | 当前是否启用 S3；保存的配置为 `enabled: false` 时返回 `false`。此字段不会测试连接或凭据。 |
 | `automatic_text_merge` | `false`，冲突需要明确解决。 |
 | `physical_remote_gc` | `false`，自动删除 S3 中不再被引用的历史对象的功能已禁用。 |
-| `single_location_session` | `false`，全局协调不会强制每个会话只能位于一个 location。分支所有权仍然控制写入。 |
 
 文件编辑通常通过挂载后的原生路径完成，MCP 工具负责工作区、版本和生命周期管理。工具目录将十个查询标记为 `readOnlyHint: true`、`destructiveHint: false`；命令和取消操作使用相反的值。全部工具当前声明 `idempotentHint: true` 和 `openWorldHint: true`。这些 annotations 描述工具行为，访问和重试由身份验证、授权、请求身份和状态检查控制。
 

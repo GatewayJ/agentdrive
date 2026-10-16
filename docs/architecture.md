@@ -6,10 +6,10 @@
 
 | Crate | Responsibility |
 | --- | --- |
-| `agentfs-model` | IDs, paths, objects, revisions, branches, sessions, operations, merge records, errors |
+| `agentfs-model` | IDs, paths, objects, revisions, branches, mount bindings, operations, merge records, errors |
 | `agentfs-config` | Configuration schema, defaults, validation, atomic file replacement, administrator access, and shared runtime snapshots |
 | `agentfs-ports` | Storage, filesystem, mount, clock, directory, and application interfaces |
-| `agentfs-engine` | File semantics and workspace, revision, session, replication, cache, ownership, merge workflows |
+| `agentfs-engine` | File semantics and workspace, revision, mount, replication, cache, ownership, merge workflows |
 | `agentfs-local` | A process lock, SQLite metadata, immutable objects, working files, leases, verified reads |
 | `agentfs-s3` | Streaming immutable object transport and conditional reference updates |
 | `agentfs-platform` | FUSE/WinFsp callbacks, contained host-directory access and clock |
@@ -26,7 +26,7 @@
 | `engine/content`, `engine/trees` | Verified content reads, immutable indexes and object closure traversal |
 | `engine/snapshots`, `engine/revisions` | Capture working changes, save revisions, create branches and restore content |
 | `engine/workspaces` | Workspace creation, status and host-directory import/export |
-| `engine/sessions`, `engine/mounts` | Bind agent sessions to selected branches, persist turn results and coordinate mount transitions |
+| `engine/mounts` | Select the local branch for a workspace, reuse mount bindings, save mounted files and coordinate mount transitions |
 | `engine/replica`, `engine/ownership` | Synchronization jobs, conditional remote publication and writer ownership transfer |
 | `engine/storage` | Hydrate retained history, copy remote references and switch storage |
 | `engine/cache` | Prefetch, pin and reclaim eligible local objects using the current cache policy |
@@ -54,19 +54,21 @@ Settings administration uses the startup `administrators` list, default `["owner
 
 Each daemon state directory contains `engine.lock`, `meta.db`, SQLite WAL files, `objects/`, `staging/`, and `working/`. A process lock permits one writer. SQLite uses WAL and `synchronous=FULL`. Persisted format versions are checked before schema changes. Storage errors propagate as typed errors.
 
-`meta.db` and its WAL files remain local in both storage modes. S3 receives immutable objects and the control/branch references described below. Pulling imports published history into the receiving daemon's database; local identity, session attachments, mount bindings, cache pins and pending work remain local state. Cache capacity covers immutable object files only. In S3 mode, the collector uses `cache.max_bytes`, a derived 75% collection target, and an internal 64 MiB minimum-free-space threshold. Local mode retains all historical content.
+`meta.db` and its WAL files remain local in both storage modes. S3 receives immutable objects and the control/branch references described below. Pulling imports published history into the receiving daemon's database; local identity, branch selections, mount bindings, cache pins and pending work remain local state. Cache capacity covers immutable object files only. In S3 mode, the collector uses `cache.max_bytes`, a derived 75% collection target, and an internal 64 MiB minimum-free-space threshold. Local mode retains all historical content.
 
 Object IDs hash a domain separator, format version, object kind, and bytes with SHA-256. Publication verifies the digest and size, flushes the temporary file, publishes its immutable name, and registers it. Unix directories are flushed after publication; Windows uses a write-through file move. A metadata transaction references installed immutable objects. Reader leases protect open content from cache eviction.
 
 A `TreeRoot` refers to bounded directory and inode indexes. Index pages contain at most 128 entries and metadata objects are bounded by 2 MiB. File content is streamed with bounded buffers. Directory entry names are NFC normalized and compared using Unicode case folding. Portable-name checks reject traversal, reserved Windows names, trailing dots/spaces, and nonportable characters.
 
-Each branch has a serialization gate covering file mutation and snapshot capture. A capture seals changed files, builds immutable indexes, then commits the root, revision, turn/session result, operation receipt, and synchronization job in one local transaction. A filesystem `fsync` confirms a local snapshot. Autosave uses a five-second quiet period and a thirty-second continuous-write deadline; the daemon checks once per second.
+Each branch has a serialization gate covering file mutation and snapshot capture. A capture seals changed files, builds immutable indexes, then commits the root, revision, operation receipt, and synchronization job in one local transaction. A filesystem `fsync` confirms a local snapshot. Autosave uses a five-second quiet period and a thirty-second continuous-write deadline; the daemon checks once per second.
 
-A lifecycle gate serializes session and mount changes, restore, merge apply, ownership transfer, and cancellation. File handles carry mount and branch generations. Generation changes reject stale handles. A mount path has one active binding, and a branch has at most one writable mount.
+A lifecycle gate serializes mount changes, restore, merge apply, ownership transfer, and cancellation. File handles carry mount and branch generations. Generation changes reject stale handles. A mount path has one active binding, and a branch has at most one writable mount.
+
+Each state directory persists one `location_id`. Therefore `workspace_selections(workspace, branch)` records the branch selected by that location for each workspace. The workspace creator selects its root branch. A different location’s first writable mount creates and selects an owned branch in one transaction, using the latest published saved revision of the root branch identified by `Workspace.initial_revision`. Repeated connections, unmounting, path changes and restarts reuse this selection. `branch_switch` changes it explicitly. Matching requests share the existing mount binding; ending an Agent connection leaves that binding available.
 
 ## Replication and ownership
 
-A workspace has immutable objects plus a conditional workspace control record and conditional branch references. A branch reference contains its owner, epoch, generation, source generation, heads, and immutable history index. The history index records revisions, turn results, and operation receipts.
+A workspace has immutable objects plus a conditional workspace control record and conditional branch references. A branch reference contains its owner, epoch, generation, source generation, heads, and immutable history index. The history index records revisions and operation receipts.
 
 Publication uploads the referenced closure before compare-and-swap of the branch reference. Opaque provider versions are used for conditional writes. When an acknowledgement is lost, the publisher inspects the original operation's history record. Durable local jobs survive retries and process restarts. Workspace control records protect in-progress publication/read roots and coordinate the GC phase protocol. Physical remote deletion is disabled.
 

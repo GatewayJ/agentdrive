@@ -22,6 +22,7 @@ agentfsd serve --config "$AGENTFS_DIRECTORY/agentfs.json"
 | `agentfs tools` | 以 JSON 输出工具目录，包括 `inputSchema` 和 annotations。 |
 | `agentfs call <TOOL>` | 可选 `--json <JSON>`，默认 `{}`；可选 `--request-id <ID>`。 |
 | `agentfs mcp` | 启动 stdio MCP 代理，连接已有守护进程。 |
+| `agentfs mount` | 必填 `--workspace <ID>` 和目录；可选 `--request-id <ID>`。相对路径按 CLI 当前目录转换为绝对路径。 |
 
 两个程序都提供 `--help` 和 `--version`，子命令提供 `--help`。
 
@@ -80,18 +81,19 @@ jq -n --arg workspace "$WORKSPACE" --arg revision "$REVISION" --arg destination 
 
 创建操作返回 `result.workspace`。导入会创建新分支并返回 `result.branch`，其中的 `formal_head` 是导入后的版本。新工作区默认选择可写的 `main` 分支。`revision_read` 返回 `{ "bytes": [0, 1, ...], "length": ... }`，文件内容表示为整数字节数组，单次请求的大小最多为 4 MiB。导出要求父目录已经存在，目标目录尚未存在。
 
-## 分支与会话
+## 挂载与分支
 
 ```sh
+agentfs mount --workspace "$WORKSPACE" "$AGENTFS_DIRECTORY/mounts/project"
 agentfs branch list --workspace "$WORKSPACE"
 agentfs branch create --workspace "$WORKSPACE" --name feat/task --request-id "$RUN_ID-branch"
 agentfs branch switch --workspace "$WORKSPACE" --branch "$BRANCH" --request-id "$RUN_ID-switch"
 agentfs dashboard --open
 ```
 
-`branch create` 接受可选的 `--source <REVISION>` 或 `--source-branch <BRANCH>`；省略时保存当前分支的工作内容作为来源。结果中的 `result.branch` 为新分支，工作区当前选择保持原值。`branch switch` 更新工作区选择及原分支上的关联会话。活动回合需要完成；CLI 会尝试释放已有挂载；被占用时关闭使用目录的程序，再使用原 request ID 重试。MCP 调用方使用 `mount_release` 继续等待中的切换。两个命令会生成 request ID；需要重试时可以提供固定的 `--request-id`。
+`branch create` 接受可选的 `--source <REVISION>` 或 `--source-branch <BRANCH>`；省略时保存当前分支的工作内容作为来源。结果中的 `result.branch` 为新分支，工作区当前选择保持原值。`branch switch` 更新当前 location 的分支选择和挂载目录。CLI 会尝试释放已有挂载；被占用时关闭使用目录的程序，再使用原 request ID 重试。MCP 调用方使用 `mount_release` 继续等待中的切换。两个命令会生成 request ID；需要重试时可以提供固定的 `--request-id`。
 
-`session_open` 接受 `key` 及可选的 `branch`、`mount_path`、`durability`。默认使用工作区当前选择的分支。`session_pause`、`session_resume`、`session_close` 管理已有会话。[Agent 集成](integrations.zh-CN.md)负责自动关联会话、设置工作目录、保存回合、取消及恢复。
+`mount` 只需 workspace ID 和目录，重复调用复用相同挂载。同一 location 使用已有选择；新 location 首次挂载时从主分支最近发布的版本创建本机分支。配置 S3 后，可以直接挂载远程 workspace ID。一个分支最多有一个可写挂载，移动目录前需要卸载原挂载。Agent 断开后保留目录。[Agent 集成](integrations.zh-CN.md)说明 MCP 接入和任务保存。
 
 `dashboard` 打印浏览器地址，无需读取凭据或连接 daemon。`dashboard --open` 需要凭据，通过 URL fragment 传递访问令牌；页面读取后立即移除 fragment，并将令牌保存在 session storage 中。数据请求使用 Bearer 身份验证。页面提供分支树和版本信息，每 15 秒刷新。 管理员可以通过左侧“设置”进入 `/settings`，修改运行配置并查看需要重启的启动配置，详见[配置说明](configuration.zh-CN.md)。
 

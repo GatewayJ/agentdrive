@@ -80,12 +80,6 @@ impl Engine {
             config.identity,
         );
         let versions = VersionService::new(revisions.clone(), mounts.clone());
-        let sessions = SessionService::new(
-            runtime.clone(),
-            revisions.clone(),
-            operations.clone(),
-            mounts.clone(),
-        );
         let cache = CacheService::new(
             runtime.clone(),
             trees,
@@ -114,7 +108,6 @@ impl Engine {
         let services = Services {
             workspace,
             revisions: versions,
-            sessions,
             replica: publisher.clone(),
             cache,
             ownership,

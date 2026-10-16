@@ -126,7 +126,7 @@ impl WorkspaceService {
         let job = self
             .revisions
             .publisher
-            .build_job(&branch, Some(&revision), &operation, None)
+            .build_job(&branch, Some(&revision), &operation)
             .await?;
         self.runtime
             .state
@@ -218,7 +218,6 @@ impl WorkspaceApi for WorkspaceService {
                 remote_configured: self.revisions.trees.content.remote().is_some(),
                 automatic_text_merge: false,
                 physical_remote_gc: false,
-                single_location_session: false,
             },
             storage: self.revisions.trees.content.local.stats().await?,
             workspace,
@@ -313,7 +312,7 @@ impl WorkspaceApi for WorkspaceService {
             let job = self
                 .revisions
                 .publisher
-                .build_job(&branch, Some(&revision), &record, None)
+                .build_job(&branch, Some(&revision), &record)
                 .await?;
             self.runtime
                 .state

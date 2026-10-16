@@ -2,54 +2,76 @@
 
 [English](integrations.md) | [简体中文](integrations.zh-CN.md)
 
-Start `agentfsd`, configure `AGENTFS_TOKEN_FILE`, and create a workspace. Native integration requires FUSE, macFUSE, or WinFsp. The mount path must be absolute and within the daemon's configured `mount_roots`. Run the bridge on the daemon machine, under the same OS account.
+Start `agentfsd` and configure `AGENTFS_TOKEN_FILE`. Native directories require FUSE, macFUSE, or WinFsp. Mount paths must be inside the daemon's `mount_roots`. The agent's execution environment must be able to access the mounted directory.
 
-## Application commands
+## MCP and mounted directories
 
-Configure an ACP client's agent command as:
+Configure an existing agent with the stdio MCP command `agentfs mcp`, or connect to the daemon's `/mcp` HTTP endpoint. MCP connections share the long-running daemon.
+
+```sh
+agentfs mount --workspace "$WORKSPACE" "$AGENTFS_DIRECTORY/mounts/project"
+```
+
+The corresponding MCP tool is `mount_prepare`, with these minimum arguments:
+
+```json
+{
+  "request_id": "mount-project-1",
+  "request": {
+    "workspace": "<workspace-id>",
+    "path": "/absolute/path/to/project"
+  }
+}
+```
+
+A `location_id` belongs to the daemon data directory and survives restarts. Repeated mounts of a workspace at the same location reuse its selected branch. A new location creates and selects `location-<location-id>` from the workspace root branch's latest published saved revision. With S3 configured, mounting can import the remote workspace directly by ID. The creating location uses its already selected `main`. A missing or unpublished root branch produces an error.
+
+Identical mount requests at the same path return the existing binding, allowing multiple agents to share the directory. File edits and branch switches affect everyone using that directory. A branch permits one writable mount; explicitly unmount it before moving to another directory. Unmounting and agent disconnection preserve the selected branch. Explicit CLI or MCP branch creation provides separate working content.
+
+MCP returns `result.binding`, including `id`, `branch`, `path`, and `generation`. Agents use the returned path for file operations. Connecting MCP does not change an agent's working directory or filesystem permissions. `mount_save` accepts `mount` and `expected_binding_generation` to save the mounted branch.
+
+## Application launch commands
+
+Applications that need protocol-managed working directories and saving at task completion can use these commands:
 
 ```sh
 agentfs integrate --protocol acp --workspace "$WORKSPACE" \
-  --session-id editor-project --mount-path "$AGENTFS_DIRECTORY/mounts/project" \
-  -- your-acp-agent
+  --mount-path "$AGENTFS_DIRECTORY/mounts/project" -- your-acp-agent
 ```
-
-Configure a client that launches Codex app-server over stdio as:
 
 ```sh
 agentfs integrate --protocol codex-app-server --workspace "$WORKSPACE" \
-  --session-id codex-project --mount-path "$AGENTFS_DIRECTORY/mounts/project" \
-  -- codex app-server --listen stdio://
+  --mount-path "$AGENTFS_DIRECTORY/mounts/project" -- codex app-server --listen stdio://
 ```
 
-The application exchanges newline-delimited JSON-RPC with the bridge. Keep `--session-id` stable across reconnects. The ACP or Codex conversation ID remains managed by the application. One bridge manages one OpenCSG Workspace session and permits one active turn at a time. A per-session process lock prevents concurrent bridges under the same OS account. Standard output carries protocol messages; diagnostics use standard error.
+The bridge exchanges newline-delimited JSON-RPC, reuses the mount, and launches the agent after the directory is ready. ACP `session/new`, `session/load`, and `session/resume`, plus Codex `thread/start`, `thread/resume`, `thread/fork`, and `turn/start`, receive the mounted directory as `cwd`. Conversation IDs remain managed by the application.
 
-The bridge attaches the OpenCSG Workspace session and waits for the native mount before launching the agent. It sets `cwd` in ACP `session/new`, `session/load`, and `session/resume`, and Codex `thread/start`, `thread/resume`, `thread/fork`, and `turn/start`. Every new OpenCSG Workspace session uses the workspace's selected branch. Existing sessions resume their branch; explicit workspace branch switches update those attachments.
+## Saving and recovery
 
-## Persistence and recovery
+Autosave runs after approximately five seconds without changes or thirty seconds of continuous changes; the daemon checks once per second. A save captures the current files of the shared branch.
 
-ACP `session/prompt` starts a tracked turn. Its response saves the result before the response reaches the application. `end_turn`, `max_tokens`, `max_turn_requests`, and `refusal` record completion; `cancelled` records cancellation; an RPC error records failure. `session/cancel` is forwarded, and persistence waits for the prompt's terminal result.
+The bridge queries the current mount binding before each task and saves on completion, cancellation, failure, agent exit, or disconnection. Normal completion responses are forwarded after a successful local save. Save failures are reported. Retried requests retain their request ID, and duplicate protocol requests replay completed responses. Shared mounts remain available after disconnection.
 
-Codex `turn/start` and `review/start` begin tracking before forwarding. `turn/started` associates the server's turn ID; `turn/completed` saves `completed`, `failed`, or `interrupted` results before forwarding. Protocol interruption records cancellation. An unexpected agent exit or application disconnect records an interrupted turn, pauses the session, and unmounts after saving.
+Switching or restoring a branch can change the binding ID or generation. Delayed save requests fail with `STALE_BINDING`; the next task queries the current binding again. Reconnection after a daemon restart restores saved content and checks the native mount. Changes that never reached a save can be lost.
 
-Autosave continues with a five-second quiet period or thirty-second continuous-write deadline. HTTP lifecycle retries keep the same request ID, including when a response body is lost. Duplicate in-flight requests are forwarded once; recent completed responses are replayed from a bounded connection cache. Duplicate completion notifications preserve the original turn result. Reusing a cached RPC ID with different parameters returns an error. Requests submitted after a new connection are new protocol requests.
+Custom applications can call bearer-authenticated `POST /api/lifecycle`:
 
-On reconnect, the bridge resumes the session and records an unfinished previous turn as interrupted. After a daemon restart, the same recovery uses the persisted turn identity. A failed save is reported instead of forwarding a successful completion. File handles that prevent unmount must be closed before retrying attachment.
+| Event | Fields | Behavior |
+| --- | --- | --- |
+| `attach` | `request_id`, `workspace`, `mount_path` | Prepare or reuse the mount; return `binding` and `mount_path`. |
+| `check` | `request_id`, `workspace`, `mount_path` | Query the current writable binding at the normalized path returned by attach. |
+| `save` | `request_id`, `mount`, `expected_binding_generation` | Save that mount generation and return its operation record. |
 
-Custom application integrations can use bearer-authenticated `POST /api/lifecycle` with `{request_id, event, key, ...}`. `key` is the standard `SessionKey`. Events are `attach` with `mount_path`, `begin` with `turn_id`, `end` with `turn_id` and terminal `status`, and `detach`. Use stable request IDs for retries. End events commit locally; remote publication proceeds through the daemon's existing replication worker. `turn_begin` and `turn_end` remain internal service operations and are absent from the MCP catalog.
+The daemon publishes remotely in the background. `remote_confirmed` indicates successful remote publication of the operation.
 
-## Explicit branches and existing state
+## Branches and dashboard
 
-`agentfs branch create` and MCP `branch_create` create a branch from current working content or an explicit revision. Creation preserves the selected branch. `agentfs branch switch` and MCP `branch_switch` save the previous branch and update the persisted selection. Each branch permits one active turn across its sessions. Active turns must complete before switching. The CLI attempts mount release immediately. Busy mounts return an error and keep the pending switch; retry with its original request ID after closing handles and leaving the directory. MCP callers continue pending switches with `mount_release`. A pending switch prevents new turns until it completes or is cancelled.
+`agentfs branch create` and MCP `branch_create` explicitly create branches while preserving the selection. `agentfs branch switch` and MCP `branch_switch` save the previous branch and update this location's workspace selection. The CLI attempts release of occupied mounts. Close open files and processes using the directory before retrying the original request ID. MCP callers continue pending changes with `mount_release`.
 
-New workspaces have a writable, selected `main`. Existing databases keep their branch protection settings. An older workspace without a saved selection must explicitly select a writable branch before opening a default session. Create one from `--source <REVISION>` or `--source-branch <BRANCH>` when needed. Old revision objects remain readable; commit messages are optional. Creation ancestry is retained for new local branches; older and remotely adopted branches can have an unknown source.
+Existing databases retain their branches and selections. With no selection, one writable local branch is reused automatically; multiple writable local branches require an explicit `branch_switch`.
 
-## Dashboard
+Run `agentfs dashboard --open` to open the daemon page. The browser reads the token from the URL fragment, removes it, and retains it in session storage. Manual token entry is also available. The page refreshes every 15 seconds and shows branch ancestry, revision history, and commit details. Selecting a branch changes the displayed history.
 
-Run `agentfs dashboard --open` to open the daemon's root URL. The browser receives the token in a URL fragment, removes it immediately, and retains it in session storage. Alternatively open the URL and enter the daemon token. Workspace data follows existing grants. The page refreshes every 15 seconds and provides workspace selection, a branch creation tree, reachable revision history and commit details. Selecting a branch changes only the displayed history.
+Read-only endpoints are `GET /api/workspaces` and `GET /api/workspaces/{workspace}`. The latter returns `status` and `revisions`; `selected_branch` is this location's selection. Administrators edit runtime settings at `/settings`; see [configuration](configuration.md).
 
-Read-only JSON endpoints are `GET /api/workspaces` and `GET /api/workspaces/{workspace}`. The latter returns `status` and `revisions`. Revision details distinguish the revision's original branch from the branch whose history is being browsed. Parent IDs preserve merge ancestry.
-
-Protocol references: [ACP sessions](https://agentclientprotocol.com/protocol/v1/session-setup), [ACP prompt turns](https://agentclientprotocol.com/protocol/v1/prompt-turn), and [Codex app-server](https://developers.openai.com/codex/app-server/).
-
-Administrators can open **Settings** at `/settings` to edit runtime configuration and inspect startup settings; see [configuration](configuration.md).
+Protocol references: [ACP sessions](https://agentclientprotocol.com/protocol/v1/session-setup), [ACP turns](https://agentclientprotocol.com/protocol/v1/prompt-turn), and [Codex app-server](https://developers.openai.com/codex/app-server/).

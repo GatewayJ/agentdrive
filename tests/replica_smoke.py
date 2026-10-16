@@ -91,6 +91,34 @@ with tempfile.TemporaryDirectory(prefix='agentfs-replica-') as temporary:
         adopted = next(item for item in second.call('workspace_status', {'workspace': workspace})['branches'] if item['id'] == branch['id'])
         assert adopted['owner'] == status['location'] and adopted['state'] == 'writable', adopted
         assert adopted['authority_epoch'] == current['authority_epoch'] + 1
+        if status['capabilities']['platform_mount'] in ('linux-fuse', 'windows-winfsp', 'macos-macfuse'):
+            mounted_workspace = first.call('workspace_create', {'name': 'location-mounts'}, 'mount-create')['result']['workspace']['id']
+            mount_path = first.root / 'mounts' / 'shared'
+            original = first.call('mount_prepare', {'workspace': mounted_workspace, 'path': str(mount_path)}, 'mount-root')['result']['binding']
+            (mount_path / 'shared.txt').write_text('published root content')
+            saved = first.call('mount_save', {'mount': original['id'], 'expected_binding_generation': original['generation'], 'durability': 'remote'}, 'save-root')
+            assert saved['remote_confirmed'], saved
+            third = Daemon(Path(temporary) / 'three')
+            daemons.append(third)
+            branches = {original['branch']}
+            for remote_daemon in (second, third):
+                remote_path = remote_daemon.root / 'mounts' / 'shared'
+                request = {'workspace': mounted_workspace, 'path': str(remote_path)}
+                mounted = remote_daemon.call('mount_prepare', request, 'mount-location')['result']['binding']
+                assert mounted['branch'] not in branches, mounted
+                branches.add(mounted['branch'])
+                assert (remote_path / 'shared.txt').read_text() == 'published root content'
+                local_status = remote_daemon.call('workspace_status', {'workspace': mounted_workspace})
+                assert local_status['selected_branch'] == mounted['branch'], local_status
+                local_branch = next(item for item in local_status['branches'] if item['id'] == mounted['branch'])
+                assert local_branch['owner'] == local_status['location'], local_branch
+                assert local_branch['source_branch'] == original['branch'], local_branch
+                assert local_branch['base_revision'] == saved['result']['revision'], local_branch
+                repeated = remote_daemon.call('mount_prepare', request, 'mount-again')['result']['binding']
+                assert repeated == mounted, (repeated, mounted)
+                (remote_path / 'local.txt').write_text(local_status['location'])
+                assert not (mount_path / 'local.txt').exists()
+            print('Three-location native mounts, automatic S3 import, isolated branches and repeated binding reuse passed')
         print('Two-daemon S3 replication, multipart content, remote receipts and ownership transfer passed')
     finally:
         for daemon in reversed(daemons):

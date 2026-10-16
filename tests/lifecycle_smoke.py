@@ -62,7 +62,7 @@ with tempfile.TemporaryDirectory(prefix='agentfs-lifecycle-') as temporary:
             return json.load(response)
 
     def spawn(protocol, workspace):
-        arguments = command + ['integrate', '--protocol', protocol, '--workspace', workspace, '--session-id', 'client', '--mount-path', str(root / 'mounts' / protocol), '--', sys.executable, str(fixture), protocol]
+        arguments = command + ['integrate', '--protocol', protocol, '--workspace', workspace, '--mount-path', str(root / 'mounts' / protocol), '--', sys.executable, str(fixture), protocol]
         process = subprocess.Popen(arguments, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, bufsize=1)
         bridges.append(process)
         messages = queue.Queue()
@@ -93,13 +93,21 @@ with tempfile.TemporaryDirectory(prefix='agentfs-lifecycle-') as temporary:
     def records(workspace):
         config = json.loads((root / 'agentfs.json').read_text())
         with closing(sqlite3.connect(str(Path(config['data_dir']) / 'meta.db'))) as database:
-            return [json.loads(row[0]) for row in database.execute('SELECT data FROM turns WHERE workspace=?', (workspace,))]
+            return [record for row in database.execute("SELECT data FROM operations WHERE workspace=?", (workspace,)) if (record := json.loads(row[0]))["name"] == "mount_save"]
 
     try:
         daemon = start_daemon()
         for protocol in ('acp', 'codex-app-server'):
             workspace = call('workspace_create', {'name': protocol}, 'create-' + protocol)['result']['workspace']['id']
             process, send, wait = spawn(protocol, workspace)
+            shared = next(item for item in call('workspace_status', {'workspace': workspace})['mounts'] if item['state'] == 'ready')
+            peer, _, _ = spawn(protocol, workspace)
+            peer.stdin.close()
+            peer.wait(timeout=30)
+            assert peer.returncode == 0, (root / 'test.log').read_text()
+            connected = call('workspace_status', {'workspace': workspace})
+            assert len(connected['branches']) == 1 and len(connected['mounts']) == 1, connected
+            assert connected['mounts'][0] == shared, connected
             method = 'session/prompt' if protocol == 'acp' else 'turn/start'
             def prompt(identity, action):
                 params = {'sessionId': 'session-1', 'prompt': [{'type': 'text', 'text': action}]} if protocol == 'acp' else {'threadId': 'thread-1', 'input': [{'type': 'text', 'text': action}]}
@@ -114,7 +122,7 @@ with tempfile.TemporaryDirectory(prefix='agentfs-lifecycle-') as temporary:
             current = call('workspace_status', {'workspace': workspace})
             assert len(current['branches']) == 1, current
             branch = current['branches'][0]
-            assert call('revision_read', {'workspace': workspace, 'revision': branch['formal_head'], 'path': '/result.txt', 'offset': 0, 'size': 100})['bytes'] == list(b'completed:1')
+            assert call('revision_read', {'workspace': workspace, 'revision': branch['autosave_head'] or branch['formal_head'], 'path': '/result.txt', 'offset': 0, 'size': 100})['bytes'] == list(b'completed:1')
             send(request)
             wait(lambda message: message.get('id') == 3)
             assert len(records(workspace)) == 1, records(workspace)
@@ -124,7 +132,7 @@ with tempfile.TemporaryDirectory(prefix='agentfs-lifecycle-') as temporary:
                 deadline = time.monotonic() + 12
                 while True:
                     status = call('workspace_status', {'workspace': workspace})
-                    if status['branches'][0]['autosave_head']:
+                    if status['branches'][0]['autosave_head'] != branch['autosave_head']:
                         break
                     assert time.monotonic() < deadline, status
                     time.sleep(.25)
@@ -141,20 +149,22 @@ with tempfile.TemporaryDirectory(prefix='agentfs-lifecycle-') as temporary:
             process.stdin.close()
             process.wait(timeout=30)
             assert process.returncode == 0, (root / 'test.log').read_text()
-            assert {turn['status'] for turn in records(workspace)} == {'completed', 'cancelled', 'failed'}, records(workspace)
+            assert len(records(workspace)) == (3 if protocol == 'acp' else 4), records(workspace)
+            active_mount = next(item for item in call('workspace_status', {'workspace': workspace})['mounts'] if item['state'] == 'ready')
+            assert active_mount['path'] == str(root / 'mounts' / protocol)
             process, send, wait = spawn(protocol, workspace)
             assert len(call('workspace_status', {'workspace': workspace})['branches']) == 1
             send(prompt(6, 'exit'))
             process.wait(timeout=30)
             assert process.returncode != 0
-            assert any(turn['status'] == 'interrupted' for turn in records(workspace)), records(workspace)
-            previous_turns = {turn['turn_id'] for turn in records(workspace)}
+            assert (root / 'mounts' / protocol / 'result.txt').read_text().startswith('exit:')
+            previous_saves = {record['id'] for record in records(workspace)}
             process, send, wait = spawn(protocol, workspace)
             send(prompt(10, 'exit-success'))
             process.wait(timeout=30)
             assert process.returncode == 0, (root / 'test.log').read_text()
-            interrupted = [turn for turn in records(workspace) if turn['turn_id'] not in previous_turns]
-            assert len(interrupted) == 1 and interrupted[0]['status'] == 'interrupted', interrupted
+            interrupted = [record for record in records(workspace) if record['id'] not in previous_saves]
+            assert len(interrupted) == 1 and interrupted[0]['local_saved'], interrupted
             process, send, wait = spawn(protocol, workspace)
             send(prompt(7, 'completed'))
             if protocol == 'acp':
@@ -175,7 +185,7 @@ with tempfile.TemporaryDirectory(prefix='agentfs-lifecycle-') as temporary:
                 process.wait(timeout=30)
                 daemon = start_daemon()
                 process, send, wait = spawn(protocol, workspace)
-                assert not any(turn['status'] in ('running', 'paused') for turn in records(workspace)), records(workspace)
+                assert len(call('workspace_status', {'workspace': workspace})['branches']) == 1
                 send(prompt(9, 'completed'))
                 wait(lambda message: message.get('id') == 9)
                 process.stdin.close()
@@ -183,7 +193,10 @@ with tempfile.TemporaryDirectory(prefix='agentfs-lifecycle-') as temporary:
                 assert process.returncode == 0, (root / 'test.log').read_text()
             if protocol == 'acp':
                 branch = call('workspace_status', {'workspace': workspace})['branches'][0]
-                call('mount_prepare', {'workspace': workspace, 'branch': branch['id'], 'path': str(root / 'mounts' / 'explicit'), 'access': 'read_write'}, 'explicit-mount')
+                active = next(item for item in call('workspace_status', {'workspace': workspace})['mounts'] if item['state'] == 'ready')
+                call('mount_unmount', {'mount': active['id'], 'generation': active['generation']}, 'release-shared')
+                mounted = subprocess.run(command + ['mount', '--workspace', workspace, str(root / 'mounts' / 'explicit')], capture_output=True, text=True, timeout=30)
+                assert mounted.returncode == 0, (mounted.stdout, mounted.stderr)
                 created = subprocess.run(command + ['branch', 'create', '--workspace', workspace, '--name', 'feature'], capture_output=True, text=True, timeout=30)
                 assert created.returncode == 0, (created.stdout, created.stderr)
                 feature = json.loads(created.stdout)['result']['branch']

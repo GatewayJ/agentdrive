@@ -38,6 +38,14 @@ enum Command {
     Mcp,
     /// Run an ACP or Codex app-server process with automatic persistence.
     Integrate(integration::Options),
+    /// 挂载工作区，并复用当前 location 的分支。
+    Mount {
+        #[arg(long)]
+        workspace: WorkspaceId,
+        path: PathBuf,
+        #[arg(long)]
+        request_id: Option<String>,
+    },
     /// Manage workspace branches.
     Branch {
         #[command(subcommand)]
@@ -172,6 +180,16 @@ async fn run(arguments: Arguments) -> Result<bool> {
                 return Ok(success);
             }
             Command::Mcp => stdio_proxy(client.clone()).await?,
+            Command::Mount { workspace, path, request_id } => {
+                let path = if path.is_absolute() { path } else { std::env::current_dir()?.join(path) };
+                let result = client.call("mount_prepare".into(), json!({
+                    "request_id": request_id.unwrap_or_else(|| OperationId::new().to_string()),
+                    "request": {"workspace": workspace, "path": path},
+                })).await?;
+                let success = result.is_error != Some(true);
+                println!("{}", serde_json::to_string_pretty(&result.structured_content)?);
+                return Ok(success);
+            }
             Command::Branch { command } => {
                 let (tool, input) = match command {
                     BranchCommand::List { workspace } => ("workspace_status", json!({"workspace": workspace})),
