@@ -26,7 +26,7 @@ agentdrive mount --workspace "$WORKSPACE" "$AGENTDRIVE_DIRECTORY/mounts/project"
 
 `location_id` 属于 daemon 的数据目录，重启后保持不变。同一 location 重复挂载同一 workspace 时，复用本机选择的分支。新 location 首次挂载时，自动从该 workspace 主分支最近发布的保存版本创建 `location-<location-id>` 分支并保存选择。已配置 S3 时，可以直接指定远程 workspace ID，程序会读取其元数据。创建 workspace 的 location 使用已经选中的 `main`。主分支缺失或尚未发布时，请求返回错误。
 
-同一路径和参数重复挂载会返回已有 binding，多个 Agent 可以共享目录。共享目录中的文件修改与分支切换影响全部使用者。一个分支最多有一个可写挂载；更换目录时，需要显式卸载原目录。卸载和 Agent 断开都保留本机分支选择。需要隔离工作内容时，通过 CLI 或 MCP 显式创建分支。
+同一个 principal 使用相同路径和参数重复挂载会返回已有 binding，多个 Agent 可以共享目录。其他 principal 即使具有 `manage` 权限，也无法复用该 binding。共享目录中的文件修改与分支切换影响全部使用者。一个分支最多有一个可写挂载；更换目录时，需要显式卸载原目录。卸载和 Agent 断开都保留本机分支选择。需要隔离工作内容时，通过 CLI 或 MCP 显式创建分支。
 
 MCP 返回 `result.binding`，其中包含 `id`、`branch`、`path` 和 `generation`。Agent 使用返回路径执行文件操作。MCP 连接本身不会改变 Agent 的工作目录或文件访问权限。保存当前挂载可调用 `mount_save`，参数为 `mount` 和 `expected_binding_generation`；保存请求不会创建新分支。
 

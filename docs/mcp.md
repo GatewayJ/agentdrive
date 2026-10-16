@@ -34,7 +34,7 @@ jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 
 ## Argument forms and results
 
-The 21 command tools in the next table require an envelope. For example, the `arguments` object in a `tools/call` for `workspace_create` is:
+The 18 command tools in the next table require an envelope. For example, the `arguments` object in a `tools/call` for `workspace_create` is:
 
 ```json
 {
@@ -91,7 +91,7 @@ Fields below are inside `request`. A suffix `?` means the field may be omitted. 
 | `merge_prepare` | `workspace`, `source`, `target`, `base?` | `source` and optional `base` are revision IDs; `target` is a `BranchGuard`; returns `result.candidate`. |
 | `merge_resolve` | `merge`, `candidate`, `resolutions` | `candidate` is the current candidate revision ID; edits any candidate path using `source`, `target`, `delete`, `replace` or `copy` and returns a new candidate. |
 | `merge_apply` | `merge`, `candidate`, `target`, `durability?` | Requires resolved conflicts and a clean target matching its `BranchGuard`; may require mount release. |
-| `mount_prepare` | `workspace`, `path`, `branch?`, `access?`, `revision?`, `durability?` | Defaults to `read_write`. An omitted branch reuses this location's selection; a new location imports the workspace and creates its branch from the latest published root revision. Identical requests reuse the binding. An explicit branch must exist locally; a revision requires `read_only`. |
+| `mount_prepare` | `workspace`, `path`, `branch?`, `access?`, `revision?`, `durability?` | Defaults to `read_write`. An omitted branch reuses this location's selection; a new location imports the workspace and creates its branch from the latest published root revision. Identical requests from the same principal reuse the binding. An explicit branch must exist locally; a revision requires `read_only`. |
 | `mount_save` | `mount`, `expected_binding_generation`, `durability?` | Save the mounted files and return a revision receipt. A stale binding returns `STALE_BINDING`. |
 | `mount_release` | `operation`, `expected_binding_generation` | Continues a pending operation after processes release the original mount. The operation ID comes from the pending receipt. |
 | `mount_unmount` | `mount`, `generation` | Uses the binding ID and generation from `workspace_status.mounts`; requests normal unmount. |

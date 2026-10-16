@@ -64,7 +64,7 @@ Each branch has a serialization gate covering file mutation and snapshot capture
 
 A lifecycle gate serializes mount changes, restore, merge apply, ownership transfer, and cancellation. File handles carry mount and branch generations. Generation changes reject stale handles. A mount path has one active binding, and a branch has at most one writable mount.
 
-Each state directory persists one `location_id`. Therefore `workspace_selections(workspace, branch)` records the branch selected by that location for each workspace. The workspace creator selects its root branch. A different location’s first writable mount creates and selects an owned branch in one transaction, using the latest published saved revision of the root branch identified by `Workspace.initial_revision`. Repeated connections, unmounting, path changes and restarts reuse this selection. `branch_switch` changes it explicitly. Matching requests share the existing mount binding; ending an Agent connection leaves that binding available.
+Each state directory persists one `location_id`. Therefore `workspace_selections(workspace, branch)` records the branch selected by that location for each workspace. The workspace creator selects its root branch. A different location’s first writable mount creates and selects an owned branch in one transaction, using the latest published saved revision of the root branch identified by `Workspace.initial_revision`. Repeated connections, unmounting, path changes and restarts reuse this selection. `branch_switch` changes it explicitly. Matching requests from the same principal share the existing mount binding; ending an Agent connection leaves that binding available.
 
 ## Replication and ownership
 

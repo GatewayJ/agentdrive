@@ -64,7 +64,7 @@ object ID 使用 SHA-256 对域分隔标记、格式版本、对象类型和内�
 
 生命周期控制依次执行挂载变更、恢复、合并应用、所有权交接和取消操作。文件句柄携带挂载和分支的 generation，generation 变化后会拒绝旧句柄。一个挂载路径只能有一个活动关联，一个分支最多具有一个可写挂载。
 
-每个状态目录持久保存一个 `location_id`，因此 `workspace_selections(workspace, branch)` 表示当前 location 对每个工作区的分支选择。创建工作区时选择根分支。其他 location 首次可写挂载时，从 `Workspace.initial_revision` 对应根分支的最新发布保存版本创建自有分支，并在同一个事务中保存分支和选择。重复连接、卸载、更改挂载路径和重启均复用这份选择；`branch_switch` 显式修改选择。匹配的请求共用现有挂载关联，Agent 连接结束后仍保留该关联。
+每个状态目录持久保存一个 `location_id`，因此 `workspace_selections(workspace, branch)` 表示当前 location 对每个工作区的分支选择。创建工作区时选择根分支。其他 location 首次可写挂载时，从 `Workspace.initial_revision` 对应根分支的最新发布保存版本创建自有分支，并在同一个事务中保存分支和选择。重复连接、卸载、更改挂载路径和重启均复用这份选择；`branch_switch` 显式修改选择。同一个 principal 的匹配请求共用现有挂载关联，Agent 连接结束后仍保留该关联。
 
 ## 同步与所有权
 

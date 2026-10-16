@@ -749,6 +749,229 @@ async fn ownership_transfer_stops_old_writer_and_adopts_on_new_location() {
 }
 
 #[tokio::test]
+async fn ownership_return_restores_existing_branch_and_preserves_local_metadata() {
+    let remote = Arc::new(MemoryRemote::default());
+    let first = Harness::new(Some(remote.clone())).await;
+    let second = Harness::new(Some(remote)).await;
+    let workspace = first.workspace().await;
+    let (original_mount, original_fs) = first.branch_mount(workspace.id, "feature", None).await;
+    first
+        .write_new(&original_fs, "original.txt", b"original")
+        .await;
+    first.commit(original_mount.branch).await;
+    success(
+        first
+            .engine
+            .services
+            .mounts
+            .unmount(context(), original_mount.id, original_mount.generation)
+            .await
+            .unwrap(),
+    );
+    success(
+        first
+            .engine
+            .services
+            .mounts
+            .switch_branch(
+                context(),
+                SwitchBranch {
+                    workspace: workspace.id,
+                    branch: original_mount.branch,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    let original = first
+        .local
+        .branch(original_mount.branch)
+        .await
+        .unwrap()
+        .unwrap();
+    success(
+        first
+            .engine
+            .services
+            .ownership
+            .transfer(
+                context(),
+                TransferOwnership {
+                    guard: BranchGuard::from(&original),
+                    target: second.engine.runtime.location,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    second.sync(workspace.id, SyncDirection::Pull).await;
+    success(
+        second
+            .engine
+            .services
+            .cache
+            .prefetch(
+                context(),
+                RevisionRange {
+                    workspace: workspace.id,
+                    revision: original.formal_head,
+                    paths: None,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    let mut request = default_mount(workspace.id, second.directory.path().join("adopted"));
+    request.branch = Some(original.id);
+    let mount = mounted(
+        second
+            .engine
+            .services
+            .mounts
+            .prepare(context(), request)
+            .await
+            .unwrap(),
+    );
+    let fs = FsContext {
+        mount: mount.id,
+        generation: mount.generation,
+        identity: identity(),
+    };
+    second
+        .write_new(&fs, "remote.txt", b"returned content")
+        .await;
+    second.commit(original.id).await;
+    success(
+        second
+            .engine
+            .services
+            .mounts
+            .unmount(context(), mount.id, mount.generation)
+            .await
+            .unwrap(),
+    );
+    let adopted = second.local.branch(original.id).await.unwrap().unwrap();
+    success(
+        second
+            .engine
+            .services
+            .ownership
+            .transfer(
+                context(),
+                TransferOwnership {
+                    guard: BranchGuard::from(&adopted),
+                    target: first.engine.runtime.location,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    tokio::join!(
+        first.sync(workspace.id, SyncDirection::Pull),
+        first.sync(workspace.id, SyncDirection::Pull)
+    );
+    let returned = first.local.branch(original.id).await.unwrap().unwrap();
+    assert_eq!(returned.owner, first.engine.runtime.location);
+    assert_eq!(returned.authority_epoch, adopted.authority_epoch + 1);
+    assert_eq!(returned.generation, adopted.generation + 1);
+    assert_eq!(returned.state, BranchState::Writable);
+    assert_eq!(returned.working_root, adopted.working_root);
+    assert_eq!(returned.name, original.name);
+    assert_eq!(returned.base_revision, original.base_revision);
+    assert_eq!(returned.source_branch, original.source_branch);
+    assert_eq!(
+        first.local.selected_branch(workspace.id).await.unwrap(),
+        Some(original.id)
+    );
+    let restored = mounted(
+        first
+            .engine
+            .services
+            .mounts
+            .prepare(
+                context(),
+                default_mount(workspace.id, first.directory.path().join("returned")),
+            )
+            .await
+            .unwrap(),
+    );
+    let fs = FsContext {
+        mount: restored.id,
+        generation: restored.generation,
+        identity: identity(),
+    };
+    let node = first
+        .local
+        .node_at(original.id, &path("/remote.txt"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        first
+            .engine
+            .services
+            .revisions
+            .read_file(
+                &actor(),
+                workspace.id,
+                returned.formal_head,
+                path("/remote.txt"),
+                0,
+                1024
+            )
+            .await
+            .unwrap(),
+        b"returned content"[..]
+    );
+    assert_eq!(node.inode.size, 16);
+    first.write_new(&fs, "local.txt", b"local changes").await;
+    let before = first.local.branch(original.id).await.unwrap().unwrap();
+    first.sync(workspace.id, SyncDirection::Pull).await;
+    let after = first.local.branch(original.id).await.unwrap().unwrap();
+    assert_eq!(after.mutation_seq, before.mutation_seq);
+    assert!(
+        first
+            .local
+            .node_at(original.id, &path("/local.txt"))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    first.commit(original.id).await;
+}
+
+#[tokio::test]
+async fn stale_remote_ownership_does_not_reactivate_stopped_branch() {
+    let h = Harness::new(Some(Arc::new(MemoryRemote::default()))).await;
+    let workspace = h.workspace().await;
+    h.sync(workspace.id, SyncDirection::Push).await;
+    let id = h
+        .local
+        .selected_branch(workspace.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut stopped = h.local.branch(id).await.unwrap().unwrap();
+    stopped.owner = LocationId::new();
+    stopped.state = BranchState::Stopped;
+    stopped.authority_epoch += 1;
+    stopped.generation += 1;
+    stopped.source_generation += 1;
+    h.local
+        .commit(LocalCommit {
+            branches: vec![stopped.clone()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    h.sync(workspace.id, SyncDirection::Pull).await;
+    let current = h.local.branch(id).await.unwrap().unwrap();
+    assert_eq!(current.owner, stopped.owner);
+    assert_eq!(current.authority_epoch, stopped.authority_epoch);
+    assert_eq!(current.state, BranchState::Stopped);
+}
+
+#[tokio::test]
 async fn merge_accepts_file_edits_and_preserves_both_parents() {
     let harness = Harness::new(None).await;
     let workspace = harness.workspace().await;

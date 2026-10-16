@@ -493,15 +493,29 @@ impl ReplicaPublisher for ReplicaService {
     }
 
     async fn discover(&self, workspace: WorkspaceId) -> Result<Vec<BranchRef>> {
-        let _protection = self.runtime.objects.read().await;
-        let refs = self.content.refs().ok_or_else(|| {
-            Error::new(
-                ErrorCode::RemoteRequired,
-                "remote storage is not configured",
-            )
-        })?;
+        let ids = {
+            let _protection = self.runtime.objects.read().await;
+            self.content
+                .refs()
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorCode::RemoteRequired,
+                        "remote storage is not configured",
+                    )
+                })?
+                .list_branches(workspace)
+                .await?
+        };
         let mut result = Vec::new();
-        for id in refs.list_branches(workspace).await? {
+        for id in ids {
+            let _gate = self.runtime.lock_branch(id).await;
+            let _protection = self.runtime.objects.read().await;
+            let refs = self.content.refs().ok_or_else(|| {
+                Error::new(
+                    ErrorCode::RemoteRequired,
+                    "remote storage is not configured",
+                )
+            })?;
             let Some(value) = refs
                 .get(&RefKey::Branch {
                     workspace,
@@ -527,10 +541,16 @@ impl ReplicaPublisher for ReplicaService {
             self.content
                 .metadata(workspace, &reference.working_root)
                 .await?;
-            if reference.owner == self.runtime.location
-                && !reference.deleted
-                && self.runtime.state.branch(id).await?.is_none()
-            {
+            let existing = self.runtime.state.branch(id).await?;
+            let can_adopt = existing.as_ref().is_none_or(|branch| {
+                branch.state == BranchState::Stopped
+                    && branch.owner != self.runtime.location
+                    && branch.mutation_seq == branch.saved_seq
+                    && reference.authority_epoch > branch.authority_epoch
+                    && reference.generation > branch.generation
+                    && reference.source_generation > branch.source_generation
+            });
+            if reference.owner == self.runtime.location && !reference.deleted && can_adopt {
                 let tree = self.trees.tree(workspace, &reference.working_root).await?;
                 let next_inode = crate::runtime::increment(
                     tree.values().map(|inode| inode.id.0).max().unwrap_or(1),
@@ -542,7 +562,9 @@ impl ReplicaPublisher for ReplicaService {
                 let branch = Branch {
                     id,
                     workspace,
-                    name: format!("adopted-{id}"),
+                    name: existing
+                        .as_ref()
+                        .map_or_else(|| format!("adopted-{id}"), |branch| branch.name.clone()),
                     owner: reference.owner,
                     authority_epoch: reference.authority_epoch,
                     generation: reference.generation,
@@ -552,8 +574,10 @@ impl ReplicaPublisher for ReplicaService {
                     formal_head: reference.formal_head,
                     autosave_head: reference.autosave_head,
                     working_root: reference.working_root.clone(),
-                    base_revision: reference.formal_head,
-                    source_branch: None,
+                    base_revision: existing
+                        .as_ref()
+                        .map_or(reference.formal_head, |branch| branch.base_revision),
+                    source_branch: existing.as_ref().and_then(|branch| branch.source_branch),
                     next_inode,
                     dirty: formal.root != reference.working_root,
                     state: if reference.write_stopped {
@@ -561,12 +585,18 @@ impl ReplicaPublisher for ReplicaService {
                     } else {
                         BranchState::Writable
                     },
-                    protected: false,
+                    protected: existing.as_ref().is_some_and(|branch| branch.protected),
                 };
+                let mut commit = LocalCommit::default();
+                if let Some(existing) = existing {
+                    commit.guards.push(BranchGuard::from(&existing));
+                    commit.branches.push(branch);
+                } else {
+                    commit.new_branches.push(branch);
+                }
                 self.runtime
                     .state
                     .commit(LocalCommit {
-                        new_branches: vec![branch],
                         node_changes: vec![NodeChange::Replace {
                             branch: id,
                             nodes: tree
@@ -578,7 +608,7 @@ impl ReplicaPublisher for ReplicaService {
                                 })
                                 .collect(),
                         }],
-                        ..Default::default()
+                        ..commit
                     })
                     .await?;
             }
