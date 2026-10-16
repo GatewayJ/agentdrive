@@ -14,7 +14,7 @@ AgentDrive 为 Agent 提供可持久保存的工作区、显式管理的工作�
 - Linux FUSE、macOS macFUSE 和 Windows WinFsp 适配；快照、分支恢复和版本历史。
 - S3/RustFS 同步、限制内存用量的流式传输、离线缓存保留、在线所有权交接，以及可以编辑文件的三方合并候选结果。
 - ACP 和 Codex app-server 生命周期集成、分支命令，以及提供分支历史与运行配置管理的 Dashboard。
-- 通过需要身份验证的 Streamable HTTP 提供 29 个具有明确类型的 MCP 工具，同时提供 stdio 代理和 JSON CLI。
+- 通过需要身份验证的 Streamable HTTP 提供 30 个具有明确类型的 MCP 工具，同时提供 stdio 代理和 JSON CLI。
 
 ## 构建
 

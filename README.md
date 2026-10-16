@@ -10,7 +10,7 @@ The implementation includes:
 - Linux FUSE, macOS macFUSE, and Windows WinFsp adapters; snapshots, branch restore, and revision history.
 - S3/RustFS replication, bounded streaming transfers, offline cache pins, online ownership transfer, and editable three-way merge candidates.
 - ACP and Codex app-server lifecycle bridges, explicit branch commands, and a dashboard for branch history and runtime settings.
-- 29 typed MCP tools over authenticated Streamable HTTP, with a stdio proxy and JSON CLI.
+- 30 typed MCP tools over authenticated Streamable HTTP, with a stdio proxy and JSON CLI.
 
 ## Build
 

@@ -12,6 +12,8 @@ python3 tests/cli_smoke.py
 
 The workflow tests exercise concurrent request retries, atomic append, rename with open handles, restart recovery, idempotent mount saves, concurrent mount reuse, branch isolation across locations, autosave timing, remote failure and lost acknowledgements, ownership transfer, merge file edits, stale mount changes, cache pinning/eviction, and offline prefetch. Persistence tests cover digest failures, reader leases, transaction rollback, request recovery, and unknown format rejection. MCP tests verify concurrent clients, principal isolation, authentication, and Host/Origin policy. The CLI test starts real processes and verifies stdio MCP, import/export content and metadata, allowed paths, and process restart.
 
+Directory conversion tests cover initial `main` contents in a new workspace, import into an existing workspace, required Agent restart acknowledgement, preserved backups, invalid input, and retry after mount failure and daemon restart.
+
 ## Native filesystems
 
 Install and enable the platform driver, then run:
@@ -58,7 +60,7 @@ Backend tests exercise competing conditional reference creation, stale condition
 
 [GitHub Actions](https://github.com/GatewayJ/agentdrive/actions) runs the checked-in test matrix for each commit. Native macOS mounting requires an installed and enabled macFUSE driver; that kernel mount test has not been executed in the development environment.
 
-The create/import/read/export/mount examples in [CLI usage](cli.md) were executed against a temporary daemon. The [MCP parameter tables](mcp.md) were checked against the running daemon's 29 tool schemas. S3 configuration was checked against the daemon config loader, adapter, and credential/endpoint selection in the locked `object_store` dependency. These documentation checks do not add an AWS S3 deployment to the verified environments above.
+The create/import/read/export/mount examples in [CLI usage](cli.md) were executed against a temporary daemon. The [MCP parameter tables](mcp.md) were checked against the running daemon's tool schemas. S3 configuration was checked against the daemon config loader, adapter, and credential/endpoint selection in the locked `object_store` dependency. These documentation checks do not add an AWS S3 deployment to the verified environments above.
 
 Additional lifecycle, branch, and dashboard checks:
 

@@ -256,6 +256,14 @@ pub struct PrepareMount {
 
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct AdoptDirectory {
+    pub workspace: Option<WorkspaceId>,
+    pub path: PathBuf,
+    pub restart_agent: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SaveMount {
     pub mount: MountId,
     pub expected_binding_generation: u64,
@@ -272,6 +280,11 @@ pub struct ReleaseMount {
 
 #[async_trait]
 pub trait WorkspaceApi: Send + Sync {
+    async fn adopt_directory(
+        &self,
+        context: RequestContext,
+        request: AdoptDirectory,
+    ) -> Result<OperationRecord>;
     async fn create(
         &self,
         context: RequestContext,

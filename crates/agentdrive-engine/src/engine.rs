@@ -76,7 +76,7 @@ impl Engine {
             revisions.clone(),
             operations.clone(),
             files.clone(),
-            adapters.mounts,
+            adapters.mounts.clone(),
             config.identity,
         );
         let versions = VersionService::new(revisions.clone(), mounts.clone());
@@ -98,6 +98,8 @@ impl Engine {
             operations.clone(),
             adapters.directories,
             mount_capability,
+            mounts.clone(),
+            adapters.mounts,
         );
         let ownership = OwnershipService::new(
             runtime.clone(),

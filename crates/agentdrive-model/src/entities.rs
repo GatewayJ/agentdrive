@@ -309,6 +309,13 @@ impl OperationPhase {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CommandResult {
+    DirectoryAdoption {
+        branch: BranchId,
+        path: PathBuf,
+        backup_path: PathBuf,
+        binding: Option<MountBinding>,
+        restart_required: bool,
+    },
     Operation {
         operation: OperationId,
     },

@@ -31,6 +31,17 @@ pub trait MountDriver: Send + Sync {
 
 #[async_trait]
 pub trait DirectoryAccess: Send + Sync {
+    /// Preserve the original directory and leave an empty path for mounting. Retrying is safe.
+    async fn stage_mount(
+        &self,
+        _source: &std::path::Path,
+        _backup: &std::path::Path,
+    ) -> Result<()> {
+        Err(Error::new(
+            ErrorCode::Unsupported,
+            "directory conversion is not supported",
+        ))
+    }
     async fn import_tree(
         &self,
         workspace: &Workspace,

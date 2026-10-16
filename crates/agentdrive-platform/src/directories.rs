@@ -131,6 +131,69 @@ fn attributes(metadata: &cap_std::fs::Metadata, id: InodeId) -> Result<Inode> {
 
 #[async_trait]
 impl DirectoryAccess for HostDirectories {
+    async fn stage_mount(&self, source: &Path, backup: &Path) -> Result<()> {
+        let (root, relative) = self.relative(source)?;
+        let (backup_root, backup_relative) = self.relative(backup)?;
+        if source.parent() != backup.parent() || source == backup {
+            return Err(Error::invalid(
+                "backup must be a distinct sibling directory",
+            ));
+        }
+        let parent = Self::open_directory(&root, relative.parent().unwrap_or(Path::new("")))?;
+        let backup_parent = Self::open_directory(
+            &backup_root,
+            backup_relative.parent().unwrap_or(Path::new("")),
+        )?;
+        let name = relative
+            .file_name()
+            .ok_or_else(|| Error::invalid("source must be below an allowed root"))?
+            .to_owned();
+        let backup_name = backup_relative
+            .file_name()
+            .ok_or_else(|| Error::invalid("backup needs a directory name"))?
+            .to_owned();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            match backup_parent.create_dir(&backup_name) {
+                Ok(()) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+                Err(error) => return Err(error.into()),
+            }
+            let backup = backup_parent.open_dir_nofollow(&backup_name)?;
+            match backup.symlink_metadata("original") {
+                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => (),
+                Ok(_) => return Err(Error::invalid("backup must contain a regular directory")),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    let original = parent.open_dir_nofollow(&name)?;
+                    drop(original);
+                    parent.rename(&name, &backup, "original")?;
+                }
+                Err(error) => return Err(error.into()),
+            }
+            #[cfg(unix)]
+            {
+                backup.try_clone()?.into_std_file().sync_all()?;
+                parent.try_clone()?.into_std_file().sync_all()?;
+            }
+            match parent.create_dir(&name) {
+                Ok(()) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+                Err(error) => return Err(error.into()),
+            }
+            let target = parent.open_dir_nofollow(&name)?;
+            if target.entries()?.next().is_some() {
+                return Err(Error::new(
+                    ErrorCode::MountBusy,
+                    "original path must remain empty until mounting completes",
+                ));
+            }
+            #[cfg(unix)]
+            parent.try_clone()?.into_std_file().sync_all()?;
+            Ok(())
+        })
+        .await
+        .map_err(|error| Error::new(ErrorCode::Io, error.to_string()))?
+    }
+
     async fn import_tree(
         &self,
         workspace: &Workspace,

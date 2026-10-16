@@ -25,7 +25,7 @@
 
 直接连接 Streamable HTTP 时，使用 `http://127.0.0.1:7421/mcp`，并提供 `Authorization: Bearer <token-file-contents>`。MCP 客户端需要完成初始化并保留返回的会话信息。允许的 Host 为监听地址和 `localhost:<port>`。请求携带 Origin 时，需要与请求地址同源，或匹配 `allowed_origins`；原生 CLI/stdio 连接省略 Origin。守护进程仅监听本机回环地址；其他机器访问时，需要使用经过身份验证的 TLS 代理，并保留允许的 Host 值。
 
-服务声明支持 MCP `tools` 能力，提供 29 个工具及其输入 JSON schema 和 annotations。可以通过 `tools/list` 读取已连接服务的工具目录，或者运行：
+服务声明支持 MCP `tools` 能力，提供 30 个工具及其输入 JSON schema 和 annotations。可以通过 `tools/list` 读取已连接服务的工具目录，或者运行：
 
 ```sh
 agentdrive tools > tools.json
@@ -34,7 +34,7 @@ jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 
 ## 参数形式与结果
 
-下表中的 18 个命令工具需要外层请求结构。例如，调用 `workspace_create` 时，`tools/call` 中的 `arguments` 对象为：
+下表中的 19 个命令工具需要外层请求结构。例如，调用 `workspace_create` 时，`tools/call` 中的 `arguments` 对象为：
 
 ```json
 {
@@ -78,6 +78,7 @@ jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 | 工具 | 请求字段 | 行为 / 结果 |
 | --- | --- | --- |
 | `workspace_create` | `name`, `grants?`, `max_file_bytes?`, `max_working_bytes?`, `max_inodes?` | 创建工作区和默认选中的可写 `main`，返回 `result.workspace`。默认单文件 64 GiB、工作容量 256 GiB、1,000,000 个 inode。inode 数量为 1–1,000,000；文件容量必须为正数且不超过工作容量；工作容量最多为 `i64::MAX`。 |
+| `workspace_adopt_directory` | `workspace?`, `path`, `restart_agent` | 要求 `restart_agent: true`。省略 `workspace` 时创建新 workspace，目录内容作为 `main` 的初始 revision；指定 `workspace` 时需要 `manage` 权限并导入新 branch。暂停写入后，保留原目录至 `result.backup_path`，并挂载回原路径。返回 `result.branch`、`result.binding` 和 `result.restart_required: true`。继续访问文件前必须重启 Agent 及其终端，参见[目录转换](integrations.zh-CN.md#转换已有目录)。 |
 | `workspace_import` | `workspace`, `source` | 将允许范围内保持稳定的主机目录导入新分支，返回 `result.branch`。 |
 | `workspace_export` | `workspace`, `revision`, `destination`, `paths?` | 将选定路径导出到允许范围内的新主机目录。省略 paths 或设置为 `null` 时选择整个版本。 |
 | `revision_commit` | `guard`, `kind`, `message?`, `durability?` | `kind` 接受 `commit` 或 `checkpoint`，返回 `result.revision` 和 `result.branch`。 `message` 最多 4096 UTF-8 字节，不能含有 NUL。 |

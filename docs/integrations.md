@@ -30,6 +30,28 @@ Identical mount requests at the same path from the same principal return the exi
 
 MCP returns `result.binding`, including `id`, `branch`, `path`, and `generation`. Agents use the returned path for file operations. Connecting MCP does not change an agent's working directory or filesystem permissions. `mount_save` accepts `mount` and `expected_binding_generation` to save the mounted branch.
 
+## Convert an existing directory
+
+Use `workspace_adopt_directory` to mount an existing local directory at the same path. By default, it creates a workspace named after the directory, owned by the caller, with the original contents as the initial revision of `main`. Supply `request.workspace` to import into a new branch of an existing workspace; this requires `manage` permission. The path must be strictly below a configured `mount_roots` entry and within `directory_roots`; its parent must exist. Native mount support must be available. Existing mounts, including overlapping parent or child paths, must be released first.
+
+Pause all file writes before calling this tool. Set `restart_agent: true` to acknowledge that the Agent and its terminals must restart after conversion. The tool does not terminate or launch those processes. Old working-directory references and file handles can still refer to the backup; do not perform further file operations through the running Agent after conversion.
+
+```json
+{
+  "request_id": "adopt-project-1",
+  "request": {
+    "path": "/absolute/path/to/project",
+    "restart_agent": true
+  }
+}
+```
+
+The tool imports the directory using the same validation as `workspace_import`, then moves the original directory to the sibling `.agentdrive-backup-<operation-id>/original` and mounts the imported branch at the original path. Unsupported files, including symbolic links, fail import before the directory is moved. When supplying a workspace ID, existing workspace content and the default branch selection are preserved; the new branch is explicitly mounted at `path`.
+
+Success requires `phase: "complete"`, `mount_ready: true`, and no `error`. The operation returns the workspace ID in `workspace`. The result contains `branch`, `path`, `backup_path`, `binding`, and `restart_required: true`. Restart the Agent with the original path as its working directory. For later explicit mounting, use the returned branch ID. Keep the backup until the restarted Agent has verified its files; backup cleanup is manual.
+
+If mounting fails after the move, the original files remain at `backup_path`; the original path may be empty. Pause file access and retry with the same request ID and identical arguments, including after daemon restart. A completed retry reuses the imported branch. Inspect `operation_get` or `operation_by_request` after a lost response. If import itself failed, correct the source and use a new request ID. Do not start another conversion on an already moved path.
+
 ## Application launch commands
 
 Applications that need protocol-managed working directories and saving at task completion can use these commands:

@@ -210,3 +210,92 @@ async fn native_mount_supports_file_io_durable_snapshots_and_read_only_history()
         assert_eq!(record.phase, OperationPhase::Complete, "{record:?}");
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an installed native filesystem driver and mount permission"]
+async fn native_directory_adoption_preserves_files_at_original_path() {
+    let root = tempfile::tempdir().unwrap();
+    let local = Arc::new(LocalBackend::open(root.path().join("state")).unwrap());
+    let mounts = root.path().join("mounts");
+    std::fs::create_dir_all(&mounts).unwrap();
+    let source = mounts.join("project");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("original.txt"), b"existing data").unwrap();
+    let driver = NativeMountDriver::new(vec![mounts.clone()]).unwrap();
+    let engine = Engine::open(
+        Adapters {
+            state: local.clone(),
+            objects: local.clone(),
+            working: local.clone(),
+            remote_objects: None,
+            remote_refs: None,
+            clock: Arc::new(SystemClock::default()),
+            mounts: driver.clone(),
+            directories: HostDirectories::new(vec![mounts]).unwrap(),
+        },
+        EngineConfig {
+            live: LiveConfig::new(RuntimeConfig::default()).unwrap(),
+            identity: local_identity(),
+        },
+    )
+    .await
+    .unwrap();
+    let request_context = context();
+    let request = AdoptDirectory {
+        workspace: None,
+        path: source.clone(),
+        restart_agent: true,
+    };
+    let record = success(
+        engine
+            .services
+            .workspace
+            .adopt_directory(request_context.clone(), request.clone())
+            .await
+            .unwrap(),
+    );
+    let Some(CommandResult::DirectoryAdoption {
+        binding: Some(binding),
+        backup_path,
+        restart_required,
+        ..
+    }) = record.result
+    else {
+        panic!("missing adopted mount")
+    };
+    assert!(restart_required);
+    let path = source.clone();
+    tokio::task::spawn_blocking(move || {
+        assert_eq!(
+            std::fs::read(path.join("original.txt")).unwrap(),
+            b"existing data"
+        );
+        let mut file = std::fs::File::create(path.join("new.txt")).unwrap();
+        file.write_all(b"mounted data").unwrap();
+        file.sync_all().unwrap();
+        assert_eq!(
+            std::fs::read(backup_path.join("original.txt")).unwrap(),
+            b"existing data"
+        );
+        assert!(!backup_path.join("new.txt").exists());
+    })
+    .await
+    .unwrap();
+    let replay = success(
+        engine
+            .services
+            .workspace
+            .adopt_directory(request_context, request)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(replay.id, record.id);
+    success(
+        engine
+            .services
+            .mounts
+            .unmount(context(), binding.id, binding.generation)
+            .await
+            .unwrap(),
+    );
+}

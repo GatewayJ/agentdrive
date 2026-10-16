@@ -116,6 +116,7 @@ dependencies = [
  "agentdrive-local",
  "agentdrive-model",
  "agentdrive-ports",
+ "agentdrive-test-support",
  "async-trait",
  "bytes",
  "cap-fs-ext",

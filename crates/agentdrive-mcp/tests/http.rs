@@ -94,7 +94,34 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
         .await
         .unwrap();
     let tools = owner.tools().await.unwrap().tools;
-    assert_eq!(tools.len(), 29);
+    assert_eq!(tools.len(), 30);
+    let adoption = tools
+        .iter()
+        .find(|tool| tool.name == "workspace_adopt_directory")
+        .unwrap();
+    assert!(
+        adoption
+            .description
+            .as_deref()
+            .unwrap()
+            .contains("restart_agent=true")
+    );
+    let rejected = owner
+        .call(
+            "workspace_adopt_directory".into(),
+            json!({
+                "request_id":"adopt-without-restart",
+                "request":{"path":"/project","restart_agent":false}
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.is_error, Some(true));
+    assert_eq!(
+        rejected.structured_content.unwrap()["error"]["code"],
+        "INVALID_ARGUMENT"
+    );
+
     assert!(!tools.iter().any(|tool| matches!(
         tool.name.as_ref(),
         "turn_begin"

@@ -43,3 +43,4 @@ tempfile.workspace = true
 agentdrive-config.workspace = true
 agentdrive-engine.workspace = true
 agentdrive-local.workspace = true
+agentdrive-test-support.workspace = true

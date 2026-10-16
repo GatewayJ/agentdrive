@@ -30,6 +30,28 @@ agentdrive mount --workspace "$WORKSPACE" "$AGENTDRIVE_DIRECTORY/mounts/project"
 
 MCP 返回 `result.binding`，其中包含 `id`、`branch`、`path` 和 `generation`。Agent 使用返回路径执行文件操作。MCP 连接本身不会改变 Agent 的工作目录或文件访问权限。保存当前挂载可调用 `mount_save`，参数为 `mount` 和 `expected_binding_generation`；保存请求不会创建新分支。
 
+## 转换已有目录
+
+调用 `workspace_adopt_directory`，默认创建以目录名称命名、调用者拥有的 workspace，原目录内容作为 `main` 的初始 revision，并挂载到原路径。提供 `request.workspace` 时，导入指定 workspace 的新 branch，调用者需要该 workspace 的 `manage` 权限。路径必须位于 `mount_roots` 的子目录中，同时处于 `directory_roots` 允许范围内，父目录必须存在，并且原生挂载功能可用。目标路径及其父目录、子目录中已有的挂载需要提前卸载。
+
+调用前暂停全部文件写入。传入 `restart_agent: true`，确认转换后必须重启 Agent 及其终端。工具通过参数和返回结果要求重启，进程的终止与启动由调用方执行。旧进程的工作目录引用和文件句柄可能继续指向备份目录，转换后应停止通过原 Agent 访问文件。
+
+```json
+{
+  "request_id": "adopt-project-1",
+  "request": {
+    "path": "/absolute/path/to/project",
+    "restart_agent": true
+  }
+}
+```
+
+工具按照 `workspace_import` 的规则校验并导入目录，然后将原目录移动到旁边的 `.agentdrive-backup-<operation-id>/original`，再将导入的 branch 挂载到原路径。包含 symbolic link 等不支持内容时，导入失败，原目录保持原位。指定 workspace ID 时，原有内容和默认分支选择保持不变，新 branch 显式挂载到 `path`。
+
+成功时 `phase` 为 `complete`、`mount_ready` 为 `true`，且没有 `error`。操作记录的 `workspace` 返回 workspace ID。结果包含 `branch`、`path`、`backup_path`、`binding` 和 `restart_required: true`。重启 Agent 时继续使用原路径作为工作目录，后续显式挂载使用返回的 branch ID。确认重启后的 Agent 能正常访问文件后，可以自行清理备份。
+
+移动目录后如果挂载失败，原文件保存在 `backup_path`，原路径可能为空。暂停目录访问，使用相同 request ID 和相同参数重试；daemon 重启后也支持继续处理，并复用已导入的 branch。响应丢失时通过 `operation_get` 或 `operation_by_request` 查询结果。导入阶段失败时，修正源目录后使用新的 request ID。已经移动的路径应继续原请求。
+
 ## 应用启动命令
 
 需要由协议集成程序设置 Agent 工作目录并在任务结束时保存，可以配置以下启动命令：

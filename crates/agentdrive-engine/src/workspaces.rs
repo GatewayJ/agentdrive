@@ -12,6 +12,9 @@ pub struct WorkspaceService {
     operations: Arc<OperationService>,
     directories: Arc<dyn DirectoryAccess>,
     mount_capability: String,
+    mounts: Arc<dyn MountApi>,
+    driver: Arc<dyn MountDriver>,
+    adoption: tokio::sync::Mutex<()>,
 }
 
 impl std::fmt::Debug for WorkspaceService {
@@ -27,6 +30,8 @@ impl WorkspaceService {
         operations: Arc<OperationService>,
         directories: Arc<dyn DirectoryAccess>,
         mount_capability: String,
+        mounts: Arc<dyn MountApi>,
+        driver: Arc<dyn MountDriver>,
     ) -> Arc<Self> {
         Arc::new(Self {
             runtime,
@@ -34,6 +39,9 @@ impl WorkspaceService {
             operations,
             directories,
             mount_capability,
+            mounts,
+            driver,
+            adoption: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -41,6 +49,7 @@ impl WorkspaceService {
         &self,
         context: OperationContext,
         request: CreateWorkspace,
+        source: Option<&std::path::Path>,
     ) -> Result<OperationRecord> {
         validate_label(&request.name, "workspace name")?;
         let _protection = self.runtime.objects.read().await;
@@ -80,7 +89,18 @@ impl WorkspaceService {
             modified_ns: now,
             content: None,
         };
-        let tree = FileTree::from([(WorkspacePath::root(), inode.clone())]);
+        let tree = match source {
+            Some(source) => {
+                self.directories
+                    .import_tree(
+                        &workspace,
+                        source,
+                        self.revisions.trees.content.local.clone(),
+                    )
+                    .await?
+            }
+            None => FileTree::from([(WorkspacePath::root(), inode)]),
+        };
         let root = self.revisions.trees.save_tree(id, &tree).await?;
         let branch_id = BranchId::new();
         let revision = Revision {
@@ -110,7 +130,7 @@ impl WorkspaceService {
             working_root: root,
             base_revision: initial_revision,
             source_branch: None,
-            next_inode: 2,
+            next_inode: increment(tree.values().map(|inode| inode.id.0).max().unwrap_or(1))?,
             dirty: false,
             state: BranchState::Writable,
             protected: false,
@@ -142,11 +162,14 @@ impl WorkspaceService {
                 sync_jobs: vec![job],
                 node_changes: vec![NodeChange::Replace {
                     branch: branch_id,
-                    nodes: vec![Node {
-                        path: WorkspacePath::root(),
-                        inode,
-                        dirty: false,
-                    }],
+                    nodes: tree
+                        .into_iter()
+                        .map(|(path, inode)| Node {
+                            path,
+                            inode,
+                            dirty: false,
+                        })
+                        .collect(),
                 }],
                 ..Default::default()
             })
@@ -157,6 +180,221 @@ impl WorkspaceService {
 
 #[async_trait]
 impl WorkspaceApi for WorkspaceService {
+    async fn adopt_directory(
+        &self,
+        context: RequestContext,
+        mut request: AdoptDirectory,
+    ) -> Result<OperationRecord> {
+        if !request.restart_agent {
+            return Err(Error::invalid(
+                "restart_agent must be true: pause file writes now and restart the Agent and its terminals after conversion",
+            ));
+        }
+        if self.mount_capability == "macos-macfuse-feature-required" {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                "directory conversion requires macFUSE and the macos-mount feature",
+            ));
+        }
+        request.path = self.driver.normalize_path(&request.path).await?;
+        if let Some(workspace) = request.workspace {
+            self.runtime
+                .authorize(&context.principal, workspace, None, Permission::Manage)
+                .await?;
+        }
+        let _adoption = self.adoption.lock().await;
+        let mut record = match self
+            .operations
+            .start(
+                context,
+                "workspace_adopt_directory",
+                &request,
+                request.workspace,
+                None,
+            )
+            .await?
+        {
+            OperationStart::New(context) => context.operation,
+            OperationStart::Existing(record) if record.phase == OperationPhase::Complete => {
+                return Ok(record);
+            }
+            OperationStart::Existing(record) => record,
+        };
+        let backup = request
+            .path
+            .parent()
+            .ok_or_else(|| Error::invalid("directory needs a parent"))?
+            .join(format!(".agentdrive-backup-{}", record.id));
+        let child = |suffix: &str| RequestContext {
+            principal: record.principal.clone(),
+            request_id: format!("{}-{suffix}", record.id),
+        };
+        let import_context = child("import");
+        let mount_context = child("mount");
+        let result: Result<MountBinding> = async {
+            let mount_operation = self
+                .runtime
+                .state
+                .operation_by_request(&record.principal, &mount_context.request_id)
+                .await?;
+            if mount_operation.is_none() {
+                let _lifecycle = self.runtime.lifecycle.lock().await;
+                if self.runtime.state.mounts().await?.iter().any(|mount| {
+                    (mount.path.starts_with(&request.path) || request.path.starts_with(&mount.path))
+                        && mount.state != MountState::Released
+                }) {
+                    return Err(Error::new(
+                        ErrorCode::MountBusy,
+                        "directory already has a mount binding",
+                    ));
+                }
+            }
+            let imported = if let Some(workspace) = request.workspace {
+                self.import_directory(
+                    import_context,
+                    ImportDirectory {
+                        workspace,
+                        source: request.path.clone(),
+                    },
+                )
+                .await?
+            } else {
+                match self
+                    .operations
+                    .start(
+                        import_context,
+                        "workspace_adopt_create",
+                        &request,
+                        None,
+                        None,
+                    )
+                    .await?
+                {
+                    OperationStart::Existing(record) => record,
+                    OperationStart::New(operation) => {
+                        let create = CreateWorkspace {
+                            name: request
+                                .path
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                                .ok_or_else(|| Error::invalid("directory needs a UTF-8 name"))?
+                                .to_owned(),
+                            grants: vec![],
+                            max_file_bytes: None,
+                            max_working_bytes: None,
+                            max_inodes: None,
+                        };
+                        match self
+                            .create_workspace(operation.clone(), create, Some(&request.path))
+                            .await
+                        {
+                            Ok(record) => record,
+                            Err(error) => self.operations.fail(&operation, error).await?,
+                        }
+                    }
+                }
+            };
+            if let Some(error) = imported.error {
+                return Err(error);
+            }
+            let branch = match imported.branch {
+                Some(branch) if imported.local_saved => self.runtime.branch(branch).await?,
+                _ => {
+                    return Err(Error::new(
+                        ErrorCode::RecoveryRequired,
+                        "directory import has not completed",
+                    ));
+                }
+            };
+            record.workspace = Some(branch.workspace);
+            record.branch = Some(branch.id);
+            record.local_saved = true;
+            record.phase = OperationPhase::CommittedMountPending;
+            record.mount_ready = Some(false);
+            record.error = None;
+            record.result = Some(CommandResult::DirectoryAdoption {
+                branch: branch.id,
+                path: request.path.clone(),
+                backup_path: backup.join("original"),
+                binding: None,
+                restart_required: true,
+            });
+            self.runtime
+                .state
+                .commit(LocalCommit {
+                    operations: vec![record.clone()],
+                    ..Default::default()
+                })
+                .await?;
+            if mount_operation.is_none() {
+                let _lifecycle = self.runtime.lifecycle.lock().await;
+                if self.runtime.state.mounts().await?.iter().any(|mount| {
+                    (mount.path.starts_with(&request.path) || request.path.starts_with(&mount.path))
+                        && mount.state != MountState::Released
+                }) {
+                    return Err(Error::new(
+                        ErrorCode::MountBusy,
+                        "directory already has a mount binding",
+                    ));
+                }
+                self.directories.stage_mount(&request.path, &backup).await?;
+            }
+            let mounted = self
+                .mounts
+                .prepare(
+                    mount_context,
+                    PrepareMount {
+                        workspace: branch.workspace,
+                        branch: Some(branch.id),
+                        revision: None,
+                        path: request.path.clone(),
+                        access: AccessMode::ReadWrite,
+                        durability: Durability::Local,
+                    },
+                )
+                .await?;
+            if let Some(error) = mounted.error {
+                return Err(error);
+            }
+            match mounted.result {
+                Some(CommandResult::Mount { binding }) if mounted.mount_ready == Some(true) => {
+                    Ok(binding)
+                }
+                _ => Err(Error::new(
+                    ErrorCode::RecoveryRequired,
+                    "directory mount has not completed; retry the same request_id",
+                )),
+            }
+        }
+        .await;
+        match result {
+            Ok(binding) => {
+                record.phase = OperationPhase::Complete;
+                record.mount_ready = Some(true);
+                record.error = None;
+                record.result = Some(CommandResult::DirectoryAdoption {
+                    branch: binding.branch,
+                    path: request.path,
+                    backup_path: backup.join("original"),
+                    binding: Some(binding),
+                    restart_required: true,
+                });
+            }
+            Err(error) => {
+                record.phase = OperationPhase::RecoveryRequired;
+                record.error = Some(error);
+            }
+        }
+        self.runtime
+            .state
+            .commit(LocalCommit {
+                operations: vec![record.clone()],
+                ..Default::default()
+            })
+            .await?;
+        Ok(record)
+    }
+
     async fn create(
         &self,
         context: RequestContext,
@@ -170,7 +408,10 @@ impl WorkspaceApi for WorkspaceService {
             OperationStart::Existing(record) => return Ok(record),
             OperationStart::New(context) => context,
         };
-        match self.create_workspace(operation.clone(), request).await {
+        match self
+            .create_workspace(operation.clone(), request, None)
+            .await
+        {
             Ok(record) => Ok(record),
             Err(error) => self.operations.fail(&operation, error).await,
         }

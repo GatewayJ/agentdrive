@@ -25,7 +25,7 @@ Replace both paths with actual absolute paths; use `agentdrive.exe` on Windows. 
 
 For direct Streamable HTTP, use `http://127.0.0.1:7421/mcp` and `Authorization: Bearer <token-file-contents>`. Use an MCP client that performs initialization and preserves the returned session information. The accepted Host values are the bound address and `localhost:<port>`. A supplied Origin must match the request's own HTTP origin or `allowed_origins`; native CLI/stdio connections omit Origin. The daemon binds only to loopback; access from other machines requires an authenticated TLS proxy preserving an accepted Host value.
 
-The server advertises the MCP `tools` capability. It provides 29 tools, including their input JSON schemas and annotations. Read the connected server's catalog with `tools/list` or:
+The server advertises the MCP `tools` capability. It provides 30 tools, including their input JSON schemas and annotations. Read the connected server's catalog with `tools/list` or:
 
 ```sh
 agentdrive tools > tools.json
@@ -34,7 +34,7 @@ jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 
 ## Argument forms and results
 
-The 18 command tools in the next table require an envelope. For example, the `arguments` object in a `tools/call` for `workspace_create` is:
+The 19 command tools in the next table require an envelope. For example, the `arguments` object in a `tools/call` for `workspace_create` is:
 
 ```json
 {
@@ -78,6 +78,7 @@ Fields below are inside `request`. A suffix `?` means the field may be omitted. 
 | Tool | Request fields | Behavior / result |
 | --- | --- | --- |
 | `workspace_create` | `name`, `grants?`, `max_file_bytes?`, `max_working_bytes?`, `max_inodes?` | Creates a workspace and selected writable `main`; `result.workspace`. Defaults: 64 GiB/file, 256 GiB working capacity, 1,000,000 inodes. Inodes must be 1–1,000,000; file capacity must be positive and no greater than working capacity; working capacity must be at most `i64::MAX`. |
+| `workspace_adopt_directory` | `workspace?`, `path`, `restart_agent` | Requires `restart_agent: true`. Omit `workspace` to create a workspace with the directory contents as the initial `main` revision. Supply `workspace` to import a new branch with `manage` permission. Pause writes, retain the original at `result.backup_path`, and mount the branch at the original path. Returns `result.branch`, `result.binding`, and `result.restart_required: true`. Restart the Agent and its terminals before further file access. See [directory conversion](integrations.md#convert-an-existing-directory). |
 | `workspace_import` | `workspace`, `source` | Imports a stable allowed host directory into a new branch; `result.branch`. |
 | `workspace_export` | `workspace`, `revision`, `destination`, `paths?` | Exports selected paths into a new allowed host directory. Omitted/null paths select the whole revision. |
 | `revision_commit` | `guard`, `kind`, `message?`, `durability?` | `kind` accepts `commit` or `checkpoint`; returns `result.revision` and `result.branch`. `message` permits up to 4096 UTF-8 bytes without NUL. |

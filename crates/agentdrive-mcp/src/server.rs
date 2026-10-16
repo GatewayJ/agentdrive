@@ -40,6 +40,7 @@ impl McpServer {
         }
         match name {
             "workspace_create" => command!(CreateWorkspace, workspace, create),
+            "workspace_adopt_directory" => command!(AdoptDirectory, workspace, adopt_directory),
             "workspace_import" => command!(ImportDirectory, workspace, import_directory),
             "workspace_export" => command!(ExportRevision, workspace, export_revision),
             "revision_commit" => command!(CommitRevision, revisions, commit),
@@ -277,6 +278,11 @@ fn tool<T: JsonSchema>(name: &'static str, description: &'static str, read_only:
 }
 pub fn tool_catalog() -> Vec<Tool> {
     vec![
+        tool::<Command<AdoptDirectory>>(
+            "workspace_adopt_directory",
+            "Convert a local directory into a mount at the same path. Omit workspace to create a workspace named after the directory with its contents as the initial main revision. Supply workspace to import a new branch (requires manage permission). Stop all file writes first. Requires restart_agent=true: after this operation, stop using the directory and restart the Agent and its terminals before any further file access. Original files remain at result.backup_path. Retry failures with the same request_id; inspect mount_ready and error.",
+            false,
+        ),
         tool::<Command<CreateWorkspace>>(
             "workspace_create",
             "Create a workspace with a writable, selected main branch.",
