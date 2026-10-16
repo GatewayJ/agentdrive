@@ -2,14 +2,14 @@
 
 [English](integrations.md) | [简体中文](integrations.zh-CN.md)
 
-启动 `agentfsd` 并配置 `AGENTFS_TOKEN_FILE`。原生目录需要 FUSE、macFUSE 或 WinFsp。挂载路径必须位于 daemon 配置的 `mount_roots` 中。Agent 的执行环境需要能够访问该目录。
+启动 `agentdrived` 并配置 `AGENTDRIVE_TOKEN_FILE`。原生目录需要 FUSE、macFUSE 或 WinFsp。挂载路径必须位于 daemon 配置的 `mount_roots` 中。Agent 的执行环境需要能够访问该目录。
 
 ## MCP 与挂载目录
 
-在已有 Agent 中配置 stdio MCP 命令 `agentfs mcp`，或者连接 daemon 的 `/mcp` HTTP 地址。MCP 连接复用长期运行的 daemon。
+在已有 Agent 中配置 stdio MCP 命令 `agentdrive mcp`，或者连接 daemon 的 `/mcp` HTTP 地址。MCP 连接复用长期运行的 daemon。
 
 ```sh
-agentfs mount --workspace "$WORKSPACE" "$AGENTFS_DIRECTORY/mounts/project"
+agentdrive mount --workspace "$WORKSPACE" "$AGENTDRIVE_DIRECTORY/mounts/project"
 ```
 
 对应的 MCP 工具为 `mount_prepare`，最少参数为：
@@ -35,13 +35,13 @@ MCP 返回 `result.binding`，其中包含 `id`、`branch`、`path` 和 `generat
 需要由协议集成程序设置 Agent 工作目录并在任务结束时保存，可以配置以下启动命令：
 
 ```sh
-agentfs integrate --protocol acp --workspace "$WORKSPACE" \
-  --mount-path "$AGENTFS_DIRECTORY/mounts/project" -- your-acp-agent
+agentdrive integrate --protocol acp --workspace "$WORKSPACE" \
+  --mount-path "$AGENTDRIVE_DIRECTORY/mounts/project" -- your-acp-agent
 ```
 
 ```sh
-agentfs integrate --protocol codex-app-server --workspace "$WORKSPACE" \
-  --mount-path "$AGENTFS_DIRECTORY/mounts/project" -- codex app-server --listen stdio://
+agentdrive integrate --protocol codex-app-server --workspace "$WORKSPACE" \
+  --mount-path "$AGENTDRIVE_DIRECTORY/mounts/project" -- codex app-server --listen stdio://
 ```
 
 应用与集成程序交换逐行 JSON-RPC 消息。集成程序复用挂载，等待目录就绪后启动 Agent。ACP 的 `session/new`、`session/load`、`session/resume`，以及 Codex 的 `thread/start`、`thread/resume`、`thread/fork`、`turn/start` 使用该目录作为 `cwd`。协议中的对话 ID 由应用管理。
@@ -66,11 +66,11 @@ agentfs integrate --protocol codex-app-server --workspace "$WORKSPACE" \
 
 ## 分支与 Dashboard
 
-`agentfs branch create` 和 MCP `branch_create` 显式创建分支，保持原有选择。`agentfs branch switch` 和 MCP `branch_switch` 保存原分支并更新当前 location 的 workspace 选择。CLI 会尝试释放已有挂载；目录被占用时，需要关闭文件句柄和使用目录的程序，再使用原 request ID 重试。MCP 调用方通过 `mount_release` 继续等待中的切换。
+`agentdrive branch create` 和 MCP `branch_create` 显式创建分支，保持原有选择。`agentdrive branch switch` 和 MCP `branch_switch` 保存原分支并更新当前 location 的 workspace 选择。CLI 会尝试释放已有挂载；目录被占用时，需要关闭文件句柄和使用目录的程序，再使用原 request ID 重试。MCP 调用方通过 `mount_release` 继续等待中的切换。
 
 旧数据库保留已有分支和选择。没有选择且只有一个可写本机分支时自动复用；存在多个可写本机分支时，使用 `branch_switch` 明确选择。
 
-运行 `agentfs dashboard --open` 打开 daemon 页面。浏览器从 URL fragment 读取令牌，随后移除 fragment，将令牌保存在 session storage 中。也可以直接打开地址并输入 daemon token。页面每 15 秒刷新，展示分支创建关系、版本历史和 commit 信息。点击分支只改变页面展示的历史。
+运行 `agentdrive dashboard --open` 打开 daemon 页面。浏览器从 URL fragment 读取令牌，随后移除 fragment，将令牌保存在 session storage 中。也可以直接打开地址并输入 daemon token。页面每 15 秒刷新，展示分支创建关系、版本历史和 commit 信息。点击分支只改变页面展示的历史。
 
 只读 JSON 接口为 `GET /api/workspaces` 和 `GET /api/workspaces/{workspace}`。后者返回 `status` 和 `revisions`，其中 `selected_branch` 是当前 location 的选择。管理员通过 `/settings` 编辑运行配置，详见[配置说明](configuration.zh-CN.md)。
 

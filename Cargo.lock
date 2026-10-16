@@ -3,11 +3,11 @@
 version = 4
 
 [[package]]
-name = "agentfs"
+name = "agentdrive"
 version = "0.1.0"
 dependencies = [
- "agentfs-mcp",
- "agentfs-model",
+ "agentdrive-mcp",
+ "agentdrive-model",
  "clap",
  "reqwest",
  "serde_json",
@@ -17,10 +17,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentfs-config"
+name = "agentdrive-config"
 version = "0.1.0"
 dependencies = [
- "agentfs-model",
+ "agentdrive-model",
  "arc-swap",
  "parking_lot",
  "schemars",
@@ -33,14 +33,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentfs-engine"
+name = "agentdrive-engine"
 version = "0.1.0"
 dependencies = [
- "agentfs-config",
- "agentfs-local",
- "agentfs-model",
- "agentfs-ports",
- "agentfs-test-support",
+ "agentdrive-config",
+ "agentdrive-local",
+ "agentdrive-model",
+ "agentdrive-ports",
+ "agentdrive-test-support",
  "arc-swap",
  "async-trait",
  "bytes",
@@ -52,11 +52,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentfs-local"
+name = "agentdrive-local"
 version = "0.1.0"
 dependencies = [
- "agentfs-model",
- "agentfs-ports",
+ "agentdrive-model",
+ "agentdrive-ports",
  "async-trait",
  "bytes",
  "fs4",
@@ -71,15 +71,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentfs-mcp"
+name = "agentdrive-mcp"
 version = "0.1.0"
 dependencies = [
- "agentfs-config",
- "agentfs-engine",
- "agentfs-local",
- "agentfs-model",
- "agentfs-ports",
- "agentfs-test-support",
+ "agentdrive-config",
+ "agentdrive-engine",
+ "agentdrive-local",
+ "agentdrive-model",
+ "agentdrive-ports",
+ "agentdrive-test-support",
  "axum",
  "bytes",
  "reqwest",
@@ -94,7 +94,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentfs-model"
+name = "agentdrive-model"
 version = "0.1.0"
 dependencies = [
  "hex",
@@ -108,14 +108,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentfs-platform"
+name = "agentdrive-platform"
 version = "0.1.0"
 dependencies = [
- "agentfs-config",
- "agentfs-engine",
- "agentfs-local",
- "agentfs-model",
- "agentfs-ports",
+ "agentdrive-config",
+ "agentdrive-engine",
+ "agentdrive-local",
+ "agentdrive-model",
+ "agentdrive-ports",
  "async-trait",
  "bytes",
  "cap-fs-ext",
@@ -133,10 +133,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentfs-ports"
+name = "agentdrive-ports"
 version = "0.1.0"
 dependencies = [
- "agentfs-model",
+ "agentdrive-model",
  "async-trait",
  "bytes",
  "schemars",
@@ -145,12 +145,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentfs-s3"
+name = "agentdrive-s3"
 version = "0.1.0"
 dependencies = [
- "agentfs-config",
- "agentfs-model",
- "agentfs-ports",
+ "agentdrive-config",
+ "agentdrive-model",
+ "agentdrive-ports",
  "async-trait",
  "bytes",
  "futures",
@@ -166,11 +166,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentfs-test-support"
+name = "agentdrive-test-support"
 version = "0.1.0"
 dependencies = [
- "agentfs-model",
- "agentfs-ports",
+ "agentdrive-model",
+ "agentdrive-ports",
  "async-trait",
  "bytes",
  "parking_lot",
@@ -178,17 +178,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentfsd"
+name = "agentdrived"
 version = "0.1.0"
 dependencies = [
- "agentfs-config",
- "agentfs-engine",
- "agentfs-local",
- "agentfs-mcp",
- "agentfs-model",
- "agentfs-platform",
- "agentfs-ports",
- "agentfs-s3",
+ "agentdrive-config",
+ "agentdrive-engine",
+ "agentdrive-local",
+ "agentdrive-mcp",
+ "agentdrive-model",
+ "agentdrive-platform",
+ "agentdrive-ports",
+ "agentdrive-s3",
  "axum",
  "clap",
  "tokio",

@@ -2,20 +2,20 @@
 
 [English](architecture.md) | [简体中文](architecture.zh-CN.md)
 
-`agentfsd` 负责组装应用：创建具体适配器，将其注入 engine，并通过生成的 `Services` 提供服务。engine 依赖 model、ports 和 config crate；持久化、原生驱动、S3 和协议依赖由适配器管理。
+`agentdrived` 负责组装应用：创建具体适配器，将其注入 engine，并通过生成的 `Services` 提供服务。engine 依赖 model、ports 和 config crate；持久化、原生驱动、S3 和协议依赖由适配器管理。
 
 | Crate | 职责 |
 | --- | --- |
-| `agentfs-model` | ID、路径、对象、版本、分支、挂载关联、操作、合并记录和错误 |
-| `agentfs-config` | 配置定义、默认值、校验、文件原子替换、管理员授权和运行时配置快照 |
-| `agentfs-ports` | 存储、文件系统、挂载、时钟、目录和应用接口 |
-| `agentfs-engine` | 文件行为，以及工作区、版本、挂载、同步、缓存、所有权和合并流程 |
-| `agentfs-local` | 进程锁定、SQLite 元数据、不可变对象、工作文件、租约和读取验证 |
-| `agentfs-s3` | 不可变对象的流式传输和引用的条件更新 |
-| `agentfs-platform` | FUSE/WinFsp 回调、受目录范围限制的主机目录访问和时钟 |
-| `agentfs-mcp` | 具有明确类型的工具、带身份验证的 HTTP 路由、Dashboard 与设置接口、客户端和 stdio 转发 |
-| `agentfs-test-support` | 可控时钟、挂载和存储测试替代对象、服务中断和确认丢失的故障注入 |
-| `agentfsd` / `agentfs` | 守护进程生命周期和命令行客户端 |
+| `agentdrive-model` | ID、路径、对象、版本、分支、挂载关联、操作、合并记录和错误 |
+| `agentdrive-config` | 配置定义、默认值、校验、文件原子替换、管理员授权和运行时配置快照 |
+| `agentdrive-ports` | 存储、文件系统、挂载、时钟、目录和应用接口 |
+| `agentdrive-engine` | 文件行为，以及工作区、版本、挂载、同步、缓存、所有权和合并流程 |
+| `agentdrive-local` | 进程锁定、SQLite 元数据、不可变对象、工作文件、租约和读取验证 |
+| `agentdrive-s3` | 不可变对象的流式传输和引用的条件更新 |
+| `agentdrive-platform` | FUSE/WinFsp 回调、受目录范围限制的主机目录访问和时钟 |
+| `agentdrive-mcp` | 具有明确类型的工具、带身份验证的 HTTP 路由、Dashboard 与设置接口、客户端和 stdio 转发 |
+| `agentdrive-test-support` | 可控时钟、挂载和存储测试替代对象、服务中断和确认丢失的故障注入 |
+| `agentdrived` / `agentdrive` | 守护进程生命周期和命令行客户端 |
 
 ## 模块职责
 
@@ -37,10 +37,10 @@
 | `config/store` | 校验候选配置、控制写入顺序、保存文件与发布 `ArcSwap` 快照 |
 | `mcp/gateway`、`mcp/server` | 验证 HTTP 请求身份并调用应用接口 |
 | `mcp/web`、`mcp/dashboard` | 工作区、生命周期、设置的 HTTP 接口与浏览器页面 |
-| `apps/agentfs/integration` | ACP、Codex app-server 事件转发与持久化生命周期 |
-| `apps/agentfsd/main` | 创建适配器、运行 HTTP 服务和后台任务、正常关闭服务 |
+| `apps/agentdrive/integration` | ACP、Codex app-server 事件转发与持久化生命周期 |
+| `apps/agentdrived/main` | 创建适配器、运行 HTTP 服务和后台任务、正常关闭服务 |
 
-`agentfs-ports` 定义 engine 使用的接口，存储和平台适配器负责实现接口。配置模块依赖 model 中的数据类型，数据库、挂载、S3 和 HTTP 服务由 daemon 创建。daemon 将同一个 `LiveConfig` 传给 engine 和 HTTP 入口；`ConfigStore` 统一发布配置，使用配置的模块为每次操作取得完整快照。
+`agentdrive-ports` 定义 engine 使用的接口，存储和平台适配器负责实现接口。配置模块依赖 model 中的数据类型，数据库、挂载、S3 和 HTTP 服务由 daemon 创建。daemon 将同一个 `LiveConfig` 传给 engine 和 HTTP 入口；`ConfigStore` 统一发布配置，使用配置的模块为每次操作取得完整快照。
 
 ## 配置生命周期
 

@@ -2,20 +2,20 @@
 
 [English](architecture.md) | [简体中文](architecture.zh-CN.md)
 
-`agentfsd` is the composition root. It creates concrete adapters, injects them into the engine, and serves the resulting `Services` facade. The engine imports model, port, and configuration crates; persistence, native drivers, S3, and protocol dependencies stay in adapters.
+`agentdrived` is the composition root. It creates concrete adapters, injects them into the engine, and serves the resulting `Services` facade. The engine imports model, port, and configuration crates; persistence, native drivers, S3, and protocol dependencies stay in adapters.
 
 | Crate | Responsibility |
 | --- | --- |
-| `agentfs-model` | IDs, paths, objects, revisions, branches, mount bindings, operations, merge records, errors |
-| `agentfs-config` | Configuration schema, defaults, validation, atomic file replacement, administrator access, and shared runtime snapshots |
-| `agentfs-ports` | Storage, filesystem, mount, clock, directory, and application interfaces |
-| `agentfs-engine` | File semantics and workspace, revision, mount, replication, cache, ownership, merge workflows |
-| `agentfs-local` | A process lock, SQLite metadata, immutable objects, working files, leases, verified reads |
-| `agentfs-s3` | Streaming immutable object transport and conditional reference updates |
-| `agentfs-platform` | FUSE/WinFsp callbacks, contained host-directory access and clock |
-| `agentfs-mcp` | Typed tools, authenticated HTTP routing, dashboard and settings HTTP API, client, stdio forwarding |
-| `agentfs-test-support` | Deterministic clocks, mount and storage doubles, injected outages and lost acknowledgements |
-| `agentfsd` / `agentfs` | Daemon lifecycle and command-line client |
+| `agentdrive-model` | IDs, paths, objects, revisions, branches, mount bindings, operations, merge records, errors |
+| `agentdrive-config` | Configuration schema, defaults, validation, atomic file replacement, administrator access, and shared runtime snapshots |
+| `agentdrive-ports` | Storage, filesystem, mount, clock, directory, and application interfaces |
+| `agentdrive-engine` | File semantics and workspace, revision, mount, replication, cache, ownership, merge workflows |
+| `agentdrive-local` | A process lock, SQLite metadata, immutable objects, working files, leases, verified reads |
+| `agentdrive-s3` | Streaming immutable object transport and conditional reference updates |
+| `agentdrive-platform` | FUSE/WinFsp callbacks, contained host-directory access and clock |
+| `agentdrive-mcp` | Typed tools, authenticated HTTP routing, dashboard and settings HTTP API, client, stdio forwarding |
+| `agentdrive-test-support` | Deterministic clocks, mount and storage doubles, injected outages and lost acknowledgements |
+| `agentdrived` / `agentdrive` | Daemon lifecycle and command-line client |
 
 ## Module responsibilities
 
@@ -37,10 +37,10 @@
 | `config/store` | Validate candidate settings, serialize writers, save configuration and publish `ArcSwap` snapshots |
 | `mcp/gateway`, `mcp/server` | Authenticate HTTP requests and dispatch typed application tools |
 | `mcp/web`, `mcp/dashboard` | Workspace/lifecycle/settings HTTP endpoints and browser views |
-| `apps/agentfs/integration` | ACP and Codex app-server event forwarding and persistence lifecycle |
-| `apps/agentfsd/main` | Construct adapters, start HTTP and background workers, shut down cleanly |
+| `apps/agentdrive/integration` | ACP and Codex app-server event forwarding and persistence lifecycle |
+| `apps/agentdrived/main` | Construct adapters, start HTTP and background workers, shut down cleanly |
 
-`agentfs-ports` describes the interfaces used by the engine. Storage and platform adapters implement those interfaces. The configuration crate depends on model types and does not construct database, mount, S3 or HTTP services. The daemon supplies one `LiveConfig` handle to the engine and HTTP gateway. Only `ConfigStore` publishes replacement snapshots; consumers obtain a consistent snapshot for each operation.
+`agentdrive-ports` describes the interfaces used by the engine. Storage and platform adapters implement those interfaces. The configuration crate depends on model types and does not construct database, mount, S3 or HTTP services. The daemon supplies one `LiveConfig` handle to the engine and HTTP gateway. Only `ConfigStore` publishes replacement snapshots; consumers obtain a consistent snapshot for each operation.
 
 ## Configuration lifecycle
 

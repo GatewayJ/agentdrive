@@ -30,7 +30,7 @@
 
 启动时会从最后一次已确认的不可变分支根对象恢复工作元数据，并移除可重新生成的工作副本。进程意外终止后，尚未通过 fsync、自动保存、版本操作或 `mount_save`确认的写入可能丢失。写入失败后，如果元数据持久化也失败，受影响的分支会停止，等待恢复。
 
-本机的分支选择在卸载和重启后仍然保留。重新执行 `agentfs mount --workspace <workspace-id> <path>` 或调用 `mount_prepare` 即可复用。复用原生挂载前会检查其状态；匹配的挂载关联保留原有 ID 和 generation。路径上存在无法识别的文件系统时，需要操作人员清理；服务不会强制卸载无关文件系统。
+本机的分支选择在卸载和重启后仍然保留。重新执行 `agentdrive mount --workspace <workspace-id> <path>` 或调用 `mount_prepare` 即可复用。复用原生挂载前会检查其状态；匹配的挂载关联保留原有 ID 和 generation。路径上存在无法识别的文件系统时，需要操作人员清理；服务不会强制卸载无关文件系统。
 
 状态目录应位于正确支持文件同步和原子重命名的本地文件系统上。文件系统和存储设备必须遵守同步请求。Unix 发布对象时会同步文件数据和目录；Windows 同步文件数据，并通过 write-through 操作发布文件名称。配置远端存储后，远端确认为数据持久性提供额外保障。
 
@@ -60,9 +60,9 @@
 所有冲突处理完成后调用 `merge_apply`，提供当前候选版本和目标 guard。系统检查目标分支是否变化、是否存在未提交修改以及挂载使用情况。成功后创建保留来源与目标两个父版本的合并记录。正在使用的挂载需要通过 `mount_release` 完成切换。CLI 使用相同名称和参数，例如：
 
 ```sh
-agentfs call revision_files --json "{\"workspace\":\"$WORKSPACE\",\"revision\":\"$SOURCE_REVISION\"}"
-agentfs call merge_resolve --request-id "$RUN_ID-edit" --json - < merge-edits.json
-agentfs call merge_apply --request-id "$RUN_ID-apply" --json - < merge-apply.json
+agentdrive call revision_files --json "{\"workspace\":\"$WORKSPACE\",\"revision\":\"$SOURCE_REVISION\"}"
+agentdrive call merge_resolve --request-id "$RUN_ID-edit" --json - < merge-edits.json
+agentdrive call merge_apply --request-id "$RUN_ID-apply" --json - < merge-apply.json
 ```
 
 `merge-edits.json` 的参数示例：

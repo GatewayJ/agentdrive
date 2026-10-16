@@ -30,7 +30,7 @@ jobs:
       - name: Verify workspace
         run: make -j "$(nproc)" verify
       - name: Verify native mount
-        run: make -j "$(nproc)" test CARGO_FLAGS='-p agentfs-platform --test native_mount -- --ignored --nocapture'
+        run: make -j "$(nproc)" test CARGO_FLAGS='-p agentdrive-platform --test native_mount -- --ignored --nocapture'
       - name: Verify CLI and stdio MCP
         run: |
           make -j "$(nproc)" build
@@ -40,25 +40,25 @@ jobs:
         run: python3 tests/lifecycle_smoke.py
       - name: Start isolated RustFS
         run: |
-          docker run -d --name agentfs-test-s3 -p 127.0.0.1:9000:9000 -e RUSTFS_ACCESS_KEY=AGENTFSTESTLOCAL -e RUSTFS_SECRET_KEY=agentfs-local-integration-secret-2026 rustfs/rustfs@sha256:60f4f2f41ce95216f8cac676e69f9d90c0bfec458a3bc7fd7fb9b7c2452ac57a /data
+          docker run -d --name agentdrive-test-s3 -p 127.0.0.1:9000:9000 -e RUSTFS_ACCESS_KEY=AGENTDRIVETESTLOCAL -e RUSTFS_SECRET_KEY=agentdrive-local-integration-secret-2026 rustfs/rustfs@sha256:60f4f2f41ce95216f8cac676e69f9d90c0bfec458a3bc7fd7fb9b7c2452ac57a /data
           for attempt in $(seq 1 60); do
             if curl --silent --fail http://127.0.0.1:9000/health; then exit 0; fi
             sleep 1
           done
-          docker logs agentfs-test-s3
+          docker logs agentdrive-test-s3
           exit 1
       - name: Verify S3 conditional writes and multipart objects
         env:
-          AWS_ACCESS_KEY_ID: AGENTFSTESTLOCAL
-          AWS_SECRET_ACCESS_KEY: agentfs-local-integration-secret-2026
-          AGENTFS_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+          AWS_ACCESS_KEY_ID: AGENTDRIVETESTLOCAL
+          AWS_SECRET_ACCESS_KEY: agentdrive-local-integration-secret-2026
+          AGENTDRIVE_TEST_S3_ENDPOINT: http://127.0.0.1:9000
         run: |
-          make -j "$(nproc)" test CARGO_FLAGS='-p agentfs-s3 -- --ignored --nocapture'
+          make -j "$(nproc)" test CARGO_FLAGS='-p agentdrive-s3 -- --ignored --nocapture'
           python3 tests/replica_smoke.py
           python3 tests/storage_smoke.py
       - name: Stop isolated RustFS
         if: always()
-        run: docker rm -f agentfs-test-s3 || true
+        run: docker rm -f agentdrive-test-s3 || true
   macos:
     runs-on: macos-14
     timeout-minutes: 30
@@ -78,7 +78,7 @@ jobs:
       - name: Verify workspace
         run: make -j "$(sysctl -n hw.ncpu)" verify
       - name: Check macFUSE callbacks
-        run: make -j "$(sysctl -n hw.ncpu)" check CARGO_FLAGS='-p agentfs-platform --features macos-mount,fuser/macos-no-mount'
+        run: make -j "$(sysctl -n hw.ncpu)" check CARGO_FLAGS='-p agentdrive-platform --features macos-mount,fuser/macos-no-mount'
       - name: Verify CLI and stdio MCP
         run: |
           make -j "$(sysctl -n hw.ncpu)" build
@@ -118,7 +118,7 @@ jobs:
         run: make -j $env:NUMBER_OF_PROCESSORS test CARGO_FLAGS='--manifest-path vendor/winfsp_wrs/Cargo.toml --lib'
       - name: Verify native mount
         shell: pwsh
-        run: make -j $env:NUMBER_OF_PROCESSORS test CARGO_FLAGS='-p agentfs-platform --test native_mount -- --ignored --nocapture'
+        run: make -j $env:NUMBER_OF_PROCESSORS test CARGO_FLAGS='-p agentdrive-platform --test native_mount -- --ignored --nocapture'
       - name: Verify CLI and stdio MCP
         shell: pwsh
         run: |

@@ -15,21 +15,21 @@ parser.add_argument('--bin-dir', default='target/debug')
 args = parser.parse_args()
 exe = '.exe' if os.name == 'nt' else ''
 binaries = Path(args.bin_dir).resolve()
-with tempfile.TemporaryDirectory(prefix='agentfs-cli-') as temporary:
+with tempfile.TemporaryDirectory(prefix='agentdrive-cli-') as temporary:
     root = Path(temporary)
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]
     endpoint = f'http://127.0.0.1:{port}/mcp'
-    subprocess.run([str(binaries / ('agentfsd' + exe)), 'init', '--directory', str(root), '--listen', f'127.0.0.1:{port}'], check=True, capture_output=True, text=True)
+    subprocess.run([str(binaries / ('agentdrived' + exe)), 'init', '--directory', str(root), '--listen', f'127.0.0.1:{port}'], check=True, capture_output=True, text=True)
     environment = os.environ.copy()
-    environment.pop('AGENTFS_TOKEN', None)
-    environment.pop('AGENTFS_TOKEN_FILE', None)
+    environment.pop('AGENTDRIVE_TOKEN', None)
+    environment.pop('AGENTDRIVE_TOKEN_FILE', None)
     for token_arguments in ([], ['--token-file', str(root / 'missing-token')]):
-        result = subprocess.run([str(binaries / ('agentfs' + exe)), '--endpoint', endpoint, *token_arguments, 'dashboard'], env=environment, capture_output=True, text=True, timeout=10)
+        result = subprocess.run([str(binaries / ('agentdrive' + exe)), '--endpoint', endpoint, *token_arguments, 'dashboard'], env=environment, capture_output=True, text=True, timeout=10)
         assert result.returncode == 0, (result.stdout, result.stderr)
         assert result.stdout.strip() == f'http://127.0.0.1:{port}/'
-    config_path = root / 'agentfs.json'
+    config_path = root / 'agentdrive.json'
     config = json.loads(config_path.read_text())
     assert not {'allowed_origins', 'cache', 'remote'} & config.keys(), config
     for cache, expected in [
@@ -38,17 +38,17 @@ with tempfile.TemporaryDirectory(prefix='agentfs-cli-') as temporary:
     ]:
         config['cache'] = cache
         config_path.write_text(json.dumps(config))
-        invalid = subprocess.run([str(binaries / ('agentfsd' + exe)), 'serve', '--config', str(config_path)], capture_output=True, text=True, timeout=10)
+        invalid = subprocess.run([str(binaries / ('agentdrived' + exe)), 'serve', '--config', str(config_path)], capture_output=True, text=True, timeout=10)
         assert invalid.returncode == 1 and expected in invalid.stderr, invalid.stderr
     config['cache'] = {'max_bytes': 3 * 1024 ** 3}
     config_path.write_text(json.dumps(config))
-    client = [str(binaries / ('agentfs' + exe)), '--endpoint', endpoint, '--token-file', str(root / 'token')]
+    client = [str(binaries / ('agentdrive' + exe)), '--endpoint', endpoint, '--token-file', str(root / 'token')]
     log_path = root / 'daemon.log'
     log = log_path.open('w')
     daemon = None
 
     def start():
-        process = subprocess.Popen([str(binaries / ('agentfsd' + exe)), 'serve', '--config', str(root / 'agentfs.json')], stdout=log, stderr=log)
+        process = subprocess.Popen([str(binaries / ('agentdrived' + exe)), 'serve', '--config', str(root / 'agentdrive.json')], stdout=log, stderr=log)
         for _ in range(100):
             if process.poll() is not None:
                 raise AssertionError(log_path.read_text())
@@ -100,7 +100,7 @@ with tempfile.TemporaryDirectory(prefix='agentfs-cli-') as temporary:
             proxy.stdin.write(json.dumps({'jsonrpc': '2.0', **message}) + '\n')
             proxy.stdin.flush()
         try:
-            send({'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}, 'clientInfo': {'name': 'agentfs-smoke', 'version': '1'}}})
+            send({'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '2025-06-18', 'capabilities': {}, 'clientInfo': {'name': 'agentdrive-smoke', 'version': '1'}}})
             assert responses.get(timeout=15)['id'] == 1
             send({'method': 'notifications/initialized'})
             send({'id': 2, 'method': 'tools/list', 'params': {}})

@@ -13,15 +13,15 @@ import urllib.request
 parser = argparse.ArgumentParser()
 parser.add_argument('--bin-dir', default='target/debug')
 args = parser.parse_args()
-executable = Path(args.bin_dir).resolve() / ('agentfsd.exe' if os.name == 'nt' else 'agentfsd')
+executable = Path(args.bin_dir).resolve() / ('agentdrived.exe' if os.name == 'nt' else 'agentdrived')
 
-with tempfile.TemporaryDirectory(prefix='agentfs-config-') as temporary:
+with tempfile.TemporaryDirectory(prefix='agentdrive-config-') as temporary:
     root = Path(temporary)
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
         address = f'127.0.0.1:{listener.getsockname()[1]}'
     subprocess.run([str(executable), 'init', '--directory', str(root), '--listen', address], check=True, capture_output=True)
-    path = root / 'agentfs.json'
+    path = root / 'agentdrive.json'
     original = json.loads(path.read_text())
     token = (root / 'token').read_text().strip()
     endpoint = f'http://{address}/api/settings'
@@ -60,7 +60,7 @@ with tempfile.TemporaryDirectory(prefix='agentfs-config-') as temporary:
         return subprocess.Popen([str(executable), 'serve', '--config', str(path)], stdin=subprocess.DEVNULL, stdout=log, stderr=log)
 
     def replace_config(config):
-        pending = root / 'agentfs.pending.json'
+        pending = root / 'agentdrive.pending.json'
         pending.write_text(json.dumps(config))
         os.replace(pending, path)
 

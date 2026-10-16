@@ -11,17 +11,17 @@ authors = ["gatewayJ <835269233@qq.com>"]
 license = "Apache-2.0"
 
 [workspace.dependencies]
-agentfs-config = { path = "crates/agentfs-config" }
+agentdrive-config = { path = "crates/agentdrive-config" }
 arc-swap = "1.9.2"
 url = "2"
-agentfs-model = { path = "crates/agentfs-model" }
-agentfs-ports = { path = "crates/agentfs-ports" }
-agentfs-engine = { path = "crates/agentfs-engine" }
-agentfs-local = { path = "crates/agentfs-local" }
-agentfs-s3 = { path = "crates/agentfs-s3" }
-agentfs-platform = { path = "crates/agentfs-platform" }
-agentfs-mcp = { path = "crates/agentfs-mcp" }
-agentfs-test-support = { path = "crates/agentfs-test-support" }
+agentdrive-model = { path = "crates/agentdrive-model" }
+agentdrive-ports = { path = "crates/agentdrive-ports" }
+agentdrive-engine = { path = "crates/agentdrive-engine" }
+agentdrive-local = { path = "crates/agentdrive-local" }
+agentdrive-s3 = { path = "crates/agentdrive-s3" }
+agentdrive-platform = { path = "crates/agentdrive-platform" }
+agentdrive-mcp = { path = "crates/agentdrive-mcp" }
+agentdrive-test-support = { path = "crates/agentdrive-test-support" }
 async-trait = "0.1.89"
 bytes = "1.10"
 clap = { version = "4.5", features = ["derive", "env"] }

@@ -15,7 +15,7 @@ parser.add_argument('--bin-dir', default='target/debug')
 args = parser.parse_args()
 binaries = Path(args.bin_dir).resolve()
 exe = '.exe' if os.name == 'nt' else ''
-endpoint = os.environ['AGENTFS_TEST_S3_ENDPOINT']
+endpoint = os.environ['AGENTDRIVE_TEST_S3_ENDPOINT']
 prefix = 'daemon-tests/' + str(uuid.uuid4())
 
 class Daemon:
@@ -24,14 +24,14 @@ class Daemon:
         with socket.socket() as listener:
             listener.bind(('127.0.0.1', 0))
             port = listener.getsockname()[1]
-        subprocess.run([str(binaries / ('agentfsd' + exe)), 'init', '--directory', str(root), '--listen', f'127.0.0.1:{port}'], capture_output=True, text=True, check=True)
-        config_path = root / 'agentfs.json'
+        subprocess.run([str(binaries / ('agentdrived' + exe)), 'init', '--directory', str(root), '--listen', f'127.0.0.1:{port}'], capture_output=True, text=True, check=True)
+        config_path = root / 'agentdrive.json'
         config = json.loads(config_path.read_text())
-        config['remote'] = {'bucket': 'agentfs-integration', 'prefix': prefix, 'region': 'us-east-1', 'endpoint': endpoint, 'allow_http': True}
+        config['remote'] = {'bucket': 'agentdrive-integration', 'prefix': prefix, 'region': 'us-east-1', 'endpoint': endpoint, 'allow_http': True}
         config_path.write_text(json.dumps(config))
-        self.client = [str(binaries / ('agentfs' + exe)), '--endpoint', f'http://127.0.0.1:{port}/mcp', '--token-file', str(root / 'token')]
+        self.client = [str(binaries / ('agentdrive' + exe)), '--endpoint', f'http://127.0.0.1:{port}/mcp', '--token-file', str(root / 'token')]
         self.log = (root / 'daemon.log').open('w')
-        self.process = subprocess.Popen([str(binaries / ('agentfsd' + exe)), 'serve', '--config', str(config_path)], stdout=self.log, stderr=self.log)
+        self.process = subprocess.Popen([str(binaries / ('agentdrived' + exe)), 'serve', '--config', str(config_path)], stdout=self.log, stderr=self.log)
         for _ in range(100):
             if self.process.poll() is not None:
                 raise AssertionError((root / 'daemon.log').read_text())
@@ -61,7 +61,7 @@ class Daemon:
                 self.process.wait()
         self.log.close()
 
-with tempfile.TemporaryDirectory(prefix='agentfs-replica-') as temporary:
+with tempfile.TemporaryDirectory(prefix='agentdrive-replica-') as temporary:
     daemons = []
     try:
         for name in ['one', 'two']:

@@ -8,21 +8,21 @@
 
 ```sh
 export PATH="$PWD/target/debug:$PATH"
-export AGENTFS_DIRECTORY="$HOME/.local/share/agentfs"
-agentfsd init --directory "$AGENTFS_DIRECTORY"
-agentfsd serve --config "$AGENTFS_DIRECTORY/agentfs.json"
+export AGENTDRIVE_DIRECTORY="$HOME/.local/share/agentdrive"
+agentdrived init --directory "$AGENTDRIVE_DIRECTORY"
+agentdrived serve --config "$AGENTDRIVE_DIRECTORY/agentdrive.json"
 ```
 
 新目录只需运行一次 `init`。该命令会输出生成的配置路径，已有配置或 token 时会拒绝执行。`serve` 在前台运行，Ctrl+C 会请求关闭服务。S3 凭据可以通过 Dashboard 设置页面保存；选择环境凭据时，在当前终端运行 `serve` 前设置，详见[远端配置](configuration.zh-CN.md)。
 
 | 命令 | 参数 |
 | --- | --- |
-| `agentfsd init` | 必填 `--directory <PATH>`；可选 `--listen <IP:PORT>`，默认 `127.0.0.1:7421`。 |
-| `agentfsd serve` | 必填 `--config <PATH>`。 |
-| `agentfs tools` | 以 JSON 输出工具目录，包括 `inputSchema` 和 annotations。 |
-| `agentfs call <TOOL>` | 可选 `--json <JSON>`，默认 `{}`；可选 `--request-id <ID>`。 |
-| `agentfs mcp` | 启动 stdio MCP 代理，连接已有守护进程。 |
-| `agentfs mount` | 必填 `--workspace <ID>` 和目录；可选 `--request-id <ID>`。相对路径按 CLI 当前目录转换为绝对路径。 |
+| `agentdrived init` | 必填 `--directory <PATH>`；可选 `--listen <IP:PORT>`，默认 `127.0.0.1:7421`。 |
+| `agentdrived serve` | 必填 `--config <PATH>`。 |
+| `agentdrive tools` | 以 JSON 输出工具目录，包括 `inputSchema` 和 annotations。 |
+| `agentdrive call <TOOL>` | 可选 `--json <JSON>`，默认 `{}`；可选 `--request-id <ID>`。 |
+| `agentdrive mcp` | 启动 stdio MCP 代理，连接已有守护进程。 |
+| `agentdrive mount` | 必填 `--workspace <ID>` 和目录；可选 `--request-id <ID>`。相对路径按 CLI 当前目录转换为绝对路径。 |
 
 两个程序都提供 `--help` 和 `--version`，子命令提供 `--help`。
 
@@ -31,14 +31,14 @@ agentfsd serve --config "$AGENTFS_DIRECTORY/agentfs.json"
 连接参数放在**子命令前面**：
 
 ```sh
-agentfs --endpoint http://127.0.0.1:7421/mcp --token-file "$AGENTFS_DIRECTORY/token" tools
+agentdrive --endpoint http://127.0.0.1:7421/mcp --token-file "$AGENTDRIVE_DIRECTORY/token" tools
 ```
 
 | 参数 / 环境变量 | 行为 |
 | --- | --- |
-| `--endpoint` / `AGENTFS_ENDPOINT` | 包含 `/mcp` 的完整 MCP URL，默认 `http://127.0.0.1:7421/mcp`。命令行参数覆盖环境变量。 |
-| `--token-file` / `AGENTFS_TOKEN_FILE` | 读取 token 文件，并去除首尾空白。命令行参数覆盖环境变量。 |
-| `AGENTFS_TOKEN` | 未选择 token 文件时使用。已选择的 token 文件无法读取时，会返回错误。 |
+| `--endpoint` / `AGENTDRIVE_ENDPOINT` | 包含 `/mcp` 的完整 MCP URL，默认 `http://127.0.0.1:7421/mcp`。命令行参数覆盖环境变量。 |
+| `--token-file` / `AGENTDRIVE_TOKEN_FILE` | 读取 token 文件，并去除首尾空白。命令行参数覆盖环境变量。 |
+| `AGENTDRIVE_TOKEN` | 未选择 token 文件时使用。已选择的 token 文件无法读取时，会返回错误。 |
 | `RUST_LOG` | 日志过滤设置，客户端默认 `warn`。日志写入 stderr。 |
 
 守护进程需要已经启动。工具参数中的主机路径，例如导入来源和挂载路径，属于守护进程所在机器。`--token-file` 和标准输入属于客户端所在机器。
@@ -51,32 +51,32 @@ agentfs --endpoint http://127.0.0.1:7421/mcp --token-file "$AGENTFS_DIRECTORY/to
 
 ## 创建、导入、读取和导出
 
-在另一个终端设置相同的 `PATH` 和 `AGENTFS_DIRECTORY`。独立运行另一组示例时，请使用新的 `RUN_ID`、来源路径和导出路径。该示例可以在 macOS 默认构建上运行，无需原生挂载。
+在另一个终端设置相同的 `PATH` 和 `AGENTDRIVE_DIRECTORY`。独立运行另一组示例时，请使用新的 `RUN_ID`、来源路径和导出路径。该示例可以在 macOS 默认构建上运行，无需原生挂载。
 
 ```sh
-export AGENTFS_TOKEN_FILE="$AGENTFS_DIRECTORY/token"
+export AGENTDRIVE_TOKEN_FILE="$AGENTDRIVE_DIRECTORY/token"
 RUN_ID=readme-demo-1
-agentfs tools > "$AGENTFS_DIRECTORY/tools.json"
-agentfs call workspace_create --request-id "$RUN_ID-create" --json '{"name":"demo"}' > "$AGENTFS_DIRECTORY/demo-create.json"
-WORKSPACE="$(jq -r '.result.workspace.id' "$AGENTFS_DIRECTORY/demo-create.json")"
+agentdrive tools > "$AGENTDRIVE_DIRECTORY/tools.json"
+agentdrive call workspace_create --request-id "$RUN_ID-create" --json '{"name":"demo"}' > "$AGENTDRIVE_DIRECTORY/demo-create.json"
+WORKSPACE="$(jq -r '.result.workspace.id' "$AGENTDRIVE_DIRECTORY/demo-create.json")"
 
 jq -n --arg workspace "$WORKSPACE" '{workspace:$workspace}' |
-  agentfs call workspace_status --json - > "$AGENTFS_DIRECTORY/demo-status.json"
+  agentdrive call workspace_status --json - > "$AGENTDRIVE_DIRECTORY/demo-status.json"
 
-mkdir -p "$AGENTFS_DIRECTORY/exchange/source"
-printf 'Hello from OpenCSG Workspace\n' > "$AGENTFS_DIRECTORY/exchange/source/hello.txt"
-jq -n --arg workspace "$WORKSPACE" --arg source "$AGENTFS_DIRECTORY/exchange/source" '{workspace:$workspace,source:$source}' |
-  agentfs call workspace_import --request-id "$RUN_ID-import" --json - > "$AGENTFS_DIRECTORY/demo-import.json"
-REVISION="$(jq -r '.result.branch.formal_head' "$AGENTFS_DIRECTORY/demo-import.json")"
-BRANCH="$(jq -r '.result.branch.id' "$AGENTFS_DIRECTORY/demo-import.json")"
+mkdir -p "$AGENTDRIVE_DIRECTORY/exchange/source"
+printf 'Hello from AgentDrive\n' > "$AGENTDRIVE_DIRECTORY/exchange/source/hello.txt"
+jq -n --arg workspace "$WORKSPACE" --arg source "$AGENTDRIVE_DIRECTORY/exchange/source" '{workspace:$workspace,source:$source}' |
+  agentdrive call workspace_import --request-id "$RUN_ID-import" --json - > "$AGENTDRIVE_DIRECTORY/demo-import.json"
+REVISION="$(jq -r '.result.branch.formal_head' "$AGENTDRIVE_DIRECTORY/demo-import.json")"
+BRANCH="$(jq -r '.result.branch.id' "$AGENTDRIVE_DIRECTORY/demo-import.json")"
 
 jq -n --arg workspace "$WORKSPACE" --arg revision "$REVISION" '{workspace:$workspace,revision:$revision,path:"/hello.txt",offset:0,size:4096}' |
-  agentfs call revision_read --json -
+  agentdrive call revision_read --json -
 jq -n --arg workspace "$WORKSPACE" --arg branch "$BRANCH" '{workspace:$workspace,branch:$branch}' |
-  agentfs call revision_list --json -
+  agentdrive call revision_list --json -
 
-jq -n --arg workspace "$WORKSPACE" --arg revision "$REVISION" --arg destination "$AGENTFS_DIRECTORY/exchange/export" '{workspace:$workspace,revision:$revision,destination:$destination}' |
-  agentfs call workspace_export --request-id "$RUN_ID-export" --json -
+jq -n --arg workspace "$WORKSPACE" --arg revision "$REVISION" --arg destination "$AGENTDRIVE_DIRECTORY/exchange/export" '{workspace:$workspace,revision:$revision,destination:$destination}' |
+  agentdrive call workspace_export --request-id "$RUN_ID-export" --json -
 ```
 
 创建操作返回 `result.workspace`。导入会创建新分支并返回 `result.branch`，其中的 `formal_head` 是导入后的版本。新工作区默认选择可写的 `main` 分支。`revision_read` 返回 `{ "bytes": [0, 1, ...], "length": ... }`，文件内容表示为整数字节数组，单次请求的大小最多为 4 MiB。导出要求父目录已经存在，目标目录尚未存在。
@@ -84,11 +84,11 @@ jq -n --arg workspace "$WORKSPACE" --arg revision "$REVISION" --arg destination 
 ## 挂载与分支
 
 ```sh
-agentfs mount --workspace "$WORKSPACE" "$AGENTFS_DIRECTORY/mounts/project"
-agentfs branch list --workspace "$WORKSPACE"
-agentfs branch create --workspace "$WORKSPACE" --name feat/task --request-id "$RUN_ID-branch"
-agentfs branch switch --workspace "$WORKSPACE" --branch "$BRANCH" --request-id "$RUN_ID-switch"
-agentfs dashboard --open
+agentdrive mount --workspace "$WORKSPACE" "$AGENTDRIVE_DIRECTORY/mounts/project"
+agentdrive branch list --workspace "$WORKSPACE"
+agentdrive branch create --workspace "$WORKSPACE" --name feat/task --request-id "$RUN_ID-branch"
+agentdrive branch switch --workspace "$WORKSPACE" --branch "$BRANCH" --request-id "$RUN_ID-switch"
+agentdrive dashboard --open
 ```
 
 `branch create` 接受可选的 `--source <REVISION>` 或 `--source-branch <BRANCH>`；省略时保存当前分支的工作内容作为来源。结果中的 `result.branch` 为新分支，工作区当前选择保持原值。`branch switch` 更新当前 location 的分支选择和挂载目录。CLI 会尝试释放已有挂载；被占用时关闭使用目录的程序，再使用原 request ID 重试。MCP 调用方使用 `mount_release` 继续等待中的切换。两个命令会生成 request ID；需要重试时可以提供固定的 `--request-id`。
@@ -102,14 +102,14 @@ agentfs dashboard --open
 JSON 文件保存工具的请求字段。例如，`create-request.json` 可以包含 `{ "name": "another-workspace" }`：
 
 ```sh
-agentfs call workspace_create --request-id create-from-file --json - < create-request.json
+agentdrive call workspace_create --request-id create-from-file --json - < create-request.json
 ```
 
 PowerShell 示例：
 
 ```powershell
-$env:AGENTFS_TOKEN_FILE = 'C:\Users\alice\agentfs\token'
-Get-Content -Raw .\create-request.json | .\target\debug\agentfs.exe call workspace_create --request-id create-from-file --json -
+$env:AGENTDRIVE_TOKEN_FILE = 'C:\Users\alice\agentdrive\token'
+Get-Content -Raw .\create-request.json | .\target\debug\agentdrive.exe call workspace_create --request-id create-from-file --json -
 ```
 
 推送和拉取示例见 [S3 配置](configuration.zh-CN.md)；guard、缓存范围、合并和操作结果恢复参数见 [MCP 参考](mcp.zh-CN.md)。

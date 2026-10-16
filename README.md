@@ -1,8 +1,8 @@
-# OpenCSG Workspace
+# AgentDrive
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-OpenCSG Workspace gives agents durable workspaces, explicit workspace branches, immutable revisions, and native filesystem paths. A long-running Rust daemon owns local state and mounts. Concurrent MCP clients and the CLI share its authenticated API.
+AgentDrive gives agents durable workspaces, explicit workspace branches, immutable revisions, and native filesystem paths. A long-running Rust daemon owns local state and mounts. Concurrent MCP clients and the CLI share its authenticated API.
 
 The implementation includes:
 
@@ -32,55 +32,55 @@ The default macOS build provides the daemon, CLI, and storage operations. Enable
 ## Run
 
 ```sh
-AGENTFS_DIRECTORY="$HOME/.local/share/agentfs"
-./target/debug/agentfsd init --directory "$AGENTFS_DIRECTORY"
-./target/debug/agentfsd serve --config "$AGENTFS_DIRECTORY/agentfs.json"
+AGENTDRIVE_DIRECTORY="$HOME/.local/share/agentdrive"
+./target/debug/agentdrived init --directory "$AGENTDRIVE_DIRECTORY"
+./target/debug/agentdrived serve --config "$AGENTDRIVE_DIRECTORY/agentdrive.json"
 ```
 
 In another terminal:
 
 ```sh
-export AGENTFS_TOKEN_FILE="$HOME/.local/share/agentfs/token"
-./target/debug/agentfs tools
-./target/debug/agentfs call workspace_create --request-id create-demo --json '{"name":"demo"}'
-./target/debug/agentfs call workspace_list
+export AGENTDRIVE_TOKEN_FILE="$HOME/.local/share/agentdrive/token"
+./target/debug/agentdrive tools
+./target/debug/agentdrive call workspace_create --request-id create-demo --json '{"name":"demo"}'
+./target/debug/agentdrive call workspace_list
 ```
 
 `init` creates configuration, a random bearer token, and directories for state, mounts, and file exchange. Existing credentials are preserved by refusing initialization over an existing configuration. The daemon defaults to `127.0.0.1:7421`; its MCP endpoint is `/mcp`. Run one daemon per state directory.
 
-To connect an MCP client through stdio, configure the executable as `agentfs`, arguments as `["mcp"]`, and set `AGENTFS_TOKEN_FILE`. `AGENTFS_ENDPOINT` selects another daemon endpoint. The stdio process forwards requests to the running daemon.
+To connect an MCP client through stdio, configure the executable as `agentdrive`, arguments as `["mcp"]`, and set `AGENTDRIVE_TOKEN_FILE`. `AGENTDRIVE_ENDPOINT` selects another daemon endpoint. The stdio process forwards requests to the running daemon.
 
-Use `agentfs tools` as the source for JSON input schemas. Command tools accept `{ "request_id": "stable-id", "request": { ... } }` over MCP. The CLI's `--request-id` option builds that envelope. Query tools and `operation_cancel` receive their arguments directly. `--json -` reads JSON from standard input. The CLI exits with 0 for successful tool responses, 2 for a tool error, and 1 for transport or input errors; command-line parsing errors also use 2. See [CLI usage](docs/cli.md) for executable examples and [MCP parameters and capabilities](docs/mcp.md) for the complete tool reference.
+Use `agentdrive tools` as the source for JSON input schemas. Command tools accept `{ "request_id": "stable-id", "request": { ... } }` over MCP. The CLI's `--request-id` option builds that envelope. Query tools and `operation_cancel` receive their arguments directly. `--json -` reads JSON from standard input. The CLI exits with 0 for successful tool responses, 2 for a tool error, and 1 for transport or input errors; command-line parsing errors also use 2. See [CLI usage](docs/cli.md) for executable examples and [MCP parameters and capabilities](docs/mcp.md) for the complete tool reference.
 
 ## Branches, agents, and dashboard
 
 A new workspace selects its writable `main` branch. Mounting the same workspace at the same location reuses its selected branch. A new location creates and selects its own branch from the root branch's latest published content. Create and switch branches explicitly through MCP (`branch_create`, `branch_switch`) or the CLI:
 
 ```sh
-agentfs mount --workspace "$WORKSPACE" "$AGENTFS_DIRECTORY/mounts/project"
-agentfs branch list --workspace "$WORKSPACE"
-agentfs branch create --workspace "$WORKSPACE" --name feat/task
-agentfs branch switch --workspace "$WORKSPACE" --branch "$BRANCH"
-agentfs dashboard --open
+agentdrive mount --workspace "$WORKSPACE" "$AGENTDRIVE_DIRECTORY/mounts/project"
+agentdrive branch list --workspace "$WORKSPACE"
+agentdrive branch create --workspace "$WORKSPACE" --name feat/task
+agentdrive branch switch --workspace "$WORKSPACE" --branch "$BRANCH"
+agentdrive dashboard --open
 ```
 
 Creation captures current working content without changing the selection. Switching saves the previous branch, checks native file handles, and updates this location's selection and mount. Agents sharing the directory use the same branch. The selection survives daemon restarts. The dashboard shows branch ancestry, commit messages, authors, timestamps, and parent revisions. Administrators can use **Settings** to update cache policy, S3 storage and allowed HTTP origins while the daemon is running; see [configuration](docs/configuration.md).
 
-Existing agents can connect through `agentfs mcp` and use a mounted directory. `agentfs integrate` manages the working directory and saves on completion, cancellation, failure, and reconnect. See [agent integrations](docs/integrations.md) for ACP and Codex app-server commands and protocol behavior. File changes trigger automatic saves, and shared mounts remain available after agent disconnection.
+Existing agents can connect through `agentdrive mcp` and use a mounted directory. `agentdrive integrate` manages the working directory and saves on completion, cancellation, failure, and reconnect. See [agent integrations](docs/integrations.md) for ACP and Codex app-server commands and protocol behavior. File changes trigger automatic saves, and shared mounts remain available after agent disconnection.
 
 The branch owner, epoch, generation, and head are checked for guarded changes. Obtain current values from `workspace_status`; do not manufacture them. Operations that need an active mount to stop return `waiting_for_quiesce`. Stop processes using that directory, close their handles and current working directories, then call `mount_release` with the operation ID and expected binding generation. See [operations and recovery](docs/operations.md).
 
 ## Storage and configuration
 
-`agentfs.json` uses absolute filesystem paths. `mount_roots` permits mount destinations; `directory_roots` permits import and export paths. Imports require a stable source directory and reject symbolic links and incompatible names. Exports create a new directory and preserve file bytes, modification times, and supported permissions.
+`agentdrive.json` uses absolute filesystem paths. `mount_roots` permits mount destinations; `directory_roots` permits import and export paths. Imports require a stable source directory and reject symbolic links and incompatible names. Exports create a new directory and preserve file bytes, modification times, and supported permissions.
 
 Enable S3 and save its connection settings and credentials in Dashboard **Settings**, or add `remote` to the generated configuration:
 
 ```json
 {
   "remote": {
-    "bucket": "agentfs",
-    "prefix": "agentfs/v1",
+    "bucket": "agentdrive",
+    "prefix": "agentdrive/v1",
     "region": "us-east-1",
     "endpoint": "https://s3.example.com",
     "allow_http": false
@@ -104,4 +104,4 @@ File operations cover regular files and directories, atomic branch append, renam
 
 The advertised capability response describes the supported behavior. Symbolic links, hard links, extended attributes, memory-mapped writes, advisory locking, automatic text conflict resolution, and physical remote garbage collection are outside the implemented interface. Unlinking an open file or replacing an open destination returns a busy error. Concurrent changes to the same path become explicit merge conflicts. Mounts are owned by the daemon's OS identity; workspace access grants govern MCP requests.
 
-See the [documentation index](docs/README.md), [architecture](docs/architecture.md), [operations and recovery](docs/operations.md), and [validation](docs/validation.md). OpenCSG Workspace is licensed under Apache-2.0; the vendored WinFsp Rust wrapper retains its MIT license.
+See the [documentation index](docs/README.md), [architecture](docs/architecture.md), [operations and recovery](docs/operations.md), and [validation](docs/validation.md). AgentDrive is licensed under Apache-2.0; the vendored WinFsp Rust wrapper retains its MIT license.

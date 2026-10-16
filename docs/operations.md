@@ -30,7 +30,7 @@ A normal daemon shutdown stops HTTP traffic and background tasks, saves modified
 
 Startup restores working metadata from the last acknowledged immutable branch root and removes disposable working copies. Writes that had not reached fsync, autosave, a revision operation, or mount_save can be lost after abrupt process termination. A failed write followed by failed metadata persistence stops the affected branch for recovery.
 
-The local branch selection survives shutdown and restart. Run `agentfs mount --workspace <workspace-id> <path>` or call `mount_prepare` again to reuse it. Native mounts are inspected before reuse; a matching binding retains its ID and generation. An unknown existing filesystem at a path requires operator cleanup; the service does not force-unmount an unrelated filesystem.
+The local branch selection survives shutdown and restart. Run `agentdrive mount --workspace <workspace-id> <path>` or call `mount_prepare` again to reuse it. Native mounts are inspected before reuse; a matching binding retains its ID and generation. An unknown existing filesystem at a path requires operator cleanup; the service does not force-unmount an unrelated filesystem.
 
 Keep the state directory on a local filesystem with correct file flush and atomic rename behavior. Filesystem and storage hardware must honor flush requests. Unix object publication flushes file data and directories; Windows flushes file data and uses write-through namespace publication. Remote confirmation is the additional durability boundary when remote storage is configured.
 
@@ -60,9 +60,9 @@ Import generated images from an allowed exchange directory with `workspace_impor
 Once conflicts are resolved, `merge_apply` takes the current candidate and target guard. It checks target changes, uncommitted content and mount use, then creates a revision with both source and target parents. Active mounts require `mount_release` to finish the switch. The CLI uses the same tool names and parameters:
 
 ```sh
-agentfs call revision_files --json "{\"workspace\":\"$WORKSPACE\",\"revision\":\"$SOURCE_REVISION\"}"
-agentfs call merge_resolve --request-id "$RUN_ID-edit" --json - < merge-edits.json
-agentfs call merge_apply --request-id "$RUN_ID-apply" --json - < merge-apply.json
+agentdrive call revision_files --json "{\"workspace\":\"$WORKSPACE\",\"revision\":\"$SOURCE_REVISION\"}"
+agentdrive call merge_resolve --request-id "$RUN_ID-edit" --json - < merge-edits.json
+agentdrive call merge_apply --request-id "$RUN_ID-apply" --json - < merge-apply.json
 ```
 
 Example `merge-edits.json` arguments:

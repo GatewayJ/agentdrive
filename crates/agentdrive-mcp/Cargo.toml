@@ -1,0 +1,30 @@
+[package]
+name = "agentdrive-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+agentdrive-config.workspace = true
+rmcp.workspace = true
+axum.workspace = true
+sha2.workspace = true
+schemars.workspace = true
+agentdrive-model.workspace = true
+agentdrive-ports.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+agentdrive-engine.workspace = true
+agentdrive-local.workspace = true
+agentdrive-test-support.workspace = true
+tempfile.workspace = true
+reqwest = { version = "0.13.5", features = ["json"] }

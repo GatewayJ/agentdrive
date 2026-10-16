@@ -1,5 +1,5 @@
 /target/
-/.agentfs/
+/.agentdrive/
 /.env
 *.db
 *.db-shm

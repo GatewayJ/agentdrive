@@ -1,0 +1,27 @@
+[package]
+name = "agentdrive-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+agentdrive-config.workspace = true
+agentdrive-model.workspace = true
+agentdrive-ports.workspace = true
+arc-swap.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
+
+
+[dev-dependencies]
+agentdrive-local.workspace = true
+agentdrive-test-support.workspace = true
+tempfile.workspace = true

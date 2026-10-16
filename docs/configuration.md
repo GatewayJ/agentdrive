@@ -4,7 +4,7 @@
 
 ## Daemon configuration
 
-Run `agentfsd init --directory /absolute/path/to/agentfs` to create `agentfs.json`, a private token file, and the mount/exchange directories. Edit the generated configuration, then start `agentfsd serve --config /absolute/path/to/agentfs/agentfs.json`. The daemon loads the file at startup and checks it every second for runtime changes.
+Run `agentdrived init --directory /absolute/path/to/agentdrive` to create `agentdrive.json`, a private token file, and the mount/exchange directories. Edit the generated configuration, then start `agentdrived serve --config /absolute/path/to/agentdrive/agentdrive.json`. The daemon loads the file at startup and checks it every second for runtime changes.
 
 The generated file contains `data_dir`, `listen`, `mount_roots`, `directory_roots`, and `credentials`. Optional settings use the defaults below and can be added when needed.
 
@@ -22,13 +22,13 @@ The generated file contains `data_dir`, `listen`, `mount_roots`, `directory_root
 
 For example, `"cache": { "max_bytes": 536870912 }` sets a 512 MiB cache capacity. The collector automatically targets 75% of the configured capacity, which is 384 MiB in this example.
 
-All state, root, and token paths must be absolute. Create allowed roots before starting the daemon. JSON strings do not expand `~`, `$HOME`, or environment variables. Windows paths use escaped backslashes, such as `"C:\\Users\\alice\\agentfs\\state"`, or forward slashes. Unknown top-level configuration fields and unknown `cache` or `remote` fields are rejected. The configuration file is limited to 1 MiB.
+All state, root, and token paths must be absolute. Create allowed roots before starting the daemon. JSON strings do not expand `~`, `$HOME`, or environment variables. Windows paths use escaped backslashes, such as `"C:\\Users\\alice\\agentdrive\\state"`, or forward slashes. Unknown top-level configuration fields and unknown `cache` or `remote` fields are rejected. The configuration file is limited to 1 MiB.
 
 Token files must be regular files, at most 4096 bytes, containing at least 32 non-whitespace bytes after trimming. On Unix, group and other permissions must be absent; initialization creates mode `0600`. Tokens must be unique. A token selects the configured `principal`; workspace ownership and grants determine that principal's access. Protect configuration and state using the daemon user's filesystem permissions.
 
 ## Runtime updates and dashboard settings
 
-Open **Settings** in the dashboard sidebar, or visit `/settings`. Authenticate with an administrator token. The form edits S3 connections and credentials, local cache capacity in GiB, and allowed HTTP origins. The cache field appears when S3 mode is selected; local mode retains its saved capacity for future S3 use. Saved S3 connection changes are applied while the daemon runs. Saving persists the changes to the same `agentfs.json` used to start the daemon and publishes one configuration snapshot. The configuration retains its existing top-level structure; optional defaults remain omitted when saving.
+Open **Settings** in the dashboard sidebar, or visit `/settings`. Authenticate with an administrator token. The form edits S3 connections and credentials, local cache capacity in GiB, and allowed HTTP origins. The cache field appears when S3 mode is selected; local mode retains its saved capacity for future S3 use. Saved S3 connection changes are applied while the daemon runs. Saving persists the changes to the same `agentdrive.json` used to start the daemon and publishes one configuration snapshot. The configuration retains its existing top-level structure; optional defaults remain omitted when saving.
 
 | Configuration | Effective time |
 | --- | --- |
@@ -67,13 +67,13 @@ Some operations wait while history is transferred. Missing content, insufficient
 
 ## S3 fields
 
-The following object belongs under the **top-level `remote` key** in `agentfs.json`:
+The following object belongs under the **top-level `remote` key** in `agentdrive.json`:
 
 ```json
 {
   "remote": {
-    "bucket": "agentfs",
-    "prefix": "agentfs/v1",
+    "bucket": "agentdrive",
+    "prefix": "agentdrive/v1",
     "region": "us-east-1",
     "endpoint": "http://127.0.0.1:9000",
     "allow_http": true
@@ -88,7 +88,7 @@ This is a configuration fragment for a local RustFS S3 API endpoint. Keep the ot
 | `enabled` | `true` | Use `false` for local mode while retaining S3 settings. |
 | `credentials` | Omitted or `null` | Use the service environment or IAM role, or supply `access_key_id`, `secret_access_key`, and optional `session_token`. |
 | `bucket` | Required, nonempty string | Existing bucket name. The daemon does not create buckets. |
-| `prefix` | `agentfs/v1` | Shared namespace within the bucket; leading/trailing `/` are removed and the result must be a valid, nonempty object path. |
+| `prefix` | `agentdrive/v1` | Shared namespace within the bucket; leading/trailing `/` are removed and the result must be a valid, nonempty object path. |
 | `region` | `us-east-1` | Signing region; use the bucket's region for AWS S3. |
 | `endpoint` | Omitted or `null` | Optional custom S3 base URL. With no endpoint override, the dependency derives the AWS regional endpoint. |
 | `allow_http` | `false` | Set `true` for an explicitly selected HTTP development endpoint. HTTPS endpoints keep `false`. |
@@ -99,7 +99,7 @@ For AWS S3, replace the bucket and region, and omit a custom endpoint:
 {
   "remote": {
     "bucket": "your-existing-bucket",
-    "prefix": "agentfs/v1",
+    "prefix": "agentdrive/v1",
     "region": "eu-west-1",
     "allow_http": false
   }
@@ -110,16 +110,16 @@ For AWS S3, replace the bucket and region, and omit a custom endpoint:
 
 The dashboard can persist S3 credentials in the configuration file, using Unix mode `0600`. GET settings blanks `secret_access_key` and `session_token`; a PUT with the same Access Key ID and a blank secret retains the existing credentials. Supply the secret again when changing a session token. Set `credentials` to `null` to use environment credentials. Configured credentials override environment credentials.
 
-The **daemon process** reads S3 credentials. Set these variables in the shell or service environment that starts `agentfsd serve`. `AGENTFS_TOKEN_FILE` authenticates the CLI to OpenCSG Workspace separately.
+The **daemon process** reads S3 credentials. Set these variables in the shell or service environment that starts `agentdrived serve`. `AGENTDRIVE_TOKEN_FILE` authenticates the CLI to AgentDrive separately.
 
 ```sh
 export AWS_ACCESS_KEY_ID='your-access-key-id'
 export AWS_SECRET_ACCESS_KEY='your-secret-access-key'
 # Temporary credentials also require AWS_SESSION_TOKEN.
-./target/debug/agentfsd serve --config "$AGENTFS_DIRECTORY/agentfs.json"
+./target/debug/agentdrived serve --config "$AGENTDRIVE_DIRECTORY/agentdrive.json"
 ```
 
-PowerShell uses `$env:AWS_ACCESS_KEY_ID = 'your-access-key-id'` and `$env:AWS_SECRET_ACCESS_KEY = 'your-secret-access-key'` before starting `agentfsd.exe`.
+PowerShell uses `$env:AWS_ACCESS_KEY_ID = 'your-access-key-id'` and `$env:AWS_SECRET_ACCESS_KEY = 'your-secret-access-key'` before starting `agentdrived.exe`.
 
 The locked `object_store` dependency supports the following credential sources, in this order:
 
@@ -131,19 +131,19 @@ The locked `object_store` dependency supports the following credential sources, 
 
 The current adapter does not load `~/.aws/credentials`, `AWS_PROFILE`, or AWS CLI SSO sessions. Export resolved credentials or use one of the supported role providers. Static environment credentials are loaded at startup; restart the daemon after replacing them.
 
-OpenCSG Workspace calls `AmazonS3Builder::from_env()` and then applies its configuration. The configured `bucket`, `region`, and `allow_http` values, including their defaults, override the corresponding AWS environment settings. A configured `endpoint` overrides both `AWS_ENDPOINT` and `AWS_ENDPOINT_URL_S3`. When `endpoint` is omitted, environment settings remain effective; remove both environment variables to use the default AWS regional endpoint. Path-style requests and ETag conditional writes are selected by the adapter.
+AgentDrive calls `AmazonS3Builder::from_env()` and then applies its configuration. The configured `bucket`, `region`, and `allow_http` values, including their defaults, override the corresponding AWS environment settings. A configured `endpoint` overrides both `AWS_ENDPOINT` and `AWS_ENDPOINT_URL_S3`. When `endpoint` is omitted, environment settings remain effective; remove both environment variables to use the default AWS regional endpoint. Path-style requests and ETag conditional writes are selected by the adapter.
 
 ## Storage requirements and verification
 
-The storage service must support GET/HEAD, listing by prefix, object writes, multipart upload and abort, and strongly consistent reads. OpenCSG Workspace creates immutable objects with `If-None-Match: *`, completes multipart uploads with the same condition, and updates references using `If-Match` with the previous ETag. Conditional write behavior is described in the [AWS S3 documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html). Files larger than 8 MiB use multipart upload; part sizes range from 8 to 64 MiB according to file size. Restrict storage credentials to the selected bucket and namespace.
+The storage service must support GET/HEAD, listing by prefix, object writes, multipart upload and abort, and strongly consistent reads. AgentDrive creates immutable objects with `If-None-Match: *`, completes multipart uploads with the same condition, and updates references using `If-Match` with the previous ETag. Conditional write behavior is described in the [AWS S3 documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html). Files larger than 8 MiB use multipart upload; part sizes range from 8 to 64 MiB according to file size. Restrict storage credentials to the selected bucket and namespace.
 
 Daemon startup constructs the S3 client; it does not prove that the bucket or credentials work. After importing content using the [CLI example](cli.md), explicitly push and inspect the original import receipt:
 
 ```sh
 jq -n --arg workspace "$WORKSPACE" '{workspace:$workspace,direction:"push"}' |
-  agentfs call sync --request-id "$RUN_ID-push" --json -
-jq -n --arg operation "$(jq -r '.id' "$AGENTFS_DIRECTORY/demo-import.json")" '{operation:$operation}' |
-  agentfs call operation_get --json -
+  agentdrive call sync --request-id "$RUN_ID-push" --json -
+jq -n --arg operation "$(jq -r '.id' "$AGENTDRIVE_DIRECTORY/demo-import.json")" '{operation:$operation}' |
+  agentdrive call operation_get --json -
 ```
 
 Check `remote_confirmed` on the original operation. `workspace_status.capabilities.remote_configured` reports whether S3 is currently enabled, and `pending_jobs` reports the queue length. A saved profile with `remote.enabled: false` reports `remote_configured: false`. The daemon retries pending synchronization every three seconds while S3 is enabled. A `local_saved: true` receipt can still contain a remote error; retain its operation ID and follow [recovery guidance](operations.md).
@@ -156,4 +156,4 @@ Configure each daemon with the same S3 endpoint, bucket, prefix, and signing reg
 
 Push on the source, then call `sync` with `direction: "pull"` and the same workspace ID on the destination. Pull imports history and remote branch references. Use a retained revision to create a local branch, or complete an online `ownership_transfer` before adopting an existing writable branch. See [operations](operations.md) and the [MCP reference](mcp.md).
 
-Configuration definitions: [schema](../crates/agentfs-config/src/file.rs), [runtime store](../crates/agentfs-config/src/store.rs), and [S3 adapter](../crates/agentfs-s3/src/lib.rs). Dependency versions are recorded in [Cargo.lock](../Cargo.lock).
+Configuration definitions: [schema](../crates/agentdrive-config/src/file.rs), [runtime store](../crates/agentdrive-config/src/store.rs), and [S3 adapter](../crates/agentdrive-s3/src/lib.rs). Dependency versions are recorded in [Cargo.lock](../Cargo.lock).

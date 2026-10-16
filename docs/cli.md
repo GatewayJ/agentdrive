@@ -8,21 +8,21 @@ Build from the repository root using [README](../README.md). The examples below 
 
 ```sh
 export PATH="$PWD/target/debug:$PATH"
-export AGENTFS_DIRECTORY="$HOME/.local/share/agentfs"
-agentfsd init --directory "$AGENTFS_DIRECTORY"
-agentfsd serve --config "$AGENTFS_DIRECTORY/agentfs.json"
+export AGENTDRIVE_DIRECTORY="$HOME/.local/share/agentdrive"
+agentdrived init --directory "$AGENTDRIVE_DIRECTORY"
+agentdrived serve --config "$AGENTDRIVE_DIRECTORY/agentdrive.json"
 ```
 
 Run `init` once for a new directory. It prints the generated configuration path and rejects an existing configuration or token. `serve` runs in the foreground; Ctrl+C requests shutdown. S3 credentials can be saved through Dashboard Settings. When using environment credentials, set them in this terminal before `serve`; see [remote configuration](configuration.md).
 
 | Command | Arguments |
 | --- | --- |
-| `agentfsd init` | Required `--directory <PATH>`; optional `--listen <IP:PORT>`, default `127.0.0.1:7421`. |
-| `agentfsd serve` | Required `--config <PATH>`. |
-| `agentfs tools` | Lists the tool catalog, including `inputSchema` and annotations, as JSON. |
-| `agentfs call <TOOL>` | Optional `--json <JSON>` (default `{}`) and `--request-id <ID>`. |
-| `agentfs mcp` | Runs a stdio MCP proxy connected to the existing daemon. |
-| `agentfs mount` | Required `--workspace <ID>` and directory; optional `--request-id <ID>`. Relative paths resolve from the CLI working directory. |
+| `agentdrived init` | Required `--directory <PATH>`; optional `--listen <IP:PORT>`, default `127.0.0.1:7421`. |
+| `agentdrived serve` | Required `--config <PATH>`. |
+| `agentdrive tools` | Lists the tool catalog, including `inputSchema` and annotations, as JSON. |
+| `agentdrive call <TOOL>` | Optional `--json <JSON>` (default `{}`) and `--request-id <ID>`. |
+| `agentdrive mcp` | Runs a stdio MCP proxy connected to the existing daemon. |
+| `agentdrive mount` | Required `--workspace <ID>` and directory; optional `--request-id <ID>`. Relative paths resolve from the CLI working directory. |
 
 Both binaries provide `--help` and `--version`; subcommands provide `--help`.
 
@@ -31,14 +31,14 @@ Both binaries provide `--help` and `--version`; subcommands provide `--help`.
 Place connection options **before the subcommand**:
 
 ```sh
-agentfs --endpoint http://127.0.0.1:7421/mcp --token-file "$AGENTFS_DIRECTORY/token" tools
+agentdrive --endpoint http://127.0.0.1:7421/mcp --token-file "$AGENTDRIVE_DIRECTORY/token" tools
 ```
 
 | Option / environment | Behavior |
 | --- | --- |
-| `--endpoint` / `AGENTFS_ENDPOINT` | Full MCP URL, including `/mcp`; default `http://127.0.0.1:7421/mcp`. The option overrides the environment. |
-| `--token-file` / `AGENTFS_TOKEN_FILE` | Reads a token file and trims surrounding whitespace. The option overrides the environment. |
-| `AGENTFS_TOKEN` | Token fallback when no token file is selected. A selected but unreadable token file causes an error. |
+| `--endpoint` / `AGENTDRIVE_ENDPOINT` | Full MCP URL, including `/mcp`; default `http://127.0.0.1:7421/mcp`. The option overrides the environment. |
+| `--token-file` / `AGENTDRIVE_TOKEN_FILE` | Reads a token file and trims surrounding whitespace. The option overrides the environment. |
+| `AGENTDRIVE_TOKEN` | Token fallback when no token file is selected. A selected but unreadable token file causes an error. |
 | `RUST_LOG` | Log filter; the client defaults to `warn`. Logs use stderr. |
 
 The daemon must already be running. Host paths in tool arguments, such as import sources and mount paths, refer to the daemon machine. `--token-file` and standard input refer to the client machine.
@@ -51,32 +51,32 @@ The client exits with 0 when the tool response has no error, 2 for a tool error,
 
 ## Create, import, read, and export
 
-In another terminal, set the same `PATH` and `AGENTFS_DIRECTORY` as above. Use a fresh `RUN_ID` and source/export paths for a separate demonstration. This example works with the default macOS build and does not require a native mount.
+In another terminal, set the same `PATH` and `AGENTDRIVE_DIRECTORY` as above. Use a fresh `RUN_ID` and source/export paths for a separate demonstration. This example works with the default macOS build and does not require a native mount.
 
 ```sh
-export AGENTFS_TOKEN_FILE="$AGENTFS_DIRECTORY/token"
+export AGENTDRIVE_TOKEN_FILE="$AGENTDRIVE_DIRECTORY/token"
 RUN_ID=readme-demo-1
-agentfs tools > "$AGENTFS_DIRECTORY/tools.json"
-agentfs call workspace_create --request-id "$RUN_ID-create" --json '{"name":"demo"}' > "$AGENTFS_DIRECTORY/demo-create.json"
-WORKSPACE="$(jq -r '.result.workspace.id' "$AGENTFS_DIRECTORY/demo-create.json")"
+agentdrive tools > "$AGENTDRIVE_DIRECTORY/tools.json"
+agentdrive call workspace_create --request-id "$RUN_ID-create" --json '{"name":"demo"}' > "$AGENTDRIVE_DIRECTORY/demo-create.json"
+WORKSPACE="$(jq -r '.result.workspace.id' "$AGENTDRIVE_DIRECTORY/demo-create.json")"
 
 jq -n --arg workspace "$WORKSPACE" '{workspace:$workspace}' |
-  agentfs call workspace_status --json - > "$AGENTFS_DIRECTORY/demo-status.json"
+  agentdrive call workspace_status --json - > "$AGENTDRIVE_DIRECTORY/demo-status.json"
 
-mkdir -p "$AGENTFS_DIRECTORY/exchange/source"
-printf 'Hello from OpenCSG Workspace\n' > "$AGENTFS_DIRECTORY/exchange/source/hello.txt"
-jq -n --arg workspace "$WORKSPACE" --arg source "$AGENTFS_DIRECTORY/exchange/source" '{workspace:$workspace,source:$source}' |
-  agentfs call workspace_import --request-id "$RUN_ID-import" --json - > "$AGENTFS_DIRECTORY/demo-import.json"
-REVISION="$(jq -r '.result.branch.formal_head' "$AGENTFS_DIRECTORY/demo-import.json")"
-BRANCH="$(jq -r '.result.branch.id' "$AGENTFS_DIRECTORY/demo-import.json")"
+mkdir -p "$AGENTDRIVE_DIRECTORY/exchange/source"
+printf 'Hello from AgentDrive\n' > "$AGENTDRIVE_DIRECTORY/exchange/source/hello.txt"
+jq -n --arg workspace "$WORKSPACE" --arg source "$AGENTDRIVE_DIRECTORY/exchange/source" '{workspace:$workspace,source:$source}' |
+  agentdrive call workspace_import --request-id "$RUN_ID-import" --json - > "$AGENTDRIVE_DIRECTORY/demo-import.json"
+REVISION="$(jq -r '.result.branch.formal_head' "$AGENTDRIVE_DIRECTORY/demo-import.json")"
+BRANCH="$(jq -r '.result.branch.id' "$AGENTDRIVE_DIRECTORY/demo-import.json")"
 
 jq -n --arg workspace "$WORKSPACE" --arg revision "$REVISION" '{workspace:$workspace,revision:$revision,path:"/hello.txt",offset:0,size:4096}' |
-  agentfs call revision_read --json -
+  agentdrive call revision_read --json -
 jq -n --arg workspace "$WORKSPACE" --arg branch "$BRANCH" '{workspace:$workspace,branch:$branch}' |
-  agentfs call revision_list --json -
+  agentdrive call revision_list --json -
 
-jq -n --arg workspace "$WORKSPACE" --arg revision "$REVISION" --arg destination "$AGENTFS_DIRECTORY/exchange/export" '{workspace:$workspace,revision:$revision,destination:$destination}' |
-  agentfs call workspace_export --request-id "$RUN_ID-export" --json -
+jq -n --arg workspace "$WORKSPACE" --arg revision "$REVISION" --arg destination "$AGENTDRIVE_DIRECTORY/exchange/export" '{workspace:$workspace,revision:$revision,destination:$destination}' |
+  agentdrive call workspace_export --request-id "$RUN_ID-export" --json -
 ```
 
 Creation returns `result.workspace`. Import creates a new branch and returns `result.branch`; its `formal_head` is the imported revision. New workspaces select a writable `main` branch. `revision_read` returns `{ "bytes": [0, 1, ...], "length": ... }`, with integer bytes and a maximum requested size of 4 MiB. Export requires an existing parent directory and a destination that does not already exist.
@@ -84,11 +84,11 @@ Creation returns `result.workspace`. Import creates a new branch and returns `re
 ## Mounts and branches
 
 ```sh
-agentfs mount --workspace "$WORKSPACE" "$AGENTFS_DIRECTORY/mounts/project"
-agentfs branch list --workspace "$WORKSPACE"
-agentfs branch create --workspace "$WORKSPACE" --name feat/task --request-id "$RUN_ID-branch"
-agentfs branch switch --workspace "$WORKSPACE" --branch "$BRANCH" --request-id "$RUN_ID-switch"
-agentfs dashboard --open
+agentdrive mount --workspace "$WORKSPACE" "$AGENTDRIVE_DIRECTORY/mounts/project"
+agentdrive branch list --workspace "$WORKSPACE"
+agentdrive branch create --workspace "$WORKSPACE" --name feat/task --request-id "$RUN_ID-branch"
+agentdrive branch switch --workspace "$WORKSPACE" --branch "$BRANCH" --request-id "$RUN_ID-switch"
+agentdrive dashboard --open
 ```
 
 `branch create` accepts optional `--source <REVISION>` or `--source-branch <BRANCH>`; omission captures the selected branch's current working content. It returns the new branch in `result.branch` and preserves the current selection. `branch switch` changes this location's workspace selection and mounted directory. The CLI attempts release of an existing mount. If it is busy, close users of the directory and retry with the original request ID; MCP callers use `mount_release` to continue pending switches. Both commands generate a request ID when omitted; reuse an explicit ID for retries.
@@ -102,14 +102,14 @@ agentfs dashboard --open
 JSON files contain the tool request fields. For example, `create-request.json` can contain `{ "name": "another-workspace" }`:
 
 ```sh
-agentfs call workspace_create --request-id create-from-file --json - < create-request.json
+agentdrive call workspace_create --request-id create-from-file --json - < create-request.json
 ```
 
 In PowerShell:
 
 ```powershell
-$env:AGENTFS_TOKEN_FILE = 'C:\Users\alice\agentfs\token'
-Get-Content -Raw .\create-request.json | .\target\debug\agentfs.exe call workspace_create --request-id create-from-file --json -
+$env:AGENTDRIVE_TOKEN_FILE = 'C:\Users\alice\agentdrive\token'
+Get-Content -Raw .\create-request.json | .\target\debug\agentdrive.exe call workspace_create --request-id create-from-file --json -
 ```
 
 Use [S3 configuration](configuration.md) for push/pull examples and [MCP parameters](mcp.md) for guards, cache ranges, merges, and receipt recovery.

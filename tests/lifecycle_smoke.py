@@ -20,21 +20,21 @@ args = parser.parse_args()
 binaries = Path(args.bin_dir).resolve()
 exe = '.exe' if sys.platform == 'win32' else ''
 fixture = Path(__file__).parent.resolve() / 'fixtures' / 'lifecycle_agent.py'
-with tempfile.TemporaryDirectory(prefix='agentfs-lifecycle-') as temporary:
+with tempfile.TemporaryDirectory(prefix='agentdrive-lifecycle-') as temporary:
     root = Path(temporary)
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]
     base = f'http://127.0.0.1:{port}'
-    subprocess.run([str(binaries / ('agentfsd' + exe)), 'init', '--directory', str(root), '--listen', f'127.0.0.1:{port}'], check=True, capture_output=True)
+    subprocess.run([str(binaries / ('agentdrived' + exe)), 'init', '--directory', str(root), '--listen', f'127.0.0.1:{port}'], check=True, capture_output=True)
     token = (root / 'token').read_text().strip()
-    command = [str(binaries / ('agentfs' + exe)), '--endpoint', base + '/mcp', '--token-file', str(root / 'token')]
+    command = [str(binaries / ('agentdrive' + exe)), '--endpoint', base + '/mcp', '--token-file', str(root / 'token')]
     log = (root / 'test.log').open('w+')
     daemon = None
     bridges = []
 
     def start_daemon():
-        process = subprocess.Popen([str(binaries / ('agentfsd' + exe)), 'serve', '--config', str(root / 'agentfs.json')], stdout=log, stderr=log)
+        process = subprocess.Popen([str(binaries / ('agentdrived' + exe)), 'serve', '--config', str(root / 'agentdrive.json')], stdout=log, stderr=log)
         for _ in range(100):
             if process.poll() is not None:
                 raise AssertionError((root / 'test.log').read_text())
@@ -91,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix='agentfs-lifecycle-') as temporary:
         return process, send, wait
 
     def records(workspace):
-        config = json.loads((root / 'agentfs.json').read_text())
+        config = json.loads((root / 'agentdrive.json').read_text())
         with closing(sqlite3.connect(str(Path(config['data_dir']) / 'meta.db'))) as database:
             return [record for row in database.execute("SELECT data FROM operations WHERE workspace=?", (workspace,)) if (record := json.loads(row[0]))["name"] == "mount_save"]
 

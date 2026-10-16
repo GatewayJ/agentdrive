@@ -4,7 +4,7 @@
 
 ## 守护进程配置
 
-运行 `agentfsd init --directory /absolute/path/to/agentfs`，创建 `agentfs.json`、私有 token 文件，以及挂载和文件交换目录。修改生成的配置后，运行 `agentfsd serve --config /absolute/path/to/agentfs/agentfs.json`。daemon 在启动时读取配置，并每秒检查运行配置的修改。
+运行 `agentdrived init --directory /absolute/path/to/agentdrive`，创建 `agentdrive.json`、私有 token 文件，以及挂载和文件交换目录。修改生成的配置后，运行 `agentdrived serve --config /absolute/path/to/agentdrive/agentdrive.json`。daemon 在启动时读取配置，并每秒检查运行配置的修改。
 
 生成的文件包含 `data_dir`、`listen`、`mount_roots`、`directory_roots` 和 `credentials`。其他可选设置使用下表中的默认值，按需添加即可。
 
@@ -22,13 +22,13 @@
 
 例如，添加 `"cache": { "max_bytes": 536870912 }` 可以将缓存容量设为 512 MiB。程序自动将清理目标设为容量的 75%，此例对应 384 MiB。
 
-状态目录、允许的根目录和 token 路径必须使用绝对路径。启动前应创建允许的根目录。JSON 字符串不会展开 `~`、`$HOME` 或环境变量。Windows 路径使用转义后的反斜线，例如 `"C:\\Users\\alice\\agentfs\\state"`，也可以使用正斜线。未知的顶层配置字段，以及未知的 `cache` 或 `remote` 字段会被拒绝。配置文件上限为 1 MiB。
+状态目录、允许的根目录和 token 路径必须使用绝对路径。启动前应创建允许的根目录。JSON 字符串不会展开 `~`、`$HOME` 或环境变量。Windows 路径使用转义后的反斜线，例如 `"C:\\Users\\alice\\agentdrive\\state"`，也可以使用正斜线。未知的顶层配置字段，以及未知的 `cache` 或 `remote` 字段会被拒绝。配置文件上限为 1 MiB。
 
 token 文件必须是普通文件，最多 4096 字节，去除首尾空白后至少包含 32 个非空白字节。Unix 环境下，文件不能授予所属组和其他用户访问权限；初始化会创建权限为 `0600` 的文件。各 token 必须唯一。token 选择配置中的 `principal`，工作区所有权和授权决定该身份的访问范围。请使用守护进程用户的文件系统权限保护配置和状态。
 
 ## 热更新与 Dashboard 设置
 
-在 Dashboard 左侧选择“设置”，或访问 `/settings`，使用管理员 token 认证。页面支持修改 S3 连接与访问凭据、以 GiB 为单位的本地缓存容量，以及 HTTP Origin 允许列表。选择 S3 模式时显示缓存容量；本地模式保留已保存的容量值，供再次启用 S3 时使用。S3 连接设置保存后，在程序运行期间完成切换。保存会写入 daemon 启动时使用的同一个 `agentfs.json`，并发布完整配置快照。配置文件保持原有顶层结构，保存时仍会省略采用默认值的可选字段。
+在 Dashboard 左侧选择“设置”，或访问 `/settings`，使用管理员 token 认证。页面支持修改 S3 连接与访问凭据、以 GiB 为单位的本地缓存容量，以及 HTTP Origin 允许列表。选择 S3 模式时显示缓存容量；本地模式保留已保存的容量值，供再次启用 S3 时使用。S3 连接设置保存后，在程序运行期间完成切换。保存会写入 daemon 启动时使用的同一个 `agentdrive.json`，并发布完整配置快照。配置文件保持原有顶层结构，保存时仍会省略采用默认值的可选字段。
 
 | 配置 | 生效时间 |
 | --- | --- |
@@ -67,13 +67,13 @@ Origin 使用 HTTP 或 HTTPS 的 `scheme://host[:port]` 格式，不包含路径
 
 ## S3 字段
 
-以下对象应配置在 `agentfs.json` 的**顶层 `remote` 字段**中：
+以下对象应配置在 `agentdrive.json` 的**顶层 `remote` 字段**中：
 
 ```json
 {
   "remote": {
-    "bucket": "agentfs",
-    "prefix": "agentfs/v1",
+    "bucket": "agentdrive",
+    "prefix": "agentdrive/v1",
     "region": "us-east-1",
     "endpoint": "http://127.0.0.1:9000",
     "allow_http": true
@@ -88,7 +88,7 @@ Origin 使用 HTTP 或 HTTPS 的 `scheme://host[:port]` 格式，不包含路径
 | `enabled` | `true` | 设置为 `false` 使用本地模式，并保留 S3 配置。 |
 | `credentials` | 省略或 `null` | 使用服务环境或 IAM 角色；也可以填写 `access_key_id`、`secret_access_key` 和可选的 `session_token`。 |
 | `bucket` | 必填，非空字符串 | 已存在的 bucket 名称。守护进程不会创建 bucket。 |
-| `prefix` | `agentfs/v1` | bucket 内共享的命名空间；首尾 `/` 会被移除，结果必须是有效且非空的对象路径。 |
+| `prefix` | `agentdrive/v1` | bucket 内共享的命名空间；首尾 `/` 会被移除，结果必须是有效且非空的对象路径。 |
 | `region` | `us-east-1` | 签名使用的 region；AWS S3 应填写 bucket 所在的 region。 |
 | `endpoint` | 省略或 `null` | 可选的 S3 基础 URL。没有 endpoint 覆盖设置时，依赖库会生成 AWS regional endpoint。 |
 | `allow_http` | `false` | 明确使用 HTTP 开发环境 endpoint 时设置为 `true`；HTTPS endpoint 保持 `false`。 |
@@ -99,7 +99,7 @@ Origin 使用 HTTP 或 HTTPS 的 `scheme://host[:port]` 格式，不包含路径
 {
   "remote": {
     "bucket": "your-existing-bucket",
-    "prefix": "agentfs/v1",
+    "prefix": "agentdrive/v1",
     "region": "eu-west-1",
     "allow_http": false
   }
@@ -110,16 +110,16 @@ Origin 使用 HTTP 或 HTTPS 的 `scheme://host[:port]` 格式，不包含路径
 
 Dashboard 可以编辑并保存 S3 凭据到配置文件，Unix 保存权限为 `0600`。GET 设置接口会清空 `secret_access_key` 和 `session_token`；PUT 中同一个 Access Key ID 的空密钥表示保留已有凭据。修改 Session Token 时同时填写 Secret Access Key；将 `credentials` 设为 `null` 使用环境凭据。配置中的凭据优先于环境凭据。
 
-S3 凭据由**守护进程**读取。请在启动 `agentfsd serve` 的终端或服务环境中设置变量。`AGENTFS_TOKEN_FILE` 用于 CLI 访问 OpenCSG Workspace 的身份验证。
+S3 凭据由**守护进程**读取。请在启动 `agentdrived serve` 的终端或服务环境中设置变量。`AGENTDRIVE_TOKEN_FILE` 用于 CLI 访问 AgentDrive 的身份验证。
 
 ```sh
 export AWS_ACCESS_KEY_ID='your-access-key-id'
 export AWS_SECRET_ACCESS_KEY='your-secret-access-key'
 # Temporary credentials also require AWS_SESSION_TOKEN.
-./target/debug/agentfsd serve --config "$AGENTFS_DIRECTORY/agentfs.json"
+./target/debug/agentdrived serve --config "$AGENTDRIVE_DIRECTORY/agentdrive.json"
 ```
 
-PowerShell 使用 `$env:AWS_ACCESS_KEY_ID = 'your-access-key-id'` 和 `$env:AWS_SECRET_ACCESS_KEY = 'your-secret-access-key'`，随后启动 `agentfsd.exe`。
+PowerShell 使用 `$env:AWS_ACCESS_KEY_ID = 'your-access-key-id'` 和 `$env:AWS_SECRET_ACCESS_KEY = 'your-secret-access-key'`，随后启动 `agentdrived.exe`。
 
 当前锁定版本的 `object_store` 按以下顺序选择凭据来源：
 
@@ -131,19 +131,19 @@ PowerShell 使用 `$env:AWS_ACCESS_KEY_ID = 'your-access-key-id'` 和 `$env:AWS_
 
 当前适配器不会读取 `~/.aws/credentials`、`AWS_PROFILE` 或 AWS CLI SSO 会话。请导出有效凭据，或者使用支持的角色凭据来源。静态环境变量凭据在启动时读取，替换后需要重新启动守护进程。
 
-OpenCSG Workspace 调用 `AmazonS3Builder::from_env()` 后应用自身配置。配置中的 `bucket`、`region` 和 `allow_http`，包括默认值，都会覆盖对应的 AWS 环境变量。配置中的 `endpoint` 会覆盖 `AWS_ENDPOINT` 和 `AWS_ENDPOINT_URL_S3`。省略 `endpoint` 时沿用环境设置；使用默认 AWS regional endpoint 时，需要移除这两个环境变量。适配器会选择 path-style 请求和基于 ETag 的条件写入。
+AgentDrive 调用 `AmazonS3Builder::from_env()` 后应用自身配置。配置中的 `bucket`、`region` 和 `allow_http`，包括默认值，都会覆盖对应的 AWS 环境变量。配置中的 `endpoint` 会覆盖 `AWS_ENDPOINT` 和 `AWS_ENDPOINT_URL_S3`。省略 `endpoint` 时沿用环境设置；使用默认 AWS regional endpoint 时，需要移除这两个环境变量。适配器会选择 path-style 请求和基于 ETag 的条件写入。
 
 ## 存储要求与验证
 
-存储服务需要支持 GET/HEAD、按前缀列举、对象写入、分段上传和终止上传，以及强一致读取。OpenCSG Workspace 使用 `If-None-Match: *` 创建不可变对象，并以相同条件完成分段上传；更新引用时使用携带之前 ETag 的 `If-Match`。条件写入行为见 [AWS S3 文档](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)。大于 8 MiB 的文件使用分段上传，分段大小根据文件大小在 8 至 64 MiB 之间选择。存储凭据权限应限制在选定的 bucket 和命名空间内。
+存储服务需要支持 GET/HEAD、按前缀列举、对象写入、分段上传和终止上传，以及强一致读取。AgentDrive 使用 `If-None-Match: *` 创建不可变对象，并以相同条件完成分段上传；更新引用时使用携带之前 ETag 的 `If-Match`。条件写入行为见 [AWS S3 文档](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)。大于 8 MiB 的文件使用分段上传，分段大小根据文件大小在 8 至 64 MiB 之间选择。存储凭据权限应限制在选定的 bucket 和命名空间内。
 
 守护进程启动时会构建 S3 客户端，但启动成功不能证明 bucket 或凭据可用。按照 [CLI 示例](cli.zh-CN.md)导入内容后，明确执行推送，并查看原始导入操作的结果记录：
 
 ```sh
 jq -n --arg workspace "$WORKSPACE" '{workspace:$workspace,direction:"push"}' |
-  agentfs call sync --request-id "$RUN_ID-push" --json -
-jq -n --arg operation "$(jq -r '.id' "$AGENTFS_DIRECTORY/demo-import.json")" '{operation:$operation}' |
-  agentfs call operation_get --json -
+  agentdrive call sync --request-id "$RUN_ID-push" --json -
+jq -n --arg operation "$(jq -r '.id' "$AGENTDRIVE_DIRECTORY/demo-import.json")" '{operation:$operation}' |
+  agentdrive call operation_get --json -
 ```
 
 检查原始操作的 `remote_confirmed`。`workspace_status.capabilities.remote_configured` 表示当前是否启用 S3，`pending_jobs` 表示队列长度。保存了 S3 配置但设置 `remote.enabled: false` 时，返回 `remote_configured: false`。启用 S3 后，守护进程每三秒重试待同步任务。`local_saved: true` 的结果记录仍然可能包含远端错误；请保留 operation ID，并参考[恢复说明](operations.zh-CN.md)。
@@ -156,4 +156,4 @@ jq -n --arg operation "$(jq -r '.id' "$AGENTFS_DIRECTORY/demo-import.json")" '{o
 
 在源机器执行推送，然后在目标机器使用相同 workspace ID 调用 `sync`，设置 `direction: "pull"`。拉取会导入历史和远端分支引用。可以使用已保留的版本创建本地分支；需要接管已有可写分支时，完成在线 `ownership_transfer`。详见[操作说明](operations.zh-CN.md)和 [MCP 参考](mcp.zh-CN.md)。
 
-配置定义见[文件结构](../crates/agentfs-config/src/file.rs)、[运行配置管理](../crates/agentfs-config/src/store.rs)和 [S3 适配器](../crates/agentfs-s3/src/lib.rs)，依赖版本见 [Cargo.lock](../Cargo.lock)。
+配置定义见[文件结构](../crates/agentdrive-config/src/file.rs)、[运行配置管理](../crates/agentdrive-config/src/store.rs)和 [S3 适配器](../crates/agentdrive-s3/src/lib.rs)，依赖版本见 [Cargo.lock](../Cargo.lock)。

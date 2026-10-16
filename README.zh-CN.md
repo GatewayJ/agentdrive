@@ -1,4 +1,4 @@
-# OpenCSG Workspace
+# AgentDrive
 
 **人与 Agent 的共享工作空间**
 
@@ -6,7 +6,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-OpenCSG Workspace 为 Agent 提供可持久保存的工作区、显式管理的工作分支、不可变的版本记录，以及原生文件系统路径。长期运行的 Rust 守护进程负责管理本地状态和挂载；多个 MCP 客户端和 CLI 可以并发访问同一套经过身份验证的 API。
+AgentDrive 为 Agent 提供可持久保存的工作区、显式管理的工作分支、不可变的版本记录，以及原生文件系统路径。长期运行的 Rust 守护进程负责管理本地状态和挂载；多个 MCP 客户端和 CLI 可以并发访问同一套经过身份验证的 API。
 
 功能包括：
 
@@ -36,55 +36,55 @@ macOS 默认构建包含守护进程、CLI 和存储操作。原生挂载需要�
 ## 运行
 
 ```sh
-AGENTFS_DIRECTORY="$HOME/.local/share/agentfs"
-./target/debug/agentfsd init --directory "$AGENTFS_DIRECTORY"
-./target/debug/agentfsd serve --config "$AGENTFS_DIRECTORY/agentfs.json"
+AGENTDRIVE_DIRECTORY="$HOME/.local/share/agentdrive"
+./target/debug/agentdrived init --directory "$AGENTDRIVE_DIRECTORY"
+./target/debug/agentdrived serve --config "$AGENTDRIVE_DIRECTORY/agentdrive.json"
 ```
 
 在另一个终端执行：
 
 ```sh
-export AGENTFS_TOKEN_FILE="$HOME/.local/share/agentfs/token"
-./target/debug/agentfs tools
-./target/debug/agentfs call workspace_create --request-id create-demo --json '{"name":"demo"}'
-./target/debug/agentfs call workspace_list
+export AGENTDRIVE_TOKEN_FILE="$HOME/.local/share/agentdrive/token"
+./target/debug/agentdrive tools
+./target/debug/agentdrive call workspace_create --request-id create-demo --json '{"name":"demo"}'
+./target/debug/agentdrive call workspace_list
 ```
 
 `init` 会创建配置、随机 bearer token，以及状态、挂载和文件交换所需的目录。如果配置已经存在，初始化会拒绝执行，已有凭据会保留。守护进程默认监听 `127.0.0.1:7421`，MCP endpoint 为 `/mcp`。每个状态目录只能由一个守护进程使用。
 
-通过 stdio 连接 MCP 客户端时，将可执行程序设置为 `agentfs`，参数设置为 `["mcp"]`，并设置 `AGENTFS_TOKEN_FILE`。可以通过 `AGENTFS_ENDPOINT` 指定其他守护进程 endpoint。stdio 进程会将请求转发给正在运行的守护进程。
+通过 stdio 连接 MCP 客户端时，将可执行程序设置为 `agentdrive`，参数设置为 `["mcp"]`，并设置 `AGENTDRIVE_TOKEN_FILE`。可以通过 `AGENTDRIVE_ENDPOINT` 指定其他守护进程 endpoint。stdio 进程会将请求转发给正在运行的守护进程。
 
-使用 `agentfs tools` 查看 JSON 输入 schema。通过 MCP 调用命令工具时，请求格式为 `{ "request_id": "stable-id", "request": { ... } }`；CLI 的 `--request-id` 选项会构造该请求结构。查询工具和 `operation_cancel` 直接接收参数。`--json -` 从标准输入读取 JSON。工具响应没有错误时，CLI 返回退出码 0；工具返回错误时返回 2；传输或输入发生错误时返回 1；命令行参数解析错误也使用 2。可执行示例见 [CLI 使用](docs/cli.zh-CN.md)，完整工具参考见 [MCP 参数与能力](docs/mcp.zh-CN.md)。
+使用 `agentdrive tools` 查看 JSON 输入 schema。通过 MCP 调用命令工具时，请求格式为 `{ "request_id": "stable-id", "request": { ... } }`；CLI 的 `--request-id` 选项会构造该请求结构。查询工具和 `operation_cancel` 直接接收参数。`--json -` 从标准输入读取 JSON。工具响应没有错误时，CLI 返回退出码 0；工具返回错误时返回 2；传输或输入发生错误时返回 1；命令行参数解析错误也使用 2。可执行示例见 [CLI 使用](docs/cli.zh-CN.md)，完整工具参考见 [MCP 参数与能力](docs/mcp.zh-CN.md)。
 
 ## 分支、Agent 与 Dashboard
 
 新工作区默认选择可写的 `main` 分支。同一 location 挂载同一 workspace 时复用本机所选分支；新 location 首次挂载时，从主分支最近发布的内容创建并选择自己的分支。通过 MCP 的 `branch_create`、`branch_switch` 或 CLI 显式创建和切换：
 
 ```sh
-agentfs mount --workspace "$WORKSPACE" "$AGENTFS_DIRECTORY/mounts/project"
-agentfs branch list --workspace "$WORKSPACE"
-agentfs branch create --workspace "$WORKSPACE" --name feat/task
-agentfs branch switch --workspace "$WORKSPACE" --branch "$BRANCH"
-agentfs dashboard --open
+agentdrive mount --workspace "$WORKSPACE" "$AGENTDRIVE_DIRECTORY/mounts/project"
+agentdrive branch list --workspace "$WORKSPACE"
+agentdrive branch create --workspace "$WORKSPACE" --name feat/task
+agentdrive branch switch --workspace "$WORKSPACE" --branch "$BRANCH"
+agentdrive dashboard --open
 ```
 
 创建分支会保存来源分支的当前内容，并保持工作区原有选择。切换会保存原分支，检查文件句柄，再更新本机分支选择和挂载目录。共享目录的多个 Agent 使用同一个分支。重启后仍然保留选择。Dashboard 展示分支关系、commit 说明、创建者、时间和父版本。管理员可以在“设置”页面修改缓存策略、S3 存储和 HTTP Origin 允许列表，运行中的 daemon 会使用更新后的配置，详见[配置说明](docs/configuration.zh-CN.md)。
 
-已有 Agent 可以通过 `agentfs mcp` 接入并使用挂载目录。`agentfs integrate` 支持 ACP agent 和 Codex app-server，负责工作目录以及完成、取消和失败时的保存。自动保存由文件修改触发，Agent 断开后保留共享挂载。完整命令和事件行为见[Agent 集成](docs/integrations.zh-CN.md)。
+已有 Agent 可以通过 `agentdrive mcp` 接入并使用挂载目录。`agentdrive integrate` 支持 ACP agent 和 Codex app-server，负责工作目录以及完成、取消和失败时的保存。自动保存由文件修改触发，Agent 断开后保留共享挂载。完整命令和事件行为见[Agent 集成](docs/integrations.zh-CN.md)。
 
 需要并发保护的变更会检查分支 owner、epoch、generation 和 head。这些值应从 `workspace_status` 获取，请勿自行编造。需要停止当前挂载的操作会返回 `waiting_for_quiesce`。请停止使用该目录的进程，关闭相关文件句柄，并使进程退出该目录，然后携带 operation ID 和预期的 binding generation 调用 `mount_release`。详见[操作与恢复](docs/operations.zh-CN.md)。
 
 ## 存储与配置
 
-`agentfs.json` 使用绝对文件系统路径。`mount_roots` 指定允许的挂载目标；`directory_roots` 指定允许的导入和导出路径。导入期间源目录需要保持稳定，导入操作会拒绝 symbolic link 和不兼容的文件名称。导出操作会创建新目录，并保留文件内容、修改时间和支持的权限。
+`agentdrive.json` 使用绝对文件系统路径。`mount_roots` 指定允许的挂载目标；`directory_roots` 指定允许的导入和导出路径。导入期间源目录需要保持稳定，导入操作会拒绝 symbolic link 和不兼容的文件名称。导出操作会创建新目录，并保留文件内容、修改时间和支持的权限。
 
 在 Dashboard“设置”中启用 S3，填写并保存连接和凭据，也可以在生成的配置中添加 `remote`：
 
 ```json
 {
   "remote": {
-    "bucket": "agentfs",
-    "prefix": "agentfs/v1",
+    "bucket": "agentdrive",
+    "prefix": "agentdrive/v1",
     "region": "us-east-1",
     "endpoint": "https://s3.example.com",
     "allow_http": false
@@ -108,4 +108,4 @@ CI 会在 Linux、macOS 和 Windows 上运行 workspace 测试，并执行 Linux
 
 能力查询响应会说明支持的行为。当前接口不支持 symbolic link、hard link、扩展属性、内存映射写入、advisory locking、自动文本冲突解决和远端对象物理回收。删除已打开的文件，或替换已打开的目标文件，会返回 busy 错误。同一路径的并发变更会产生明确的合并冲突。挂载使用守护进程的操作系统身份，工作区访问授权控制 MCP 请求。
 
-更多说明见[文档目录](docs/README.zh-CN.md)、[架构](docs/architecture.zh-CN.md)、[操作与恢复](docs/operations.zh-CN.md)和[验证](docs/validation.zh-CN.md)。OpenCSG Workspace 使用 Apache-2.0 许可证；仓库内附带的 WinFsp Rust wrapper 保留其 MIT 许可证。
+更多说明见[文档目录](docs/README.zh-CN.md)、[架构](docs/architecture.zh-CN.md)、[操作与恢复](docs/operations.zh-CN.md)和[验证](docs/validation.zh-CN.md)。AgentDrive 使用 Apache-2.0 许可证；仓库内附带的 WinFsp Rust wrapper 保留其 MIT 许可证。

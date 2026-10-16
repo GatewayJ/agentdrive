@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentDrive · 分支与版本</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/dashboard.css">
+  <script src="/dashboard.js" type="module"></script>
+</head>
+<body>
+  <section id="login" class="login-screen" hidden>
+    <form id="login-form" class="login-card">
+      <div class="brand"><span class="brand-mark">A</span> AgentDrive</div>
+      <h1>连接你的工作区</h1>
+      <p>查看分支关系、保存的版本与同步状态。</p>
+      <label for="token">访问令牌</label>
+      <input id="token" type="password" autocomplete="off" placeholder="输入 daemon token" required>
+      <button type="submit" class="primary">连接工作区 <span>→</span></button>
+      <p class="login-hint">也可以运行 <code>agentdrive dashboard --open</code>，直接在浏览器中打开。</p>
+      <p id="login-error" role="alert"></p>
+    </form>
+  </section>
+  <div id="app" class="app" hidden>
+    <aside class="sidebar">
+      <a class="brand" href="/dashboard"><span class="brand-mark">A</span> AgentDrive <span class="version">LOCAL</span></a>
+      <div class="workspace-picker"><label for="workspace">工作区</label><select id="workspace" aria-label="选择工作区"></select></div>
+      <nav aria-label="导航"><a id="history-nav" class="nav-link nav-active" href="/dashboard"><span class="branch-icon">⑂</span> 分支与版本</a><a id="settings-nav" class="nav-link" href="/settings"><span class="branch-icon">⚙</span> 设置</a></nav>
+      <div class="sidebar-note"><div class="note-icon">◷</div><strong>每一次修改，都有迹可循</strong><p>从分支关系到版本历史，查看工作内容如何演变。</p></div>
+      <div class="sidebar-bottom"><span class="connection-dot"></span><span id="connection">已连接本地 daemon</span><button id="logout" title="断开连接" aria-label="断开连接">↪</button></div>
+    </aside>
+    <main>
+      <header class="topbar"><div id="history-breadcrumb" class="breadcrumb">工作区 <span>/</span> <strong id="workspace-name">加载中</strong></div><div id="settings-breadcrumb" class="breadcrumb" hidden>AgentDrive <span>/</span> <strong>设置</strong></div><div class="topbar-right"><span id="view-mode" class="read-only">只读浏览</span><span id="updated">正在连接</span><button id="refresh" class="refresh" aria-label="刷新数据">↻</button></div></header>
+      <div id="history-page" class="content">
+        <div class="page-heading"><div><div class="eyebrow">WORKSPACE HISTORY</div><h1>分支与版本<span class="heading-dot">.</span></h1><p>浏览工作分支，追踪每一个保存的版本。</p></div><div class="location-label"><span class="connection-dot"></span><span id="location">本地存储</span></div></div>
+        <div id="error" class="error-banner" role="alert" hidden></div>
+        <section class="stats" aria-label="工作区统计">
+          <div class="stat"><div class="stat-label">工作分支 <span>⑂</span></div><strong id="branch-count">—</strong><small>独立的工作内容</small></div>
+          <div class="stat"><div class="stat-label">保存版本 <span>◷</span></div><strong id="revision-count">—</strong><small id="commit-count">等待版本数据</small></div>
+          <div class="stat"><div class="stat-label">当前分支 <span>↳</span></div><strong id="current-branch" class="stat-name">—</strong><small>本机挂载使用此分支</small></div>
+          <div class="stat"><div class="stat-label">远程同步 <span>↗</span></div><strong id="sync-status" class="stat-name">—</strong><small id="sync-detail">等待同步状态</small></div>
+        </section>
+        <div id="empty" class="empty-state" hidden><span>⑂</span><h2>还没有工作区</h2><p>使用 CLI 创建工作区后，分支与版本会显示在这里。</p></div>
+        <div id="panels" class="panels">
+          <section class="tree-panel panel" aria-labelledby="tree-title"><div class="panel-heading"><div><h2 id="tree-title">分支树</h2><p>从来源分支查看创建关系</p></div></div><div class="tree-legend"><span class="legend-dot"></span>当前分支 <span class="tree-caption">点击分支查看版本</span></div><div id="branch-tree" class="branch-tree" role="tree" aria-label="分支树"></div><div class="tree-footer">创建来源会保留在分支历史中。</div></section>
+          <section class="history-panel panel" aria-labelledby="history-title"><div class="history-heading"><div><div class="selected-branch-label">所选分支</div><h2 id="history-title">—</h2><div id="branch-meta" class="branch-meta"></div></div><span id="branch-state" class="pill">—</span></div><div class="history-toolbar"><h3>版本历史 <span id="history-count" class="count-badge">0</span></h3></div><div id="revision-list" class="revision-list" aria-label="版本列表"></div><div id="revision-detail" class="revision-detail" hidden></div></section>
+        </div>
+        <footer class="page-footer"><span>AgentDrive <span class="footer-separator">/</span> 持久化 Agent 工作区</span><span>每 15 秒自动刷新</span></footer>
+      </div>
+      <div id="settings-page" class="content settings-content" hidden>
+        <div class="page-heading"><div><div class="eyebrow">DAEMON SETTINGS</div><h1>设置<span class="heading-dot">.</span></h1><p>管理此 daemon 的运行配置，适用于全部工作区。</p></div><span class="pill">运行时更新</span></div>
+        <div id="settings-error" class="error-banner" role="alert" hidden></div>
+        <div id="settings-notice" class="settings-notice" role="status" hidden></div>
+        <div id="reload-error" class="error-banner" role="alert" hidden></div>
+        <form id="settings-form" hidden>
+          <fieldset id="settings-fields">
+            <section class="panel settings-panel" aria-labelledby="storage-title">
+              <div class="settings-heading"><div><h2 id="storage-title">存储设置</h2><p>本地模式保存全部版本内容。S3 模式将版本内容同步到远程存储。切换会补齐历史内容，完成后继续使用当前挂载目录。</p></div><span class="pill">保存后切换</span></div>
+              <div class="storage-fields">
+                <label>存储模式<select id="storage-mode"><option value="local">本地存储</option><option value="s3">S3 存储</option></select></label>
+                <label>Endpoint<input id="s3-endpoint" type="url" placeholder="https://s3.example.com" spellcheck="false"></label>
+                <label>Bucket<input id="s3-bucket" spellcheck="false"></label>
+                <label>Region<input id="s3-region" value="us-east-1" spellcheck="false"></label>
+                <label>Prefix<input id="s3-prefix" value="agentdrive/v1" spellcheck="false"></label>
+                <label>凭据来源<select id="s3-auth"><option value="environment">服务环境或 IAM 角色</option><option value="saved">保存访问密钥</option></select></label>
+                <label>Access Key ID<input id="s3-access-key" autocomplete="off" spellcheck="false"></label>
+                <label>Secret Access Key<input id="s3-secret-key" type="password" autocomplete="new-password" placeholder="留空保留已保存密钥"></label>
+                <label>Session Token（可选）<input id="s3-session-token" type="password" autocomplete="new-password"></label>
+              </div>
+              <label class="storage-check"><input id="s3-http" type="checkbox">允许使用 HTTP Endpoint</label>
+              <p class="settings-help">密钥保存在当前配置文件中，请限制该文件的访问权限。页面不会返回已保存的 Secret Access Key 或 Session Token。修改 Session Token 时请同时填写 Secret Access Key。</p>
+            </section>
+            <section id="cache-panel" class="panel settings-panel" aria-labelledby="cache-title" hidden>
+              <div class="settings-heading"><div><h2 id="cache-title">本地缓存</h2><p>后台每 30 秒检查一次。超过容量时，自动清理到设置容量的 75%；磁盘空间不足时也会尝试清理。</p></div><span class="pill">保存后生效</span></div>
+              <label class="cache-capacity">本地缓存容量 <span class="input-unit"><input id="cache-max" type="number" min="0" step="any" aria-describedby="cache-help"><span>GiB</span></span><small>默认 2 GiB，可填写小数。</small></label>
+              <p id="cache-help" class="settings-help">此设置管理可重新下载的版本内容缓存。正在使用、尚未上传或固定保留的内容受到保护，实际占用可能超过设置容量。</p>
+            </section>
+            <section class="panel settings-panel" aria-labelledby="origins-title">
+              <div class="settings-heading"><div><h2 id="origins-title">HTTP 访问来源</h2><p>允许发送请求的额外页面来源，下一次请求使用新设置。</p></div><span class="pill">保存后生效</span></div>
+              <label class="settings-label" for="allowed-origins">Origin 白名单，每行一个地址</label>
+              <textarea id="allowed-origins" rows="3" placeholder="https://app.example.com" spellcheck="false"></textarea>
+              <p class="settings-help">使用 scheme://host[:port] 格式。同源 Dashboard 和没有 Origin 的 CLI 请求可以访问；所有请求均需认证。</p>
+            </section>
+          </fieldset>
+          <div class="settings-actions"><div><strong id="settings-state">配置已加载</strong><small id="settings-version"></small></div><button id="settings-reload" class="secondary" type="button">重新载入</button><button id="settings-save" class="primary" type="submit" disabled>保存并应用</button></div>
+        </form>
+        <section id="startup-panel" class="panel settings-panel" hidden aria-labelledby="startup-title">
+          <div class="settings-heading"><div><h2 id="startup-title">启动配置</h2><p>修改配置文件后重启 daemon 生效。这些设置决定存储位置、连接与访问权限。</p></div><span class="read-only">需要重启</span></div>
+          <dl id="startup-values" class="detail-grid"></dl>
+        </section>
+        <footer class="page-footer"><span>AgentDrive <span class="footer-separator">/</span> 配置管理</span><span>配置文件每秒检查一次</span></footer>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

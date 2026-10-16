@@ -1,0 +1,17 @@
+[package]
+name = "agentdrive-test-support"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+agentdrive-model.workspace = true
+agentdrive-ports.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+parking_lot.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

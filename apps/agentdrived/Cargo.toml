@@ -1,0 +1,28 @@
+[package]
+name = "agentdrived"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+macos-mount = ["agentdrive-platform/macos-mount"]
+
+[dependencies]
+agentdrive-config.workspace = true
+axum.workspace = true
+tokio-util.workspace = true
+agentdrive-model.workspace = true
+agentdrive-ports.workspace = true
+agentdrive-engine.workspace = true
+agentdrive-local.workspace = true
+agentdrive-s3.workspace = true
+agentdrive-platform.workspace = true
+agentdrive-mcp.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

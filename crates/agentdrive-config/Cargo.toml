@@ -1,0 +1,21 @@
+[package]
+name = "agentdrive-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+agentdrive-model.workspace = true
+schemars.workspace = true
+arc-swap.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

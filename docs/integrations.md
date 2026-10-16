@@ -2,14 +2,14 @@
 
 [English](integrations.md) | [简体中文](integrations.zh-CN.md)
 
-Start `agentfsd` and configure `AGENTFS_TOKEN_FILE`. Native directories require FUSE, macFUSE, or WinFsp. Mount paths must be inside the daemon's `mount_roots`. The agent's execution environment must be able to access the mounted directory.
+Start `agentdrived` and configure `AGENTDRIVE_TOKEN_FILE`. Native directories require FUSE, macFUSE, or WinFsp. Mount paths must be inside the daemon's `mount_roots`. The agent's execution environment must be able to access the mounted directory.
 
 ## MCP and mounted directories
 
-Configure an existing agent with the stdio MCP command `agentfs mcp`, or connect to the daemon's `/mcp` HTTP endpoint. MCP connections share the long-running daemon.
+Configure an existing agent with the stdio MCP command `agentdrive mcp`, or connect to the daemon's `/mcp` HTTP endpoint. MCP connections share the long-running daemon.
 
 ```sh
-agentfs mount --workspace "$WORKSPACE" "$AGENTFS_DIRECTORY/mounts/project"
+agentdrive mount --workspace "$WORKSPACE" "$AGENTDRIVE_DIRECTORY/mounts/project"
 ```
 
 The corresponding MCP tool is `mount_prepare`, with these minimum arguments:
@@ -35,13 +35,13 @@ MCP returns `result.binding`, including `id`, `branch`, `path`, and `generation`
 Applications that need protocol-managed working directories and saving at task completion can use these commands:
 
 ```sh
-agentfs integrate --protocol acp --workspace "$WORKSPACE" \
-  --mount-path "$AGENTFS_DIRECTORY/mounts/project" -- your-acp-agent
+agentdrive integrate --protocol acp --workspace "$WORKSPACE" \
+  --mount-path "$AGENTDRIVE_DIRECTORY/mounts/project" -- your-acp-agent
 ```
 
 ```sh
-agentfs integrate --protocol codex-app-server --workspace "$WORKSPACE" \
-  --mount-path "$AGENTFS_DIRECTORY/mounts/project" -- codex app-server --listen stdio://
+agentdrive integrate --protocol codex-app-server --workspace "$WORKSPACE" \
+  --mount-path "$AGENTDRIVE_DIRECTORY/mounts/project" -- codex app-server --listen stdio://
 ```
 
 The bridge exchanges newline-delimited JSON-RPC, reuses the mount, and launches the agent after the directory is ready. ACP `session/new`, `session/load`, and `session/resume`, plus Codex `thread/start`, `thread/resume`, `thread/fork`, and `turn/start`, receive the mounted directory as `cwd`. Conversation IDs remain managed by the application.
@@ -66,11 +66,11 @@ The daemon publishes remotely in the background. `remote_confirmed` indicates su
 
 ## Branches and dashboard
 
-`agentfs branch create` and MCP `branch_create` explicitly create branches while preserving the selection. `agentfs branch switch` and MCP `branch_switch` save the previous branch and update this location's workspace selection. The CLI attempts release of occupied mounts. Close open files and processes using the directory before retrying the original request ID. MCP callers continue pending changes with `mount_release`.
+`agentdrive branch create` and MCP `branch_create` explicitly create branches while preserving the selection. `agentdrive branch switch` and MCP `branch_switch` save the previous branch and update this location's workspace selection. The CLI attempts release of occupied mounts. Close open files and processes using the directory before retrying the original request ID. MCP callers continue pending changes with `mount_release`.
 
 Existing databases retain their branches and selections. With no selection, one writable local branch is reused automatically; multiple writable local branches require an explicit `branch_switch`.
 
-Run `agentfs dashboard --open` to open the daemon page. The browser reads the token from the URL fragment, removes it, and retains it in session storage. Manual token entry is also available. The page refreshes every 15 seconds and shows branch ancestry, revision history, and commit details. Selecting a branch changes the displayed history.
+Run `agentdrive dashboard --open` to open the daemon page. The browser reads the token from the URL fragment, removes it, and retains it in session storage. Manual token entry is also available. The page refreshes every 15 seconds and shows branch ancestry, revision history, and commit details. Selecting a branch changes the displayed history.
 
 Read-only endpoints are `GET /api/workspaces` and `GET /api/workspaces/{workspace}`. The latter returns `status` and `revisions`; `selected_branch` is this location's selection. Administrators edit runtime settings at `/settings`; see [configuration](configuration.md).
 

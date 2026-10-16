@@ -17,7 +17,7 @@ python3 tests/cli_smoke.py
 安装并启用平台驱动后执行：
 
 ```sh
-make -j "$(getconf _NPROCESSORS_ONLN)" test CARGO_FLAGS='-p agentfs-platform --test native_mount -- --ignored --nocapture'
+make -j "$(getconf _NPROCESSORS_ONLN)" test CARGO_FLAGS='-p agentdrive-platform --test native_mount -- --ignored --nocapture'
 ```
 
 macOS 在 `CARGO_FLAGS` 中添加 `--features macos-mount`。Windows 在 PowerShell 中使用 `make -j $env:NUMBER_OF_PROCESSORS`。集成测试管理自己的临时状态和挂载目录，覆盖大于 3 MiB 的文件、截断、随机位置写入、原子追加、重命名、fsync、超过 128 个目录项、历史版本只读访问，以及卸载。
@@ -30,13 +30,13 @@ make -j $env:NUMBER_OF_PROCESSORS test CARGO_FLAGS='--manifest-path vendor/winfs
 
 ## S3 / RustFS
 
-使用可清理的独立 endpoint，以及允许创建 `agentfs-integration` bucket 的凭据。测试对象使用唯一前缀。请勿将这些测试连接到生产存储。
+使用可清理的独立 endpoint，以及允许创建 `agentdrive-integration` bucket 的凭据。测试对象使用唯一前缀。请勿将这些测试连接到生产存储。
 
 ```sh
-export AGENTFS_TEST_S3_ENDPOINT=http://127.0.0.1:9000
-export AWS_ACCESS_KEY_ID=AGENTFSTESTLOCAL
-export AWS_SECRET_ACCESS_KEY=agentfs-local-integration-secret-2026
-make -j "$(getconf _NPROCESSORS_ONLN)" test CARGO_FLAGS='-p agentfs-s3 -- --ignored --nocapture'
+export AGENTDRIVE_TEST_S3_ENDPOINT=http://127.0.0.1:9000
+export AWS_ACCESS_KEY_ID=AGENTDRIVETESTLOCAL
+export AWS_SECRET_ACCESS_KEY=agentdrive-local-integration-secret-2026
+make -j "$(getconf _NPROCESSORS_ONLN)" test CARGO_FLAGS='-p agentdrive-s3 -- --ignored --nocapture'
 python3 tests/replica_smoke.py
 python3 tests/storage_smoke.py
 ```
@@ -56,7 +56,7 @@ python3 tests/storage_smoke.py
 | 两个守护进程之间的 S3 同步和所有权交接 | macOS 和 Linux |
 | macFUSE 回调编译 | macOS |
 
-[GitHub Actions](https://github.com/GatewayJ/agentfs/actions) 会为每次提交运行仓库内的测试矩阵。macOS 原生挂载需要安装并启用 macFUSE 驱动，该内核挂载测试尚未在开发环境执行。
+[GitHub Actions](https://github.com/GatewayJ/agentdrive/actions) 会为每次提交运行仓库内的测试矩阵。macOS 原生挂载需要安装并启用 macFUSE 驱动，该内核挂载测试尚未在开发环境执行。
 
 [CLI 使用](cli.zh-CN.md)中的创建、导入、读取、导出和挂载示例已通过临时守护进程执行验证。[MCP 参数表](mcp.zh-CN.md)已与运行中的守护进程返回的 29 个工具 schema 核对。S3 配置已根据守护进程配置加载器、适配器，以及锁定版本 `object_store` 的凭据和 endpoint 选择逻辑检查。上述文档检查不代表已经在 AWS S3 部署环境完成验证。
 
@@ -67,6 +67,6 @@ python3 tests/lifecycle_smoke.py
 python3 tests/config_smoke.py
 ```
 
-`lifecycle_smoke.py` 需要原生挂载支持，覆盖 ACP 和 Codex app-server 协议中的完成、取消、失败、进程中断、重复请求、自动保存、daemon 重启、重连、两个 Agent 连接共用挂载，以及已有挂载上的 CLI 分支切换。常规 Rust 测试还覆盖响应正文丢失后的重试、多个连接共用同一个挂载、切换时的文件句柄检查、分支选择持久化和 HTTP 权限。浏览器检查覆盖分支树、版本信息、令牌登录和小屏幕布局。本机 Codex app-server 的 initialize 与 thread/start 已验证工作目录指向 OpenCSG Workspace 挂载；完整任务流程通过协议测试程序验证。
+`lifecycle_smoke.py` 需要原生挂载支持，覆盖 ACP 和 Codex app-server 协议中的完成、取消、失败、进程中断、重复请求、自动保存、daemon 重启、重连、两个 Agent 连接共用挂载，以及已有挂载上的 CLI 分支切换。常规 Rust 测试还覆盖响应正文丢失后的重试、多个连接共用同一个挂载、切换时的文件句柄检查、分支选择持久化和 HTTP 权限。浏览器检查覆盖分支树、版本信息、令牌登录和小屏幕布局。本机 Codex app-server 的 initialize 与 thread/start 已验证工作目录指向 AgentDrive 挂载；完整任务流程通过协议测试程序验证。
 
 `config_smoke.py` 使用临时目录运行 daemon，验证文件热更新、错误配置保留、启动配置修改提示、单个缓存容量字段的 HTTP 保存、版本冲突和重启恢复。该脚本无需挂载驱动。配置测试覆盖已有文件的读取和快照一致性；engine 缓存测试验证修改容量后按 75% 目标清理，并保留当前分支内容。

@@ -17,17 +17,17 @@ parser.add_argument('--bin-dir', default='target/debug')
 args = parser.parse_args()
 binaries = Path(args.bin_dir).resolve()
 exe = '.exe' if os.name == 'nt' else ''
-endpoint = os.environ['AGENTFS_TEST_S3_ENDPOINT']
+endpoint = os.environ['AGENTDRIVE_TEST_S3_ENDPOINT']
 
-with tempfile.TemporaryDirectory(prefix='agentfs-storage-') as temporary:
+with tempfile.TemporaryDirectory(prefix='agentdrive-storage-') as temporary:
     root = Path(temporary)
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]
-    subprocess.run([str(binaries / ('agentfsd' + exe)), 'init', '--directory', str(root), '--listen', f'127.0.0.1:{port}'], check=True, capture_output=True)
-    config_path = root / 'agentfs.json'
+    subprocess.run([str(binaries / ('agentdrived' + exe)), 'init', '--directory', str(root), '--listen', f'127.0.0.1:{port}'], check=True, capture_output=True)
+    config_path = root / 'agentdrive.json'
     token = (root / 'token').read_text().strip()
-    client = [str(binaries / ('agentfs' + exe)), '--endpoint', f'http://127.0.0.1:{port}/mcp', '--token-file', str(root / 'token')]
+    client = [str(binaries / ('agentdrive' + exe)), '--endpoint', f'http://127.0.0.1:{port}/mcp', '--token-file', str(root / 'token')]
     log = (root / 'daemon.log').open('w')
     daemon = None
 
@@ -58,7 +58,7 @@ with tempfile.TemporaryDirectory(prefix='agentfs-storage-') as temporary:
         return result
 
     def start():
-        process = subprocess.Popen([str(binaries / ('agentfsd' + exe)), 'serve', '--config', str(config_path)], stdout=log, stderr=log)
+        process = subprocess.Popen([str(binaries / ('agentdrived' + exe)), 'serve', '--config', str(config_path)], stdout=log, stderr=log)
         for _ in range(100):
             try:
                 if settings()[0] == 200:
@@ -84,7 +84,7 @@ with tempfile.TemporaryDirectory(prefix='agentfs-storage-') as temporary:
         revision = branch['formal_head']
         current = settings()[1]
         runtime = copy.deepcopy(current['runtime'])
-        runtime['remote'] = {'enabled': True, 'bucket': 'agentfs-integration', 'prefix': f'storage-tests/{uuid.uuid4()}', 'region': 'us-east-1', 'endpoint': endpoint, 'allow_http': True,
+        runtime['remote'] = {'enabled': True, 'bucket': 'agentdrive-integration', 'prefix': f'storage-tests/{uuid.uuid4()}', 'region': 'us-east-1', 'endpoint': endpoint, 'allow_http': True,
             'credentials': {'access_key_id': os.environ['AWS_ACCESS_KEY_ID'], 'secret_access_key': os.environ['AWS_SECRET_ACCESS_KEY']}}
         current = save(current, runtime)
         assert os.environ['AWS_SECRET_ACCESS_KEY'] not in json.dumps(current)

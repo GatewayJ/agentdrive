@@ -4,31 +4,31 @@
 
 ## Connect a client
 
-Start `agentfsd` using the [CLI guide](cli.md). For clients supporting an `mcpServers` configuration, a stdio connection can use:
+Start `agentdrived` using the [CLI guide](cli.md). For clients supporting an `mcpServers` configuration, a stdio connection can use:
 
 ```json
 {
   "mcpServers": {
-    "agentfs": {
-      "command": "/absolute/path/to/agentfs",
+    "agentdrive": {
+      "command": "/absolute/path/to/agentdrive",
       "args": ["mcp"],
       "env": {
-        "AGENTFS_ENDPOINT": "http://127.0.0.1:7421/mcp",
-        "AGENTFS_TOKEN_FILE": "/absolute/path/to/agentfs-data/token"
+        "AGENTDRIVE_ENDPOINT": "http://127.0.0.1:7421/mcp",
+        "AGENTDRIVE_TOKEN_FILE": "/absolute/path/to/agentdrive-data/token"
       }
     }
   }
 }
 ```
 
-Replace both paths with actual absolute paths; use `agentfs.exe` on Windows. The exact outer configuration format depends on the client. The proxy uses stdin/stdout for MCP and stderr for logs. It connects to an already running daemon and shares that daemon's state with other clients.
+Replace both paths with actual absolute paths; use `agentdrive.exe` on Windows. The exact outer configuration format depends on the client. The proxy uses stdin/stdout for MCP and stderr for logs. It connects to an already running daemon and shares that daemon's state with other clients.
 
 For direct Streamable HTTP, use `http://127.0.0.1:7421/mcp` and `Authorization: Bearer <token-file-contents>`. Use an MCP client that performs initialization and preserves the returned session information. The accepted Host values are the bound address and `localhost:<port>`. A supplied Origin must match the request's own HTTP origin or `allowed_origins`; native CLI/stdio connections omit Origin. The daemon binds only to loopback; access from other machines requires an authenticated TLS proxy preserving an accepted Host value.
 
 The server advertises the MCP `tools` capability. It provides 29 tools, including their input JSON schemas and annotations. Read the connected server's catalog with `tools/list` or:
 
 ```sh
-agentfs tools > tools.json
+agentdrive tools > tools.json
 jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 ```
 
@@ -45,7 +45,7 @@ The 21 command tools in the next table require an envelope. For example, the `ar
 }
 ```
 
-The equivalent CLI is `agentfs call workspace_create --request-id create-demo-1 --json '{"name":"demo"}'`. `request_id` must be nonempty, contain no control characters, and be at most 256 UTF-8 bytes. Its identity belongs to the authenticated principal and survives process restarts. Retry with the same ID, tool, and arguments; conflicting reuse returns `REQUEST_ID_CONFLICT`.
+The equivalent CLI is `agentdrive call workspace_create --request-id create-demo-1 --json '{"name":"demo"}'`. `request_id` must be nonempty, contain no control characters, and be at most 256 UTF-8 bytes. Its identity belongs to the authenticated principal and survives process restarts. Retry with the same ID, tool, and arguments; conflicting reuse returns `REQUEST_ID_CONFLICT`.
 
 The ten query tools receive direct argument objects. `operation_cancel` also receives direct arguments and modifies the referenced operation; it does not accept the command envelope. For `operation_by_request`, use:
 
@@ -127,6 +127,6 @@ Call `workspace_status` for an existing workspace and inspect `capabilities`:
 
 File editing normally uses the mounted native path; the MCP tools manage workspaces, versions, and lifecycle. The catalog marks the ten queries `readOnlyHint: true` and `destructiveHint: false`; commands and cancellation use the opposite values. All tools currently advertise `idempotentHint: true` and `openWorldHint: true`. These annotations describe tool behavior; authentication, grants, request identities, and state checks enforce access and retries.
 
-Source definitions: [catalog and dispatch](../crates/agentfs-mcp/src/server.rs), [request types](../crates/agentfs-ports/src/api.rs), [shared types](../crates/agentfs-model/src/entities.rs), and [error codes](../crates/agentfs-model/src/error.rs).
+Source definitions: [catalog and dispatch](../crates/agentdrive-mcp/src/server.rs), [request types](../crates/agentdrive-ports/src/api.rs), [shared types](../crates/agentdrive-model/src/entities.rs), and [error codes](../crates/agentdrive-model/src/error.rs).
 
 Turn persistence is managed by [agent integrations](integrations.md) through the authenticated lifecycle API. Branches expose `source_branch` and `base_revision` for creation ancestry.
