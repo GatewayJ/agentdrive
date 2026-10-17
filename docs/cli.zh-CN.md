@@ -91,7 +91,7 @@ agentdrive branch switch --workspace "$WORKSPACE" --branch "$BRANCH" --request-i
 agentdrive dashboard --open
 ```
 
-`branch create` 接受可选的 `--source <REVISION>` 或 `--source-branch <BRANCH>`；省略时保存当前分支的工作内容作为来源。结果中的 `result.branch` 为新分支，工作区当前选择保持原值。`branch switch` 更新当前 location 的分支选择和挂载目录。CLI 会尝试释放已有挂载；被占用时关闭使用目录的程序，再使用原 request ID 重试。MCP 调用方使用 `mount_release` 继续等待中的切换。两个命令会生成 request ID；需要重试时可以提供固定的 `--request-id`。
+`branch create` 接受可选的 `--source <REVISION>` 或 `--source-branch <BRANCH>`；省略时保存当前分支的工作内容作为来源。结果中的 `result.branch` 为新分支，工作区当前选择保持原值。`branch switch` 更新当前 location 的分支选择和挂载目录。CLI 和 MCP 均在一次调用中完成切换。遇到 `MOUNT_BUSY`，关闭文件和使用目录的进程，或重启 Agent，再使用相同 request ID 重试。其他错误保留具体原因。两个命令会生成 request ID；需要重试时可以提供固定的 `--request-id`。
 
 `mount` 只需 workspace ID 和目录，重复调用复用相同挂载。同一 location 使用已有选择；新 location 首次挂载时从主分支最近发布的版本创建本机分支。配置 S3 后，可以直接挂载远程 workspace ID。一个分支最多有一个可写挂载，移动目录前需要卸载原挂载。Agent 断开后保留目录。[Agent 集成](integrations.zh-CN.md)说明 MCP 接入和任务保存。
 

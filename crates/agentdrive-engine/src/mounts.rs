@@ -537,10 +537,23 @@ impl MountService {
                         tracing::warn!(error = %restore_error, "previous mount requires recovery");
                     }
                 }
+                let branch_switch =
+                    matches!(current.pending, Some(PendingAction::BranchSwitch { .. }));
+                let mut error = error;
+                if branch_switch && error.code == ErrorCode::MountBusy {
+                    error.message = format!(
+                        "{}; close files and processes using the mounted directory, or restart the Agent, then retry branch_switch with the same request_id",
+                        error.message
+                    );
+                    error.retryable = true;
+                }
+                let needs_recovery = branch_switch && error.code != ErrorCode::MountBusy;
                 current.error = Some(error);
                 current.mount_ready = Some(false);
                 current.phase = if current.local_saved {
                     OperationPhase::CommittedMountPending
+                } else if needs_recovery {
+                    OperationPhase::RecoveryRequired
                 } else {
                     OperationPhase::WaitingForQuiesce
                 };
@@ -648,7 +661,13 @@ impl MountApi for MountService {
             )
             .await?
         {
-            OperationStart::Existing(record) => return Ok(record),
+            OperationStart::Existing(record) => {
+                return if matches!(record.pending, Some(PendingAction::BranchSwitch { .. })) {
+                    self.execute(record).await
+                } else {
+                    Ok(record)
+                };
+            }
             OperationStart::New(context) => context,
         };
         let result = async {
@@ -744,11 +763,7 @@ impl MountApi for MountService {
                     ..Default::default()
                 })
                 .await?;
-            if old.is_some() {
-                Ok(record)
-            } else {
-                self.execute(record).await
-            }
+            self.execute(record).await
         }
         .await;
         match result {

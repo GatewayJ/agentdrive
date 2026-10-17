@@ -78,3 +78,13 @@ python3 tests/config_smoke.py
 macOS 26.5、FUSE-T 1.2.9 与独立 RustFS 容器环境中，Codex 创建普通目录并在转换后的原路径继续写入。验证内容包含 12 MiB 文件、空文件、中文名称、创建、修改、重命名和删除。Codex 通过 stdio MCP 创建、切换分支并请求远端保存。main 与 feature 的版本在独立 daemon 中从 RustFS 恢复，全部文件清单和 SHA-256 一致。往返切换保持两个分支的独立内容。正常重启 daemon 后调用 `mount_prepare`，分支选择及文件内容保留。指定已有 workspace 的导入在原路径创建新的 branch。
 
 停止 RustFS 后，本地保存成功、远端保存返回失败；恢复服务并同步后，原保存操作得到远端确认，独立恢复的全部文件校验一致。FUSE-T 构建通过 44 个 workspace 测试与 Clippy、两项原生挂载测试、56 个 fuser 测试，以及 CLI/stdio smoke 测试。原生测试耗时 134.14 秒。本次未验证多进程文件锁及生产环境吞吐量。生命周期与元数据行为见 [FUSE-T 使用说明](integrations.zh-CN.md#macos-fuse-t)。
+
+## 一次调用完成分支切换
+
+安装原生挂载驱动并完成支持挂载的构建后，执行：
+
+```sh
+python3 tests/branch_switch_smoke.py
+```
+
+stdio MCP 测试验证每次尝试只调用一次 `branch_switch`、进程工作目录占用、明确的 `MOUNT_BUSY` 恢复提示、重启 MCP 客户端后重试、已完成请求的重复调用，以及分支内容隔离。整个测试不调用 `mount_release`。引擎测试注入卸载权限失败和目标挂载失败，验证错误原因保留、相同请求可以继续执行。原生测试分别覆盖打开文件与工作目录占用。这些检查已在本机 macOS 26.5、FUSE-T 1.2.9 环境通过。

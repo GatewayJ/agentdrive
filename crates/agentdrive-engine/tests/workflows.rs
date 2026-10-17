@@ -1632,40 +1632,25 @@ async fn branch_switch_preserves_edits_and_waits_for_handles() {
         )
         .await
         .unwrap();
-    let switched = success(
-        harness
-            .engine
-            .services
-            .mounts
-            .switch_branch(
-                context(),
-                SwitchBranch {
-                    workspace: workspace.id,
-                    branch: feature,
-                },
-            )
-            .await
-            .unwrap(),
-    );
-    assert_eq!(switched.phase, OperationPhase::WaitingForQuiesce);
-    assert_eq!(
-        harness.local.selected_branch(workspace.id).await.unwrap(),
-        Some(main)
-    );
-    let rejected = harness
+    let switch_context = context();
+    let switched = harness
         .engine
         .services
         .mounts
-        .release(
-            context(),
-            ReleaseMount {
-                operation: switched.id,
-                expected_binding_generation: mount.generation,
+        .switch_branch(
+            switch_context.clone(),
+            SwitchBranch {
+                workspace: workspace.id,
+                branch: feature,
             },
         )
         .await
         .unwrap();
-    assert_eq!(rejected.error.unwrap().code, ErrorCode::MountBusy);
+    assert_eq!(switched.phase, OperationPhase::WaitingForQuiesce);
+    let error = switched.error.as_ref().unwrap();
+    assert_eq!(error.code, ErrorCode::MountBusy);
+    assert!(error.retryable);
+    assert!(error.message.contains("restart the Agent"));
     assert_eq!(
         harness.local.selected_branch(workspace.id).await.unwrap(),
         Some(main)
@@ -1682,11 +1667,11 @@ async fn branch_switch_preserves_edits_and_waits_for_handles() {
             .engine
             .services
             .mounts
-            .release(
-                context(),
-                ReleaseMount {
-                    operation: switched.id,
-                    expected_binding_generation: mount.generation,
+            .switch_branch(
+                switch_context.clone(),
+                SwitchBranch {
+                    workspace: workspace.id,
+                    branch: feature,
                 },
             )
             .await
@@ -1755,6 +1740,44 @@ async fn branch_switch_preserves_edits_and_waits_for_handles() {
             )
             .await
             .is_err()
+    );
+    let returned = success(
+        harness
+            .engine
+            .services
+            .mounts
+            .switch_branch(
+                context(),
+                SwitchBranch {
+                    workspace: workspace.id,
+                    branch: main.id,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(returned.phase, OperationPhase::Complete);
+    assert_eq!(returned.mount_ready, Some(true));
+    let repeated = success(
+        harness
+            .engine
+            .services
+            .mounts
+            .switch_branch(
+                switch_context,
+                SwitchBranch {
+                    workspace: workspace.id,
+                    branch: feature,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(repeated.id, switched.id);
+    assert_eq!(repeated.phase, OperationPhase::Complete);
+    assert_eq!(
+        harness.local.selected_branch(workspace.id).await.unwrap(),
+        Some(main.id)
     );
 }
 
@@ -2494,4 +2517,98 @@ async fn explicit_branch_selection_survives_unmount_and_restart() {
     );
     assert_eq!(restored.branch, feature);
     assert_eq!(local.branches(workspace.id).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn branch_switch_retries_unmount_and_remount_failures() {
+    for remount in [false, true] {
+        let harness = Harness::new(None).await;
+        let workspace = harness.workspace().await;
+        let binding = mounted(
+            harness
+                .engine
+                .services
+                .mounts
+                .prepare(
+                    context(),
+                    default_mount(workspace.id, harness.directory.path().join("selected")),
+                )
+                .await
+                .unwrap(),
+        );
+        let created = success(
+            harness
+                .engine
+                .services
+                .revisions
+                .fork(
+                    context(),
+                    ForkBranch {
+                        workspace: workspace.id,
+                        source: None,
+                        source_branch: None,
+                        name: "target".into(),
+                    },
+                )
+                .await
+                .unwrap(),
+        );
+        let request = SwitchBranch {
+            workspace: workspace.id,
+            branch: created.branch.unwrap(),
+        };
+        let ctx = context();
+        if remount {
+            harness
+                .driver
+                .fail_mount
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        } else {
+            *harness.driver.unmount_error.lock() = Some(Error::new(
+                ErrorCode::PermissionDenied,
+                "unmount permission denied",
+            ));
+        }
+        let failed = harness
+            .engine
+            .services
+            .mounts
+            .switch_branch(ctx.clone(), request.clone())
+            .await
+            .unwrap();
+        assert_eq!(failed.phase, OperationPhase::RecoveryRequired);
+        let error = failed.error.unwrap();
+        assert_eq!(
+            error.code,
+            if remount {
+                ErrorCode::Unavailable
+            } else {
+                ErrorCode::PermissionDenied
+            }
+        );
+        assert!(!error.message.contains("restart the Agent"));
+        if !remount {
+            assert_eq!(error.message, "unmount permission denied");
+            assert_eq!(
+                harness.driver.status(&binding).await.unwrap(),
+                NativeMountState::Mounted
+            );
+        }
+        assert_eq!(
+            harness.local.selected_branch(workspace.id).await.unwrap(),
+            Some(binding.branch)
+        );
+        let retried = success(
+            harness
+                .engine
+                .services
+                .mounts
+                .switch_branch(ctx, request)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(retried.id, failed.id);
+        assert_eq!(retried.phase, OperationPhase::Complete);
+        assert_eq!(retried.mount_ready, Some(true));
+    }
 }

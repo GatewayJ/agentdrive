@@ -20,7 +20,7 @@ libc.workspace = true
 uuid.workspace = true
 
 [features]
-macos-mount = ["dep:fuser"]
+macos-mount = ["dep:fuser", "dep:nix"]
 macos-fuse-t = ["macos-mount", "fuser/fuse-t"]
 
 [target.'cfg(unix)'.dependencies]
@@ -30,6 +30,7 @@ rustix = { version = "1.1", features = ["fs", "process"] }
 fuser = "0.18.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+nix = { version = "0.30", features = ["mount"], optional = true }
 fuser = { version = "0.18.0", optional = true }
 
 [target.'cfg(windows)'.dependencies]

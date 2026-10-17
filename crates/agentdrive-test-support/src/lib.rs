@@ -154,6 +154,7 @@ impl RemoteRefStore for MemoryRemote {
 pub struct MemoryMountDriver {
     mounts: Mutex<BTreeMap<MountId, MountBinding>>,
     pub fail_mount: AtomicBool,
+    pub unmount_error: Mutex<Option<Error>>,
     pub busy: AtomicBool,
 }
 #[async_trait]
@@ -180,6 +181,9 @@ impl MountDriver for MemoryMountDriver {
         Ok(())
     }
     async fn unmount(&self, binding: &MountBinding) -> Result<()> {
+        if let Some(error) = self.unmount_error.lock().take() {
+            return Err(error);
+        }
         if self.busy.load(Ordering::SeqCst) {
             return Err(Error::new(ErrorCode::MountBusy, "injected busy mount"));
         }

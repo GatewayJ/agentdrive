@@ -179,7 +179,7 @@ fn encode(value: impl Serialize) -> Result<Value> {
 
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(Implementation::new("agentdrive", env!("CARGO_PKG_VERSION"))).with_instructions("AgentDrive manages durable workspaces and isolated agent sessions. Mutation tools require a stable request_id. Retry with the same request_id and identical request. Inspect local_saved, remote_confirmed, mount_ready and phase independently. A waiting_for_quiesce operation requires the caller to stop processes using the mount before mount_release. Use workspace_status to obtain current BranchGuard values.")
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(Implementation::new("agentdrive", env!("CARGO_PKG_VERSION"))).with_instructions("AgentDrive manages durable workspaces and isolated agent sessions. Mutation tools require a stable request_id. Retry with the same request_id and identical request. Inspect local_saved, remote_confirmed, mount_ready and phase independently. branch_switch attempts the entire switch in one call. On MOUNT_BUSY, close processes using the directory or restart the Agent, then retry branch_switch with the same request_id. Other waiting_for_quiesce operations continue through mount_release after the mount is no longer in use. Use workspace_status to obtain current BranchGuard values.")
     }
     async fn list_tools(
         &self,
@@ -340,7 +340,7 @@ pub fn tool_catalog() -> Vec<Tool> {
         ),
         tool::<Command<SwitchBranch>>(
             "branch_switch",
-            "Select this location's workspace branch; occupied mounts require release.",
+            "Save and switch this location's branch and mounted directory in one call. On MOUNT_BUSY, close processes using the directory or restart the Agent, then retry with the same request_id. Other failures retain their specific cause.",
             false,
         ),
         tool::<Command<RestoreBranch>>(

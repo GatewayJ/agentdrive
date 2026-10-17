@@ -197,20 +197,7 @@ async fn run(arguments: Arguments) -> Result<bool> {
                     BranchCommand::Create { workspace, name, source, source_branch, request_id } => ("branch_create", json!({"request_id": request_id.unwrap_or_else(|| OperationId::new().to_string()), "request": {"workspace":workspace,"name":name,"source":source,"source_branch":source_branch}})),
                     BranchCommand::Switch { workspace, branch, request_id } => ("branch_switch", json!({"request_id": request_id.unwrap_or_else(|| OperationId::new().to_string()), "request": {"workspace":workspace,"branch":branch}})),
                 };
-                let mut result = client.call(tool.into(), input).await?;
-                if tool == "branch_switch"
-                    && let Some(record) = &result.structured_content
-                    && record["phase"] == "waiting_for_quiesce"
-                {
-                    let operation = record["id"].clone();
-                    let generation = record["pending"]["old"]["generation"].clone();
-                    let released = client.call("mount_release".into(), json!({
-                        "request_id": OperationId::new().to_string(),
-                        "request": {"operation":operation,"expected_binding_generation":generation},
-                    })).await?;
-                    let current = client.call("operation_get".into(), json!({"operation":operation})).await?;
-                    result = if released.is_error == Some(true) && current.is_error != Some(true) { released } else { current };
-                }
+                let result = client.call(tool.into(), input).await?;
                 let success = result.is_error != Some(true);
                 println!("{}", serde_json::to_string_pretty(&result.structured_content)?);
                 return Ok(success);

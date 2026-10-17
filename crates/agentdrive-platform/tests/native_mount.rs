@@ -307,3 +307,188 @@ async fn native_directory_adoption_preserves_files_at_original_path() {
             .unwrap(),
     );
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires an installed native filesystem driver and mount permission"]
+async fn native_branch_switch_completes_and_reports_file_and_cwd_occupancy() {
+    let root = tempfile::tempdir().unwrap();
+    let local = Arc::new(LocalBackend::open(root.path().join("state")).unwrap());
+    let mounts = root.path().join("mounts");
+    std::fs::create_dir_all(&mounts).unwrap();
+    let source = mounts.join("project");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("original.txt"), b"existing data").unwrap();
+    let driver = NativeMountDriver::new(vec![mounts.clone()]).unwrap();
+    let engine = Engine::open(
+        Adapters {
+            state: local.clone(),
+            objects: local.clone(),
+            working: local.clone(),
+            remote_objects: None,
+            remote_refs: None,
+            clock: Arc::new(SystemClock::default()),
+            mounts: driver.clone(),
+            directories: HostDirectories::new(vec![mounts]).unwrap(),
+        },
+        EngineConfig {
+            live: LiveConfig::new(RuntimeConfig::default()).unwrap(),
+            identity: local_identity(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let adopted = success(
+        engine
+            .services
+            .workspace
+            .adopt_directory(
+                context(),
+                AdoptDirectory {
+                    workspace: None,
+                    path: source.clone(),
+                    restart_agent: true,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    let workspace = adopted.workspace.unwrap();
+    let main = adopted.branch.unwrap();
+    let forked = success(
+        engine
+            .services
+            .revisions
+            .fork(
+                context(),
+                ForkBranch {
+                    workspace,
+                    source: None,
+                    source_branch: None,
+                    name: "feature".into(),
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    let feature = forked.branch.unwrap();
+    let p = source.clone();
+    let file = tokio::task::spawn_blocking(move || {
+        let mut file = std::fs::File::open(p.join("original.txt")).unwrap();
+        let mut byte = [0];
+        file.read_exact(&mut byte).unwrap();
+        file
+    })
+    .await
+    .unwrap();
+    let ctx = context();
+    let request = SwitchBranch {
+        workspace,
+        branch: feature,
+    };
+    let busy = engine
+        .services
+        .mounts
+        .switch_branch(ctx.clone(), request.clone())
+        .await
+        .unwrap();
+    drop(file);
+    assert_eq!(busy.error.as_ref().unwrap().code, ErrorCode::MountBusy);
+    assert!(busy.error.unwrap().message.contains("restart the Agent"));
+    assert_eq!(local.selected_branch(workspace).await.unwrap(), Some(main));
+    let switched = success(
+        engine
+            .services
+            .mounts
+            .switch_branch(ctx, request)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(switched.id, busy.id);
+    assert_eq!(switched.mount_ready, Some(true));
+    let p = source.clone();
+    tokio::task::spawn_blocking(move || {
+        std::fs::write(p.join("feature.txt"), b"feature only").unwrap();
+    })
+    .await
+    .unwrap();
+    let mut child = std::process::Command::new("/bin/sleep")
+        .arg("60")
+        .current_dir(&source)
+        .spawn()
+        .unwrap();
+    let ctx = context();
+    let request = SwitchBranch {
+        workspace,
+        branch: main,
+    };
+    let busy = engine
+        .services
+        .mounts
+        .switch_branch(ctx.clone(), request.clone())
+        .await;
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let busy = busy.unwrap();
+    assert_eq!(busy.error.as_ref().unwrap().code, ErrorCode::MountBusy);
+    assert!(busy.error.unwrap().message.contains("restart the Agent"));
+    assert_eq!(
+        local.selected_branch(workspace).await.unwrap(),
+        Some(feature)
+    );
+    let returned = success(
+        engine
+            .services
+            .mounts
+            .switch_branch(ctx, request)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(returned.mount_ready, Some(true));
+    let p = source.clone();
+    tokio::task::spawn_blocking(move || {
+        assert_eq!(
+            std::fs::read(p.join("original.txt")).unwrap(),
+            b"existing data"
+        );
+        assert!(!p.join("feature.txt").exists());
+    })
+    .await
+    .unwrap();
+    let switched = success(
+        engine
+            .services
+            .mounts
+            .switch_branch(
+                context(),
+                SwitchBranch {
+                    workspace,
+                    branch: feature,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(switched.mount_ready, Some(true));
+    tokio::task::spawn_blocking(move || {
+        assert_eq!(
+            std::fs::read(source.join("feature.txt")).unwrap(),
+            b"feature only"
+        );
+    })
+    .await
+    .unwrap();
+    for mount in local.mounts().await.unwrap() {
+        if mount.state == MountState::Ready {
+            success(
+                engine
+                    .services
+                    .mounts
+                    .unmount(context(), mount.id, mount.generation)
+                    .await
+                    .unwrap(),
+            );
+        }
+    }
+}

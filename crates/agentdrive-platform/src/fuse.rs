@@ -12,11 +12,12 @@ use std::{
     collections::BTreeMap,
     ffi::OsStr,
     path::Path,
-    process::Stdio,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tokio::{process::Command, runtime::Handle};
+use tokio::runtime::Handle;
+#[cfg(target_os = "linux")]
+use {std::process::Stdio, tokio::process::Command};
 
 struct Mounted {
     binding: MountBinding,
@@ -162,36 +163,37 @@ impl Driver {
                 });
             if !owned {
                 return Err(Error::new(
-                    ErrorCode::MountBusy,
+                    ErrorCode::Conflict,
                     "mount path belongs to a different filesystem",
                 ));
             }
             #[cfg(target_os = "linux")]
-            let mut command = {
+            {
                 let program = if Path::new("/usr/bin/fusermount3").exists() {
                     "/usr/bin/fusermount3"
                 } else {
                     "/bin/fusermount"
                 };
-                let mut command = Command::new(program);
-                command.arg("-u");
-                command
-            };
+                let output = Command::new(program)
+                    .env("LC_ALL", "C")
+                    .arg("-u")
+                    .arg(&binding.path)
+                    .stdin(Stdio::null())
+                    .output()
+                    .await?;
+                if !output.status.success() {
+                    return Err(helper_unmount_error(&output));
+                }
+            }
             #[cfg(target_os = "macos")]
-            let mut command = Command::new("/sbin/umount");
-            let output = command
-                .arg(&binding.path)
-                .stdin(Stdio::null())
-                .output()
-                .await?;
-            if !output.status.success() {
-                return Err(Error::new(
-                    ErrorCode::MountBusy,
-                    format!(
-                        "native unmount failed: {}",
-                        String::from_utf8_lossy(&output.stderr).trim()
-                    ),
-                ));
+            {
+                let path = binding.path.clone();
+                tokio::task::spawn_blocking(move || {
+                    nix::mount::unmount(&path, nix::mount::MntFlags::empty())
+                        .map_err(|error| native_unmount_error(std::io::Error::from(error)))
+                })
+                .await
+                .map_err(|error| Error::new(ErrorCode::Io, error.to_string()))??;
             }
         }
         let session = self
@@ -206,6 +208,41 @@ impl Driver {
         }
         Ok(())
     }
+}
+
+#[cfg(target_os = "macos")]
+fn native_unmount_error(error: std::io::Error) -> Error {
+    if error.raw_os_error() == Some(libc::EBUSY) {
+        Error::new(
+            ErrorCode::MountBusy,
+            format!("native unmount failed: {error}"),
+        )
+        .retryable()
+    } else {
+        let mut error = Error::from(error);
+        error.message = format!("native unmount failed: {}", error.message);
+        error
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn helper_unmount_error(output: &std::process::Output) -> Error {
+    let reason = String::from_utf8_lossy(&output.stderr);
+    let code = if reason.trim().ends_with(": Device or resource busy")
+        || reason.trim().ends_with(": target is busy")
+    {
+        ErrorCode::MountBusy
+    } else {
+        ErrorCode::Io
+    };
+    Error::new(
+        code,
+        format!(
+            "native unmount failed ({}): {}",
+            output.status,
+            reason.trim()
+        ),
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -837,5 +874,46 @@ impl Filesystem for Fuse {
             ),
             Err(error) => reply.error(errno(error)),
         }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod unmount_tests {
+    use super::*;
+
+    #[test]
+    fn helper_errors_keep_non_busy_causes() {
+        use std::os::unix::process::ExitStatusExt;
+        for (message, code) in [
+            (
+                "fusermount3: failed to unmount /test: Device or resource busy\n",
+                ErrorCode::MountBusy,
+            ),
+            (
+                "fusermount3: failed to unmount /target is busy: Permission denied\n",
+                ErrorCode::Io,
+            ),
+        ] {
+            let error = helper_unmount_error(&std::process::Output {
+                status: std::process::ExitStatus::from_raw(256),
+                stdout: vec![],
+                stderr: message.as_bytes().to_vec(),
+            });
+            assert_eq!(error.code, code);
+            assert!(error.message.contains(message.trim()));
+        }
+    }
+
+    #[test]
+    fn unmount_errors_distinguish_busy_from_other_causes() {
+        let busy = native_unmount_error(std::io::Error::from_raw_os_error(libc::EBUSY));
+        assert_eq!(busy.code, ErrorCode::MountBusy);
+        assert!(busy.retryable);
+        let denied = native_unmount_error(std::io::Error::from_raw_os_error(libc::EACCES));
+        assert_eq!(denied.code, ErrorCode::PermissionDenied);
+        assert!(denied.message.contains("Permission denied"));
+        let invalid = native_unmount_error(std::io::Error::from_raw_os_error(libc::EINVAL));
+        assert_eq!(invalid.code, ErrorCode::Io);
+        assert!(invalid.message.contains("Invalid argument"));
     }
 }

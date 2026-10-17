@@ -151,7 +151,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-lifecycle-') as temporary:
             assert process.returncode == 0, (root / 'test.log').read_text()
             assert len(records(workspace)) == (3 if protocol == 'acp' else 4), records(workspace)
             active_mount = next(item for item in call('workspace_status', {'workspace': workspace})['mounts'] if item['state'] == 'ready')
-            assert active_mount['path'] == str(root / 'mounts' / protocol)
+            assert Path(active_mount['path']).samefile(root / 'mounts' / protocol)
             process, send, wait = spawn(protocol, workspace)
             assert len(call('workspace_status', {'workspace': workspace})['branches']) == 1
             send(prompt(6, 'exit'))

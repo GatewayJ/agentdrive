@@ -20,7 +20,9 @@ A remote error can accompany `local_saved: true`. Keep the existing operation ID
 
 ## Mount changes
 
-Restore, merge apply, and branch switching may require an attached filesystem to become quiet. An operation in `waiting_for_quiesce` carries its original mount generation. Stop the agent and other processes using that mount, close open files, and leave the directory in any shell. Call `mount_release` with that operation ID and `expected_binding_generation`. Repeating release uses its own stable request ID.
+Restore and merge apply may require an attached filesystem to become quiet. An operation in `waiting_for_quiesce` carries its original mount generation. Stop the agent and other processes using that mount, close open files, and leave the directory in any shell. Call `mount_release` with that operation ID and `expected_binding_generation`. Repeating release uses its own stable request ID.
+
+`branch_switch` attempts the complete change directly. A busy mount returns `MOUNT_BUSY`, `retryable: true`, and instructions to close files/processes or restart the Agent. The previous selection and mount remain available when unmount fails. Retry `branch_switch` with the same request ID after resolving the cause; no separate `mount_release` call is needed. Other failures retain their error code and message. If the old mount was removed but mounting the target failed, the path may be temporarily unmounted; retry the same request to resume installation. Completed requests are replayed without switching again.
 
 The operation verifies the original branch guard again before changing the attachment. A stale target fails without applying the candidate. Generation checks prevent a handle from continuing against a replacement branch. A successful local commit followed by mount failure returns `committed_mount_pending`; the durable result is retained for recovery. Cancellation is accepted only while the original attachment remains unchanged and no local commit has completed.
 

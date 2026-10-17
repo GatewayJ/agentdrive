@@ -68,7 +68,7 @@ Creation captures current working content without changing the selection. Switch
 
 Existing agents can connect through `agentdrive mcp` and use a mounted directory. `agentdrive integrate` manages the working directory and saves on completion, cancellation, failure, and reconnect. See [agent integrations](docs/integrations.md) for ACP and Codex app-server commands and protocol behavior. File changes trigger automatic saves, and shared mounts remain available after agent disconnection.
 
-The branch owner, epoch, generation, and head are checked for guarded changes. Obtain current values from `workspace_status`; do not manufacture them. Operations that need an active mount to stop return `waiting_for_quiesce`. Stop processes using that directory, close their handles and current working directories, then call `mount_release` with the operation ID and expected binding generation. See [operations and recovery](docs/operations.md).
+The branch owner, epoch, generation, and head are checked for guarded changes. Obtain current values from `workspace_status`; do not manufacture them. `branch_switch` attempts the complete switch in one call; on `MOUNT_BUSY`, close processes using the directory or restart the Agent, then retry with the same request ID. Restore and merge operations that need an active mount to stop return `waiting_for_quiesce`. Stop processes using that directory, close their handles and current working directories, then call `mount_release` with the operation ID and expected binding generation. See [operations and recovery](docs/operations.md).
 
 ## Storage and configuration
 

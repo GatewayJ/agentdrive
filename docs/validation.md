@@ -78,3 +78,13 @@ python3 tests/config_smoke.py
 On macOS 26.5 with FUSE-T 1.2.9 and an isolated RustFS container, Codex created the initial directory and continued writing after conversion at the same path. A 12 MiB file, an empty file, UTF-8 names, creation, updates, rename, and deletion were checked. Codex used stdio MCP to create and switch branches and save with remote durability. Main and feature revisions were restored into an independent daemon and compared by full file manifests and SHA-256. Switching back and forth preserved both branches. Normal daemon restart followed by `mount_prepare` preserved the selected branch and files. Import into an existing workspace created a new branch at the original path.
 
 During a RustFS outage, local saving succeeded and remote saving reported failure. After recovery, sync confirmed the original save, and an independent remote restore matched every file. The feature build passed 44 workspace tests and Clippy, two native mount tests, 56 fuser tests, and the CLI/stdio smoke test. Native tests took 134.14 seconds. This run did not establish multi-process file-lock support or production throughput. See [FUSE-T usage](integrations.md#macos-fuse-t) for lifecycle and metadata behavior.
+
+## Single-call branch switching
+
+With the native driver installed and a native-mount build available, run:
+
+```sh
+python3 tests/branch_switch_smoke.py
+```
+
+The stdio MCP test verifies one `branch_switch` call per attempt, a process holding the mount as its working directory, an explicit `MOUNT_BUSY` recovery message, retry after restarting the MCP client, replay of completed requests, and branch isolation. It never calls `mount_release`. Engine tests inject unmount permission failures and target-mount failures and verify that the same request resumes without changing the original error cause. Native tests cover both open files and occupied working directories. These checks passed locally on macOS 26.5 with FUSE-T 1.2.9.

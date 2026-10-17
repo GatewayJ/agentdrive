@@ -20,7 +20,9 @@
 
 ## 挂载变更
 
-恢复、应用合并和分支切换可能要求停止使用已挂载的文件系统。处于 `waiting_for_quiesce` 的操作携带原始挂载 generation。请停止 Agent 和其他使用该挂载的进程，关闭文件，并使终端退出该目录。随后携带 operation ID 和 `expected_binding_generation` 调用 `mount_release`。重试 release 操作时，需要复用它自己的稳定 request ID。
+恢复和应用合并可能要求停止使用已挂载的文件系统。处于 `waiting_for_quiesce` 的操作携带原始挂载 generation。请停止 Agent 和其他使用该挂载的进程，关闭文件，并使终端退出该目录。随后携带 operation ID 和 `expected_binding_generation` 调用 `mount_release`。重试 release 操作时，需要复用它自己的稳定 request ID。
+
+`branch_switch` 直接尝试完成切换。挂载被占用时返回 `MOUNT_BUSY`、`retryable: true`，并提示关闭文件和相关进程，或重启 Agent。卸载失败时保留原分支选择和挂载。处理原因后，使用相同 request ID 重试 `branch_switch`，无需另行调用 `mount_release`。其他失败保留具体错误码和原因。如果旧挂载已经卸载、目标挂载失败，原路径可能暂时没有挂载；相同请求的重试会继续安装目标挂载。已完成的请求直接返回原结果，不会再次切换。
 
 修改挂载关联前，操作会再次验证原始 branch guard。目标状态已经变化时，操作会失败，并保留尚未应用的候选结果。generation 检查防止旧句柄继续访问替换后的分支。本地提交成功但挂载失败时，会返回 `committed_mount_pending`，持久化结果保留用于恢复。只有原始挂载关联尚未变化且本地提交尚未完成时，才接受取消操作。
 

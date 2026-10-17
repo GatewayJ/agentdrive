@@ -88,7 +88,7 @@ agentdrive integrate --protocol codex-app-server --workspace "$WORKSPACE" \
 
 ## 分支与 Dashboard
 
-`agentdrive branch create` 和 MCP `branch_create` 显式创建分支，保持原有选择。`agentdrive branch switch` 和 MCP `branch_switch` 保存原分支并更新当前 location 的 workspace 选择。CLI 会尝试释放已有挂载；目录被占用时，需要关闭文件句柄和使用目录的程序，再使用原 request ID 重试。MCP 调用方通过 `mount_release` 继续等待中的切换。
+`agentdrive branch create` 和 MCP `branch_create` 显式创建分支，保持原有选择。`agentdrive branch switch` 和 MCP `branch_switch` 保存原分支并更新当前 location 的 workspace 选择。CLI 和 MCP 均在一次调用中完成切换。遇到 `MOUNT_BUSY`，关闭文件和使用目录的进程，或重启 Agent，再使用相同 request ID 重试 `branch_switch`。其他错误保留具体原因。
 
 旧数据库保留已有分支和选择。没有选择且只有一个可写本机分支时自动复用；存在多个可写本机分支时，使用 `branch_switch` 明确选择。
 
@@ -102,6 +102,6 @@ agentdrive integrate --protocol codex-app-server --workspace "$WORKSPACE" \
 
 安装 FUSE-T 1.2.9 和 pkg-config，使用 `make -j "$(sysctl -n hw.ncpu)" build FEATURES=macos-fuse-t` 编译。AgentDrive 使用本机 NFS 后端并关闭属性缓存，无需内核扩展。FUSE-T 的[许可条款](https://github.com/macos-fuse-t/fuse-t)要求商业使用或随商业软件分发时取得商业许可。
 
-macOS 可能生成 AppleDouble `._` 元数据文件，AgentDrive 会将这些文件作为普通文件保存。已有挂载时，`branch_switch` 固定返回 `waiting_for_quiesce`，需要调用 `mount_release` 完成切换；继续之前需要释放文件句柄和目录占用。运行中的 Agent 或 MCP stdio 代理可能占用目录：退出 Agent，通过目录之外的进程调用 `mount_release`，然后在原路径重新启动 Agent。客户端允许时，将 MCP 代理的工作目录设置在挂载目录之外。
+macOS 可能生成 AppleDouble `._` 元数据文件，AgentDrive 会将这些文件作为普通文件保存。`branch_switch` 在一次调用中尝试正常卸载和重新挂载。运行中的 Agent、终端或 MCP stdio 代理可能占用目录。遇到 `MOUNT_BUSY`，退出相关进程或重启 Agent，通过目录之外的进程使用相同 request ID 重试 `branch_switch`。客户端允许时，将 MCP 代理的工作目录设置在挂载目录之外。
 
 文件写入和 `fsync` 遵循 binding 的 durability 设置。默认 `local` 设置下，使用 `mount_save` 的 `durability: "remote"` 并检查 `remote_confirmed`，确认内容已保存到 RustFS。仅凭本地文件写入成功无法确认远端保存。

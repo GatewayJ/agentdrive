@@ -88,7 +88,7 @@ The daemon publishes remotely in the background. `remote_confirmed` indicates su
 
 ## Branches and dashboard
 
-`agentdrive branch create` and MCP `branch_create` explicitly create branches while preserving the selection. `agentdrive branch switch` and MCP `branch_switch` save the previous branch and update this location's workspace selection. The CLI attempts release of occupied mounts. Close open files and processes using the directory before retrying the original request ID. MCP callers continue pending changes with `mount_release`.
+`agentdrive branch create` and MCP `branch_create` explicitly create branches while preserving the selection. `agentdrive branch switch` and MCP `branch_switch` save the previous branch and update this location's workspace selection. CLI and MCP complete the switch in one call. On `MOUNT_BUSY`, close files and processes using the directory or restart the Agent, then retry `branch_switch` with the original request ID. Other errors preserve their specific cause.
 
 Existing databases retain their branches and selections. With no selection, one writable local branch is reused automatically; multiple writable local branches require an explicit `branch_switch`.
 
@@ -102,6 +102,6 @@ Protocol references: [ACP sessions](https://agentclientprotocol.com/protocol/v1/
 
 Install FUSE-T 1.2.9 and pkg-config, then build with `make -j "$(sysctl -n hw.ncpu)" build FEATURES=macos-fuse-t`. AgentDrive uses the local NFS backend and disables its attribute cache. FUSE-T runs without a kernel extension. Its [license](https://github.com/macos-fuse-t/fuse-t) requires a commercial license for commercial use or distribution with commercial software.
 
-macOS can create AppleDouble `._` metadata files on this filesystem; AgentDrive stores them as ordinary workspace files. With an existing mount, `branch_switch` always returns `waiting_for_quiesce`; call `mount_release` to complete the change. Release open handles and processes using the mount before continuing. A running Agent or its MCP stdio proxy can keep the directory occupied: stop that Agent, run `mount_release` from a process outside the mount, and restart the Agent at the same path. Configure the MCP proxy's working directory outside the mount when the client supports it.
+macOS can create AppleDouble `._` metadata files on this filesystem; AgentDrive stores them as ordinary workspace files. `branch_switch` attempts normal unmount and remount in one call. A running Agent, terminal, or MCP stdio proxy can keep the directory occupied. On `MOUNT_BUSY`, stop those processes or restart the Agent and retry the same `branch_switch` request from outside the mount. Configure the MCP proxy's working directory outside the mount when the client supports it.
 
 File writes and `fsync` follow the binding's durability setting. With the default `local` setting, use `mount_save` with `durability: "remote"` and check `remote_confirmed` to confirm publication to RustFS. A successful local file write alone does not confirm remote publication.
