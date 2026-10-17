@@ -12,6 +12,7 @@ agentdrive-ports.workspace = true
 arc-swap.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
+futures.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 tokio.workspace = true

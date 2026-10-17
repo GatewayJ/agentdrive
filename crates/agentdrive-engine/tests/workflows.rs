@@ -2612,3 +2612,224 @@ async fn branch_switch_retries_unmount_and_remount_failures() {
         assert_eq!(retried.mount_ready, Some(true));
     }
 }
+
+#[tokio::test]
+async fn directory_edits_preserve_usage_siblings_and_display_names() {
+    let harness = Harness::new(None).await;
+    let workspace = harness.workspace().await;
+    let (binding, fs) = harness.branch_mount(workspace.id, "queries", None).await;
+    let files = &harness.engine.services.files;
+    let directory = files
+        .create(&fs, InodeId::ROOT, "Src", FileKind::Directory, 0o700)
+        .await
+        .unwrap();
+    let nested = files
+        .create(&fs, directory.id, "Nested", FileKind::Directory, 0o700)
+        .await
+        .unwrap();
+    let file = files
+        .create(&fs, nested.id, "CAFÉ", FileKind::File, 0o600)
+        .await
+        .unwrap();
+    let handle = files
+        .open(
+            &fs,
+            file.id,
+            OpenMode {
+                read: true,
+                write: true,
+                append: false,
+            },
+        )
+        .await
+        .unwrap();
+    files
+        .write(&fs, handle.id, 0, Bytes::from_static(b"content"))
+        .await
+        .unwrap();
+    let sibling = harness.write_new(&fs, "Src-other", b"unchanged").await;
+    let before = harness
+        .local
+        .node(binding.branch, sibling.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let usage = harness.local.usage(binding.branch).await.unwrap();
+    assert_eq!(usage.bytes, 16);
+    assert_eq!(usage.inodes, 5);
+    let mut limited = workspace.clone();
+    limited.max_working_bytes = usage.bytes;
+    harness
+        .local
+        .commit(LocalCommit {
+            workspaces: vec![limited],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        files
+            .write(&fs, handle.id, 7, Bytes::from_static(b"x"))
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::CapacityExceeded
+    );
+    assert_eq!(harness.local.usage(binding.branch).await.unwrap(), usage);
+    files
+        .rename(&fs, InodeId::ROOT, "Src", InodeId::ROOT, "src", false)
+        .await
+        .unwrap();
+    assert_eq!(files.readdir(&fs, directory.id).await.unwrap().len(), 1);
+    files
+        .rename(&fs, InodeId::ROOT, "src", InodeId::ROOT, "Code", false)
+        .await
+        .unwrap();
+    assert_eq!(harness.local.usage(binding.branch).await.unwrap(), usage);
+    assert_eq!(
+        harness
+            .local
+            .node(binding.branch, sibling.id)
+            .await
+            .unwrap()
+            .unwrap(),
+        before
+    );
+    assert_eq!(files.readdir(&fs, nested.id).await.unwrap()[0].name, "CAFÉ");
+    assert!(
+        harness
+            .local
+            .node_at(binding.branch, &path("/Src/Nested/CAFÉ"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        harness
+            .local
+            .node_at(binding.branch, &path("/code/nested/café"))
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        files.read(&fs, handle.id, 0, 20).await.unwrap(),
+        b"content"[..]
+    );
+    files
+        .setattr(
+            &fs,
+            file.id,
+            AttributeUpdate {
+                size: Some(2),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(harness.local.usage(binding.branch).await.unwrap().bytes, 11);
+    files.release(&fs, handle.id).await.unwrap();
+    files.unlink(&fs, nested.id, "café", false).await.unwrap();
+    let usage = harness.local.usage(binding.branch).await.unwrap();
+    assert_eq!(usage.bytes, 9);
+    assert_eq!(usage.inodes, 4);
+    assert!(files.readdir(&fs, nested.id).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+#[ignore = "manual metadata scaling benchmark"]
+async fn metadata_scaling_benchmark() {
+    for count in [100, 1000, 10000] {
+        let harness = Harness::new(None).await;
+        let workspace = harness.workspace().await;
+        let (binding, fs) = harness.branch_mount(workspace.id, "bench", None).await;
+        let files = &harness.engine.services.files;
+        let directory = files
+            .create(&fs, InodeId::ROOT, "target", FileKind::Directory, 0o700)
+            .await
+            .unwrap();
+        let other = files
+            .create(&fs, InodeId::ROOT, "other", FileKind::Directory, 0o700)
+            .await
+            .unwrap();
+        let file = files
+            .create(&fs, directory.id, "probe", FileKind::File, 0o600)
+            .await
+            .unwrap();
+        let nodes = (0..count)
+            .map(|i| NodeChange::Put {
+                branch: binding.branch,
+                node: Node {
+                    path: path(&format!("/other/file-{i:06}")),
+                    inode: Inode {
+                        id: InodeId(10000 + i),
+                        kind: FileKind::File,
+                        mode: 0o600,
+                        uid: 1000,
+                        gid: 1000,
+                        size: 0,
+                        created_ns: 1,
+                        modified_ns: 1,
+                        content: None,
+                    },
+                    dirty: true,
+                },
+            })
+            .collect();
+        harness
+            .local
+            .commit(LocalCommit {
+                node_changes: nodes,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            files.readdir(&fs, other.id).await.unwrap().len(),
+            count as usize
+        );
+        let handle = files
+            .open(
+                &fs,
+                file.id,
+                OpenMode {
+                    read: true,
+                    write: true,
+                    append: false,
+                },
+            )
+            .await
+            .unwrap();
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            files
+                .write(&fs, handle.id, 0, Bytes::from_static(b"test"))
+                .await
+                .unwrap();
+        }
+        let write = start.elapsed();
+        let start = std::time::Instant::now();
+        for _ in 0..50 {
+            assert_eq!(files.readdir(&fs, directory.id).await.unwrap().len(), 1);
+        }
+        let readdir = start.elapsed();
+        let start = std::time::Instant::now();
+        for i in 0..50 {
+            let (from, to) = if i % 2 == 0 {
+                ("probe", "renamed")
+            } else {
+                ("renamed", "probe")
+            };
+            files
+                .rename(&fs, directory.id, from, directory.id, to, false)
+                .await
+                .unwrap();
+        }
+        println!(
+            "nodes={count} write100_ms={} readdir50_ms={} rename50_ms={}",
+            write.as_millis(),
+            readdir.as_millis(),
+            start.elapsed().as_millis()
+        );
+    }
+}

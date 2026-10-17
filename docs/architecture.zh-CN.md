@@ -42,6 +42,42 @@
 
 `agentdrive-ports` 定义 engine 使用的接口，存储和平台适配器负责实现接口。配置模块依赖 model 中的数据类型，数据库、挂载、S3 和 HTTP 服务由 daemon 创建。daemon 将同一个 `LiveConfig` 传给 engine 和 HTTP 入口；`ConfigStore` 统一发布配置，使用配置的模块为每次操作取得完整快照。
 
+## 文件操作接口与事务边界
+
+```mermaid
+flowchart TD
+    Platform[platform: FUSE / WinFsp] --> Files[engine/files: 文件语义与权限]
+    Files --> State[LocalStateStore: 查询与原子提交]
+    Files --> Working[WorkingTreeStore: 工作文件读写]
+    Files --> Content[ContentResolver: 内容获取与验证]
+    Revision[engine/revisions: 保存与持久性] --> State
+    Revision --> Replica[engine/replica: 发布顺序与并发限制]
+    Replica --> Remote[RemoteObjectStore / RemoteRefStore]
+    State --> Local[local: SQLite]
+    Working --> Disk[local: 宿主机文件系统]
+    Remote --> S3[s3: 对象传输与 CAS]
+```
+
+| 接口或模块 | 负责内容 | 调用方应遵守的范围 |
+| --- | --- | --- |
+| `FileSystem` / `engine/files` | 权限、句柄、路径行为、容量检查、节点变化 | platform 仅转换操作系统请求和错误；不直接访问 SQLite 或决定 branch |
+| `LocalStateStore` | 节点查询、工作树统计、版本检查与原子提交 | engine 提交 `LocalCommit`；不依赖 SQL、表名或触发器 |
+| `WorkingTreeStore` | 本地可修改文件的创建、读取、写入、截断和删除 | 不决定配额、权限、revision 或远端持久性 |
+| `ContentResolver` | 不可变对象读取、下载合并与校验 | 文件操作通过此接口读取内容，不直接访问 S3 |
+| `SnapshotCapture` / `engine/revisions` | 捕获一致内容、保存 revision、建立同步任务 | `local_saved` 与 `remote_confirmed` 分别表达本地保存和远端确认 |
+| `engine/replica` | 发布顺序、重试、对象上传并发限制 | 全部依赖对象成功后才能发布 BranchRef；S3 适配器不决定发布时机 |
+| `RemoteObjectStore` / `RemoteRefStore` | 对象传输、完整性验证和条件更新 | 协议实现不修改 branch、挂载或本地工作树 |
+
+`LocalStateStore::usage` 返回当前 branch 的节点数量和逻辑字节数。local 在修改节点的同一个 SQLite 事务内增量更新统计；事务回滚同时恢复统计。engine 负责将统计与 workspace 限额比较。这里的逻辑容量不包含历史对象、下载缓存和临时文件，也不代表宿主机剩余磁盘容量。
+
+`children` 只查询直接子项，使用 `(branch, parent, path)` 索引；`subtree` 按规范化路径范围读取需要移动的节点。完整的 `nodes` 查询用于快照、恢复等确实需要整棵工作树的操作。create/unlink 提交目标与父目录变化；rename 提交移动的节点、目标替换及父目录变化。目录移动的成本随被移动节点数量增长。
+
+SQLite 中的 `parent` 查询列和 `node_usage` 统计由 local 管理。旧数据库第一次打开时，在一个事务内补充查询列、回填父路径、建立统计与触发器。显示路径仍保存在 Node 中，查询键使用 Unicode 规范化与大小写折叠。原始节点数据与远端对象格式保持不变。升级后的数据库应由支持这些查询投影的版本管理；回退程序前恢复升级前的状态目录备份。
+
+同一 branch 的文件操作与快照仍通过 branch 互斥锁协调。不要在适配器中额外实现文件版本规则，也不要绕过该锁修改工作文件。缓存未命中的内容读取和首次修改仍可能在持锁期间下载旧内容；本次优化没有改变这项行为。SQLite 仍使用单连接互斥访问。
+
+对象上传在一个 `ReplicaService` 内共享四个传输许可，每个对象使用流式接口。失败会停止安排后续对象，并等待已经安排的传输完成清理、释放许可，并保留可重试的同步任务；调用方不会发布依赖不完整的 BranchRef。已有远端对象继续接受完整性验证，不使用本地确认标记跳过验证。
+
 ## 配置生命周期
 
 `ConfigStore::open` 读取并校验文件。`StartupConfig` 在服务创建时提供存储目录、挂载、连接与凭据配置。缓存策略、S3 连接和 HTTP Origin 允许列表由同一个 `ArcSwap<Snapshot>` 保存。缓存清理在操作期间保持同一份快照；HTTP 身份验证为每次请求取得当前快照。

@@ -191,7 +191,6 @@ impl FileService {
     async fn check_capacity(
         &self,
         branch: &Branch,
-        nodes: &[Node],
         old_size: u64,
         new_size: u64,
         additional_nodes: u64,
@@ -202,19 +201,17 @@ impl FileService {
             .workspace(branch.workspace)
             .await?
             .ok_or_else(|| Error::integrity("workspace is missing"))?;
+        let usage = self.runtime.state.usage(branch.id).await?;
         if new_size > workspace.max_file_bytes
-            || nodes.len() as u64 + additional_nodes > workspace.max_inodes
+            || usage.inodes.saturating_add(additional_nodes) > workspace.max_inodes
         {
             return Err(Error::new(
                 ErrorCode::CapacityExceeded,
                 "workspace file or inode limit exceeded",
             ));
         }
-        let total = nodes
-            .iter()
-            .try_fold(0u64, |total, node| total.checked_add(node.inode.size))
-            .ok_or_else(|| Error::integrity("working tree size overflow"))?;
-        let next = total
+        let next = usage
+            .bytes
             .checked_sub(old_size)
             .and_then(|total| total.checked_add(new_size))
             .ok_or_else(|| Error::integrity("invalid working tree size"))?;
@@ -337,11 +334,20 @@ impl FileSystem for FileService {
         let node = self.node(&mount, inode).await?;
         Self::directory(&node)?;
         Self::permission(context, &node.inode, 5)?;
-        Ok(self
-            .nodes(&mount)
-            .await?
+        let children = if mount.revision.is_some() {
+            self.nodes(&mount)
+                .await?
+                .into_iter()
+                .filter(|child| child.path.parent() == Some(node.path.clone()))
+                .collect()
+        } else {
+            self.runtime
+                .state
+                .children(mount.branch, &node.path)
+                .await?
+        };
+        Ok(children
             .into_iter()
-            .filter(|child| child.path.parent() == Some(node.path.clone()))
             .map(|child| DirectoryItem {
                 name: child.path.name().to_owned(),
                 inode: Self::local_attributes(&mount, child.inode),
@@ -360,21 +366,23 @@ impl FileSystem for FileService {
         let (mount, _) = self.binding(context, true).await?;
         let _gate = self.runtime.lock_branch(mount.branch).await;
         let (mount, branch) = self.binding(context, true).await?;
-        let parent = self.node(&mount, parent).await?;
+        let mut parent = self.node(&mount, parent).await?;
         Self::directory(&parent)?;
         Self::permission(context, &parent.inode, 3)?;
         let path = parent.path.join(name)?;
-        let mut nodes = self.runtime.state.nodes(branch.id).await?;
-        if nodes
-            .iter()
-            .any(|node| node.path.lookup_key() == path.lookup_key())
+        if self
+            .runtime
+            .state
+            .node_at(branch.id, &path)
+            .await?
+            .is_some()
         {
             return Err(Error::new(
                 ErrorCode::AlreadyExists,
                 "directory entry already exists",
             ));
         }
-        self.check_capacity(&branch, &nodes, 0, 0, 1).await?;
+        self.check_capacity(&branch, 0, 0, 1).await?;
         let now = self.runtime.clock.now_ns();
         let inode = Inode {
             id: InodeId(branch.next_inode),
@@ -397,19 +405,20 @@ impl FileSystem for FileService {
                 .create(Self::working_file(&branch, &node), None)
                 .await?;
         }
-        for node in &mut nodes {
-            if node.inode.id == parent.inode.id {
-                node.inode.modified_ns = now;
-            }
-        }
-        nodes.push(node);
+        parent.inode.modified_ns = now;
         let next = increment(branch.next_inode)?;
         self.commit_nodes(
             branch.clone(),
-            vec![NodeChange::Replace {
-                branch: branch.id,
-                nodes,
-            }],
+            vec![
+                NodeChange::Put {
+                    branch: branch.id,
+                    node: parent,
+                },
+                NodeChange::Put {
+                    branch: branch.id,
+                    node,
+                },
+            ],
             Some(next),
         )
         .await?;
@@ -441,14 +450,8 @@ impl FileSystem for FileService {
         }
         if let Some(size) = attributes.size {
             Self::permission(context, &node.inode, 2)?;
-            self.check_capacity(
-                &branch,
-                &self.runtime.state.nodes(branch.id).await?,
-                node.inode.size,
-                size,
-                0,
-            )
-            .await?;
+            self.check_capacity(&branch, node.inode.size, size, 0)
+                .await?;
         }
         if node.inode.kind == FileKind::File {
             self.prepare_write(&branch, &node).await?;
@@ -599,14 +602,8 @@ impl FileSystem for FileService {
             .checked_add(data.len() as u64)
             .ok_or_else(|| Error::invalid("write range overflow"))?
             .max(node.inode.size);
-        self.check_capacity(
-            &branch,
-            &self.runtime.state.nodes(branch.id).await?,
-            node.inode.size,
-            size,
-            0,
-        )
-        .await?;
+        self.check_capacity(&branch, node.inode.size, size, 0)
+            .await?;
         self.prepare_write(&branch, &node).await?;
         let written = match self
             .working
@@ -655,19 +652,19 @@ impl FileSystem for FileService {
         let (mount, _) = self.binding(context, true).await?;
         let _gate = self.runtime.lock_branch(mount.branch).await;
         let (mount, branch) = self.binding(context, true).await?;
-        let parent = self.node(&mount, parent).await?;
-        let new_parent = self.node(&mount, new_parent).await?;
+        let mut parent = self.node(&mount, parent).await?;
+        let mut new_parent = self.node(&mount, new_parent).await?;
         for directory in [&parent, &new_parent] {
             Self::directory(directory)?;
             Self::permission(context, &directory.inode, 3)?;
         }
         let source_path = parent.path.join(name)?;
         let destination = new_parent.path.join(new_name)?;
-        let mut nodes = self.runtime.state.nodes(branch.id).await?;
-        let source = nodes
-            .iter()
-            .find(|node| node.path.lookup_key() == source_path.lookup_key())
-            .cloned()
+        let source = self
+            .runtime
+            .state
+            .node_at(branch.id, &source_path)
+            .await?
             .ok_or_else(|| Error::new(ErrorCode::NotFound, "rename source does not exist"))?;
         if source.path == destination {
             return Ok(());
@@ -675,13 +672,12 @@ impl FileSystem for FileService {
         if source.inode.kind == FileKind::Directory && source.path.contains(&new_parent.path) {
             return Err(Error::invalid("cannot move a directory into itself"));
         }
-        let target = nodes
-            .iter()
-            .find(|node| {
-                node.path.lookup_key() == destination.lookup_key()
-                    && node.inode.id != source.inode.id
-            })
-            .cloned();
+        let target = self
+            .runtime
+            .state
+            .node_at(branch.id, &destination)
+            .await?
+            .filter(|node| node.inode.id != source.inode.id);
         if let Some(target) = &target {
             if !replace {
                 return Err(Error::new(
@@ -706,40 +702,58 @@ impl FileSystem for FileService {
                 ));
             }
             if target.inode.kind == FileKind::Directory
-                && nodes
-                    .iter()
-                    .any(|node| node.path.parent() == Some(target.path.clone()))
+                && !self
+                    .runtime
+                    .state
+                    .children(branch.id, &target.path)
+                    .await?
+                    .is_empty()
             {
                 return Err(Error::new(
                     ErrorCode::DirectoryNotEmpty,
                     "rename destination directory is not empty",
                 ));
             }
-            nodes.retain(|node| node.inode.id != target.inode.id);
+        }
+        let nodes = self.runtime.state.subtree(branch.id, &source.path).await?;
+        let mut changes = Vec::with_capacity(nodes.len() * 2 + 3);
+        if let Some(target) = &target {
+            changes.push(NodeChange::Remove {
+                branch: branch.id,
+                path: target.path.clone(),
+            });
+        }
+        // 先移除旧键，随后写入新键，保持 inode 唯一约束。
+        for node in &nodes {
+            changes.push(NodeChange::Remove {
+                branch: branch.id,
+                path: node.path.clone(),
+            });
+        }
+        for mut node in nodes {
+            let suffix = node
+                .path
+                .as_str()
+                .strip_prefix(source.path.as_str())
+                .ok_or_else(|| Error::integrity("directory path casing is inconsistent"))?;
+            node.path = format!("{}{suffix}", destination.as_str()).try_into()?;
+            changes.push(NodeChange::Put {
+                branch: branch.id,
+                node,
+            });
         }
         let now = self.runtime.clock.now_ns();
-        for node in &mut nodes {
-            if source.path.contains(&node.path) {
-                let suffix = node
-                    .path
-                    .as_str()
-                    .strip_prefix(source.path.as_str())
-                    .ok_or_else(|| Error::integrity("directory path casing is inconsistent"))?;
-                node.path = format!("{}{suffix}", destination.as_str()).try_into()?;
-            }
-            if node.inode.id == parent.inode.id || node.inode.id == new_parent.inode.id {
-                node.inode.modified_ns = now;
-            }
-        }
-        self.commit_nodes(
-            branch.clone(),
-            vec![NodeChange::Replace {
-                branch: branch.id,
-                nodes,
-            }],
-            None,
-        )
-        .await?;
+        parent.inode.modified_ns = now;
+        new_parent.inode.modified_ns = now;
+        changes.push(NodeChange::Put {
+            branch: branch.id,
+            node: parent,
+        });
+        changes.push(NodeChange::Put {
+            branch: branch.id,
+            node: new_parent,
+        });
+        self.commit_nodes(branch.clone(), changes, None).await?;
         if let Some(target) = target
             && let Err(error) = self
                 .working
@@ -766,10 +780,11 @@ impl FileSystem for FileService {
         Self::directory(&parent)?;
         Self::permission(context, &parent.inode, 3)?;
         let path = parent.path.join(name)?;
-        let nodes = self.runtime.state.nodes(branch.id).await?;
-        let target = nodes
-            .iter()
-            .find(|node| node.path.lookup_key() == path.lookup_key())
+        let target = self
+            .runtime
+            .state
+            .node_at(branch.id, &path)
+            .await?
             .ok_or_else(|| Error::new(ErrorCode::NotFound, "directory entry does not exist"))?;
         if directory != (target.inode.kind == FileKind::Directory) {
             return Err(Error::invalid("unlink file kind mismatch"));
@@ -782,9 +797,12 @@ impl FileSystem for FileService {
             return Err(Error::new(ErrorCode::Busy, "file has other open handles"));
         }
         if directory
-            && nodes
-                .iter()
-                .any(|node| node.path.parent() == Some(target.path.clone()))
+            && !self
+                .runtime
+                .state
+                .children(branch.id, &target.path)
+                .await?
+                .is_empty()
         {
             return Err(Error::new(
                 ErrorCode::DirectoryNotEmpty,
@@ -804,15 +822,15 @@ impl FileSystem for FileService {
         let (mount, _) = self.binding(context, true).await?;
         let _gate = self.runtime.lock_branch(mount.branch).await;
         let (mount, branch) = self.binding(context, true).await?;
-        let parent = self.node(&mount, parent).await?;
+        let mut parent = self.node(&mount, parent).await?;
         Self::directory(&parent)?;
         Self::permission(context, &parent.inode, 3)?;
         let path = parent.path.join(name)?;
-        let mut nodes = self.runtime.state.nodes(branch.id).await?;
-        let target = nodes
-            .iter()
-            .find(|node| node.path.lookup_key() == path.lookup_key())
-            .cloned()
+        let target = self
+            .runtime
+            .state
+            .node_at(branch.id, &path)
+            .await?
             .ok_or_else(|| Error::new(ErrorCode::NotFound, "directory entry does not exist"))?;
         if directory != (target.inode.kind == FileKind::Directory) {
             return Err(Error::new(
@@ -828,27 +846,31 @@ impl FileSystem for FileService {
             return Err(Error::new(ErrorCode::Busy, "file has open handles"));
         }
         if directory
-            && nodes
-                .iter()
-                .any(|node| node.path.parent() == Some(target.path.clone()))
+            && !self
+                .runtime
+                .state
+                .children(branch.id, &target.path)
+                .await?
+                .is_empty()
         {
             return Err(Error::new(
                 ErrorCode::DirectoryNotEmpty,
                 "directory is not empty",
             ));
         }
-        nodes.retain(|node| node.inode.id != target.inode.id);
-        for node in &mut nodes {
-            if node.inode.id == parent.inode.id {
-                node.inode.modified_ns = self.runtime.clock.now_ns();
-            }
-        }
+        parent.inode.modified_ns = self.runtime.clock.now_ns();
         self.commit_nodes(
             branch.clone(),
-            vec![NodeChange::Replace {
-                branch: branch.id,
-                nodes,
-            }],
+            vec![
+                NodeChange::Remove {
+                    branch: branch.id,
+                    path: target.path.clone(),
+                },
+                NodeChange::Put {
+                    branch: branch.id,
+                    node: parent,
+                },
+            ],
             None,
         )
         .await?;

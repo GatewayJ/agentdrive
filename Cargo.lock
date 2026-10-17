@@ -44,6 +44,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "bytes",
+ "futures",
  "parking_lot",
  "serde",
  "tempfile",

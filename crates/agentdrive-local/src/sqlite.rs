@@ -53,8 +53,52 @@ pub(crate) fn initialize(connection: &mut Connection, version: u32) -> Result<Lo
             id
         }
     };
+    initialize_node_queries(&transaction)?;
     transaction.commit().map_err(sql_error)?;
     Ok(location)
+}
+
+// 查询投影仅影响本地 SQLite，远端对象格式保持不变。
+fn initialize_node_queries(transaction: &Transaction<'_>) -> Result<()> {
+    let has_parent: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('nodes') WHERE name='parent')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    if !has_parent {
+        transaction
+            .execute_batch("ALTER TABLE nodes ADD COLUMN parent TEXT;")
+            .map_err(sql_error)?;
+        let entries: Vec<(String, Vec<u8>)> = {
+            let mut statement = transaction
+                .prepare("SELECT branch,data FROM nodes")
+                .map_err(sql_error)?;
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(sql_error)?
+                .collect::<std::result::Result<_, _>>()
+                .map_err(sql_error)?
+        };
+        for (branch, data) in entries {
+            let node: Node = decode(&data)?;
+            transaction
+                .execute(
+                    "UPDATE nodes SET parent=?3 WHERE branch=?1 AND path=?2",
+                    params![
+                        branch,
+                        node.path.lookup_key(),
+                        node.path.parent().map(|p| p.lookup_key())
+                    ],
+                )
+                .map_err(sql_error)?;
+        }
+    }
+    transaction
+        .execute_batch(include_str!("node_queries.sql"))
+        .map_err(sql_error)?;
+    Ok(())
 }
 
 pub(crate) fn validate_format(connection: &Connection, version: u32) -> Result<()> {
@@ -213,8 +257,8 @@ fn upsert<T: Serialize>(
 }
 
 fn put_node(transaction: &Transaction<'_>, branch: BranchId, node: &Node) -> Result<()> {
-    transaction.execute("INSERT INTO nodes(branch,path,inode,data) VALUES(?1,?2,?3,?4) ON CONFLICT(branch,path) DO UPDATE SET inode=excluded.inode,data=excluded.data",
-        params![branch.to_string(), node.path.lookup_key(), db_integer(node.inode.id.0)?, encode(node)?]).map_err(sql_error)?;
+    transaction.execute("INSERT INTO nodes(branch,path,inode,data,parent) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(branch,path) DO UPDATE SET inode=excluded.inode,data=excluded.data,parent=excluded.parent",
+        params![branch.to_string(), node.path.lookup_key(), db_integer(node.inode.id.0)?, encode(node)?, node.path.parent().map(|p| p.lookup_key())]).map_err(sql_error)?;
     Ok(())
 }
 
@@ -269,6 +313,43 @@ impl LocalStateStore for LocalBackend {
         )
         .await
     }
+    async fn children(&self, branch: BranchId, parent: &WorkspacePath) -> Result<Vec<Node>> {
+        self.many(
+            "SELECT data FROM nodes WHERE branch=?1 AND parent=?2 ORDER BY path",
+            vec![branch.to_string(), parent.lookup_key()],
+        )
+        .await
+    }
+
+    async fn subtree(&self, branch: BranchId, path: &WorkspacePath) -> Result<Vec<Node>> {
+        if path.is_root() {
+            return self.nodes(branch).await;
+        }
+        let key = path.lookup_key();
+        // '/' 后继字符为 '0'，范围查询不会把相似前缀的兄弟目录包含进来。
+        self.many("SELECT data FROM nodes WHERE branch=?1 AND path=?2 UNION ALL SELECT data FROM nodes WHERE branch=?1 AND path>=?3 AND path<?4",
+            vec![branch.to_string(), key.clone(), format!("{key}/"), format!("{key}0")]).await
+    }
+
+    async fn usage(&self, branch: BranchId) -> Result<WorkingTreeUsage> {
+        self.db(move |connection| {
+            let value: Option<(i64, i64)> = connection
+                .query_row(
+                    "SELECT inodes,bytes FROM node_usage WHERE branch=?1",
+                    [branch.to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map_err(sql_error)?;
+            let (inodes, bytes) = value.unwrap_or_default();
+            Ok(WorkingTreeUsage {
+                inodes: unsigned_integer(inodes)?,
+                bytes: unsigned_integer(bytes)?,
+            })
+        })
+        .await
+    }
+
     async fn node(&self, branch: BranchId, inode: InodeId) -> Result<Option<Node>> {
         self.one(
             "SELECT data FROM nodes WHERE branch=?1 AND inode=?2",
@@ -487,4 +568,96 @@ fn put_operation(transaction: &Transaction<'_>, record: &OperationRecord) -> Res
     transaction.execute("INSERT INTO operations(id,principal,request_id,workspace,data) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(id) DO UPDATE SET workspace=excluded.workspace,data=excluded.data",
         params![record.id.to_string(), record.principal.as_str(), record.request_id, record.workspace.map(|id| id.to_string()), encode(record)?]).map_err(sql_error)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::*;
+
+    fn node(name: &str, id: u64, size: u64) -> Node {
+        Node {
+            path: name.to_owned().try_into().unwrap(),
+            inode: Inode {
+                id: InodeId(id),
+                kind: FileKind::File,
+                mode: 0o600,
+                uid: 1,
+                gid: 1,
+                size,
+                created_ns: 1,
+                modified_ns: 1,
+                content: None,
+            },
+            dirty: true,
+        }
+    }
+
+    #[test]
+    fn legacy_nodes_migrate_and_usage_tracks_atomic_updates() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(include_str!("schema.sql"))
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO metadata(key,value) VALUES('format_version',?1)",
+                [FORMAT_VERSION],
+            )
+            .unwrap();
+        let branch = BranchId::new();
+        connection
+            .execute(
+                "INSERT INTO branches(id,workspace,data) VALUES(?1,?2,?3)",
+                params![
+                    branch.to_string(),
+                    WorkspaceId::new().to_string(),
+                    b"{}".as_slice()
+                ],
+            )
+            .unwrap();
+        let first = node("/Src/CAFÉ", 2, 5);
+        connection
+            .execute(
+                "INSERT INTO nodes(branch,path,inode,data) VALUES(?1,?2,?3,?4)",
+                params![
+                    branch.to_string(),
+                    first.path.lookup_key(),
+                    2,
+                    encode(&first).unwrap()
+                ],
+            )
+            .unwrap();
+        initialize(&mut connection, FORMAT_VERSION).unwrap();
+        let parent: String = connection
+            .query_row("SELECT parent FROM nodes", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(parent, "/src");
+        let usage = |db: &Connection| -> (i64, i64) {
+            db.query_row("SELECT inodes,bytes FROM node_usage", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap()
+        };
+        assert_eq!(usage(&connection), (1, 5));
+        {
+            let tx = connection.transaction().unwrap();
+            put_node(&tx, branch, &node("/Src/CAFÉ", 2, 9)).unwrap();
+            put_node(&tx, branch, &node("/other", 3, 7)).unwrap();
+            assert_eq!(usage(&tx), (2, 16));
+            // 事务中任何失败都不能留下已更新的容量统计。
+            assert!(put_node(&tx, branch, &node("/duplicate", 3, 99)).is_err());
+            tx.rollback().unwrap();
+        }
+        assert_eq!(usage(&connection), (1, 5));
+        {
+            let tx = connection.transaction().unwrap();
+            tx.execute("DELETE FROM nodes WHERE branch=?1", [branch.to_string()])
+                .unwrap();
+            put_node(&tx, branch, &node("/new", 4, 12)).unwrap();
+            tx.commit().unwrap();
+        }
+        assert_eq!(usage(&connection), (1, 12));
+        initialize(&mut connection, FORMAT_VERSION).unwrap();
+        assert_eq!(usage(&connection), (1, 12));
+    }
 }

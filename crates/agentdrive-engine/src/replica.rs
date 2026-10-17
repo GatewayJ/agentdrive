@@ -2,8 +2,9 @@ use crate::{ContentService, OperationService, Runtime, TreeService};
 use agentdrive_model::*;
 use agentdrive_ports::*;
 use async_trait::async_trait;
+use futures::{StreamExt, stream::FuturesUnordered};
 use std::{collections::BTreeMap, sync::Arc};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 
 #[derive(Debug)]
 pub struct ReplicaService {
@@ -12,6 +13,7 @@ pub struct ReplicaService {
     content: Arc<ContentService>,
     operations: Arc<OperationService>,
     pub(crate) publication: Mutex<()>,
+    uploads: Semaphore,
 }
 
 impl ReplicaService {
@@ -27,6 +29,7 @@ impl ReplicaService {
             content,
             operations,
             publication: Mutex::new(()),
+            uploads: Semaphore::new(4),
         })
     }
 
@@ -41,17 +44,42 @@ impl ReplicaService {
                 "remote storage is not configured",
             )
         })?;
-        for object in self.trees.closure(workspace, roots).await? {
-            remote
-                .upload(
-                    workspace,
-                    self.content.local.open(workspace, &object).await?,
-                )
-                .await?;
-            self.content
-                .local
-                .confirm_remote(workspace, &object)
-                .await?;
+        // 限制跨发布操作的传输数量；只有全部成功，调用方才能发布引用。
+        let upload = |object: ObjectRef| {
+            let remote = remote.clone();
+            async move {
+                let _permit =
+                    self.uploads.acquire().await.map_err(|_| {
+                        Error::new(ErrorCode::Unavailable, "upload scheduler closed")
+                    })?;
+                remote
+                    .upload(
+                        workspace,
+                        self.content.local.open(workspace, &object).await?,
+                    )
+                    .await?;
+                self.content.local.confirm_remote(workspace, &object).await
+            }
+        };
+        let mut objects = self.trees.closure(workspace, roots).await?.into_iter();
+        let mut pending = FuturesUnordered::new();
+        for object in objects.by_ref().take(4) {
+            pending.push(upload(object));
+        }
+        let mut failure = None;
+        while let Some(result) = pending.next().await {
+            if let Err(error) = result {
+                failure.get_or_insert(error);
+            }
+            if failure.is_none()
+                && let Some(object) = objects.next()
+            {
+                pending.push(upload(object));
+            }
+        }
+        // 失败后等待已开始的传输完成清理，保留 S3 multipart 的 abort 路径。
+        if let Some(error) = failure {
+            return Err(error);
         }
         Ok(())
     }
@@ -695,5 +723,104 @@ impl ReplicaApi for ReplicaService {
             Ok(record) => Ok(record),
             Err(error) => self.operations.fail(&operation, error).await,
         }
+    }
+}
+
+#[cfg(test)]
+mod upload_tests {
+    use super::*;
+    use agentdrive_local::LocalBackend;
+    use agentdrive_test_support::{ManualClock, MemoryRemote};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct ObservedRemote {
+        remote: MemoryRemote,
+        active: AtomicUsize,
+        peak: AtomicUsize,
+        completed: AtomicUsize,
+        fail: AtomicBool,
+    }
+    struct Active<'a>(&'a AtomicUsize);
+    impl Drop for Active<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    #[async_trait]
+    impl RemoteObjectStore for ObservedRemote {
+        async fn upload(&self, workspace: WorkspaceId, source: ObjectStream) -> Result<()> {
+            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            let _active = Active(&self.active);
+            self.peak.fetch_max(active, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            self.completed.fetch_add(1, Ordering::SeqCst);
+            if self.fail.load(Ordering::SeqCst) {
+                return Err(Error::new(
+                    ErrorCode::Unavailable,
+                    "injected upload failure",
+                ));
+            }
+            self.remote.upload(workspace, source).await
+        }
+        async fn download(
+            &self,
+            workspace: WorkspaceId,
+            object: &ObjectRef,
+        ) -> Result<ObjectStream> {
+            self.remote.download(workspace, object).await
+        }
+        async fn contains(&self, workspace: WorkspaceId, object: &ObjectRef) -> Result<bool> {
+            self.remote.contains(workspace, object).await
+        }
+    }
+
+    #[tokio::test]
+    async fn uploads_share_a_limit_and_errors_release_all_permits() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = Arc::new(LocalBackend::open(dir.path()).unwrap());
+        let remote = Arc::new(ObservedRemote::default());
+        let runtime = Runtime::new(local.clone(), Arc::new(ManualClock::default()))
+            .await
+            .unwrap();
+        let content = ContentService::new(
+            local.clone(),
+            Some(remote.clone()),
+            Some(Arc::new(MemoryRemote::default())),
+        );
+        let trees = TreeService::new(runtime.clone(), content.clone());
+        let operations = OperationService::new(runtime.clone());
+        let publisher = ReplicaService::new(runtime, trees, content, operations);
+        let workspace = WorkspaceId::new();
+        let mut roots = Vec::new();
+        for i in 0..12 {
+            roots.push(
+                local
+                    .put(workspace, ObjectKind::File, vec![i].into())
+                    .await
+                    .unwrap(),
+            );
+        }
+        let (first, second) = tokio::join!(
+            publisher.upload_closure(workspace, roots.clone()),
+            publisher.upload_closure(workspace, roots.clone())
+        );
+        first.unwrap();
+        second.unwrap();
+        assert!(remote.peak.load(Ordering::SeqCst) > 1);
+        assert!(remote.peak.load(Ordering::SeqCst) <= 4);
+        assert_eq!(remote.active.load(Ordering::SeqCst), 0);
+        let completed = remote.completed.load(Ordering::SeqCst);
+        remote.fail.store(true, Ordering::SeqCst);
+        assert!(
+            publisher
+                .upload_closure(workspace, roots.clone())
+                .await
+                .is_err()
+        );
+        assert_eq!(remote.active.load(Ordering::SeqCst), 0);
+        assert_eq!(remote.completed.load(Ordering::SeqCst) - completed, 4);
+        remote.fail.store(false, Ordering::SeqCst);
+        publisher.upload_closure(workspace, roots).await.unwrap();
     }
 }

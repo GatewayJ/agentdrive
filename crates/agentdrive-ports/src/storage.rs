@@ -67,6 +67,14 @@ pub struct ReservedOperation {
     pub created: bool,
 }
 
+/// 当前工作树统计；与 node_changes 在同一事务中更新。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WorkingTreeUsage {
+    pub inodes: u64,
+    pub bytes: u64,
+}
+
+/// 本地元数据查询与原子提交；权限、配额和发布决策由 engine 负责。
 #[async_trait]
 pub trait LocalStateStore: Send + Sync {
     async fn selected_branch(&self, workspace: WorkspaceId) -> Result<Option<BranchId>>;
@@ -76,6 +84,11 @@ pub trait LocalStateStore: Send + Sync {
     async fn branch(&self, id: BranchId) -> Result<Option<Branch>>;
     async fn branches(&self, workspace: WorkspaceId) -> Result<Vec<Branch>>;
     async fn nodes(&self, branch: BranchId) -> Result<Vec<Node>>;
+    /// 仅返回直接子项，保留显示名称的大小写。
+    async fn children(&self, branch: BranchId, parent: &WorkspacePath) -> Result<Vec<Node>>;
+    /// 返回根节点及后代，用于目录移动；普通文件只返回自身。
+    async fn subtree(&self, branch: BranchId, path: &WorkspacePath) -> Result<Vec<Node>>;
+    async fn usage(&self, branch: BranchId) -> Result<WorkingTreeUsage>;
     async fn node(&self, branch: BranchId, inode: InodeId) -> Result<Option<Node>>;
     async fn node_at(&self, branch: BranchId, path: &WorkspacePath) -> Result<Option<Node>>;
     async fn revision(&self, id: RevisionId) -> Result<Option<Revision>>;

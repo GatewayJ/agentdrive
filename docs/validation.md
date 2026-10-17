@@ -88,3 +88,23 @@ python3 tests/branch_switch_smoke.py
 ```
 
 The stdio MCP test verifies one `branch_switch` call per attempt, a process holding the mount as its working directory, an explicit `MOUNT_BUSY` recovery message, retry after restarting the MCP client, replay of completed requests, and branch isolation. It never calls `mount_release`. Engine tests inject unmount permission failures and target-mount failures and verify that the same request resumes without changing the original error cause. Native tests cover both open files and occupied working directories. These checks passed locally on macOS 26.5 with FUSE-T 1.2.9.
+
+## Metadata and publication performance
+
+Migration tests cover legacy Node data, incremental usage, rollback and reopen. Workflow tests cover directory moves, Unicode/case preservation, unchanged siblings, quota rejection, truncation and deletion. Upload tests cover the shared four-transfer limit, failure cleanup and permit recovery after failure.
+
+Run the repeatable engine benchmark:
+
+```sh
+make -j8 test CARGO_FLAGS='-p agentdrive-engine --test workflows metadata_scaling_benchmark -- --ignored --nocapture'
+```
+
+On 2026-10-17, identical debug-build tests compared `099fe55` with this change on macOS. Each scenario adds unrelated files in another directory, then times 100 four-byte writes, 50 directory reads and 50 regular-file renames. Setup is excluded.
+
+| Unrelated files | Writes before/after ms | Readdir before/after ms | Rename before/after ms |
+| --- | --- | --- | --- |
+| 100 | 103 / 50 | 38 / 11 | 395 / 30 |
+| 1,000 | 563 / 38 | 286 / 10 | 3,714 / 30 |
+| 10,000 | 5,487 / 33 | 2,797 / 11 | 37,951 / 29 |
+
+This single local engine/SQLite comparison uses isolated temporary directories and excludes FUSE, MCP and S3. It demonstrates removal of work proportional to unrelated nodes for these operations. It is not an end-to-end speedup claim or a CI timing threshold.

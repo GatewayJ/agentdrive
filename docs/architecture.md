@@ -42,6 +42,28 @@
 
 `agentdrive-ports` describes the interfaces used by the engine. Storage and platform adapters implement those interfaces. The configuration crate depends on model types and does not construct database, mount, S3 or HTTP services. The daemon supplies one `LiveConfig` handle to the engine and HTTP gateway. Only `ConfigStore` publishes replacement snapshots; consumers obtain a consistent snapshot for each operation.
 
+## File interfaces and transaction boundaries
+
+| Interface or module | Responsibility | Caller boundary |
+| --- | --- | --- |
+| `FileSystem` / `engine/files` | Permissions, handles, paths, capacity checks and node mutations | Platform adapters translate requests and errors; they do not access SQLite or select branches |
+| `LocalStateStore` | Node queries, working-tree usage and atomic guarded commits | The engine submits `LocalCommit`, without SQL or schema dependencies |
+| `WorkingTreeStore` | Mutable local file I/O | No quota, authorization, revision or remote durability decisions |
+| `ContentResolver` | Immutable content retrieval, download coordination and verification | File operations do not call S3 directly |
+| `SnapshotCapture` / revisions | Consistent capture, revisions and sync jobs | Local persistence and remote confirmation remain separate outcomes |
+| replica | Publication order, retries and bounded uploads | All dependencies must succeed before BranchRef publication |
+| remote storage ports | Verified transfers and conditional reference updates | Adapters do not mutate branches, mounts or working trees |
+
+`usage` reads branch inode and logical-byte counters maintained in the same SQLite transaction as node mutations. Rollback restores both. The engine applies workspace limits; these counters do not measure historical objects, cache, temporary files or host free space.
+
+`children` uses the `(branch, parent, path)` index for direct children. `subtree` uses normalized path ranges for directory moves. Full `nodes` queries remain for snapshots and recovery. Create/unlink update affected nodes and parents; rename changes only the moved subtree, replacement target and parents. Directory moves remain proportional to the moved subtree.
+
+The local adapter owns the `parent` projection and `node_usage` table. Existing databases gain the projection, backfilled parent keys, counters and triggers in one transaction. Node display names retain casing; query keys use Unicode normalization and case folding. Node payloads and remote formats remain unchanged. Use a version supporting these projections after migration; restore a pre-upgrade state-directory backup before downgrading.
+
+Branch mutexes still coordinate file operations and snapshots. Cache misses and first writes can download content while holding that mutex. SQLite still uses one mutex-protected connection. These synchronization semantics are unchanged by the query optimizations.
+
+A `ReplicaService` shares four upload permits across publication operations. Objects use streaming interfaces. Failure stops scheduling further objects, drains scheduled transfers for cleanup, releases permits and leaves retryable jobs; incomplete dependencies cannot be published through a BranchRef. Existing remote objects still receive full integrity verification.
+
 ## Configuration lifecycle
 
 `ConfigStore::open` reads and validates the file. `StartupConfig` supplies storage paths, mounts, transport and credentials during construction. Cache policy, S3 connections and allowed HTTP origins are held together in one `ArcSwap<Snapshot>`. Cache collection retains one snapshot for the operation; HTTP authorization checks the snapshot for each request.
