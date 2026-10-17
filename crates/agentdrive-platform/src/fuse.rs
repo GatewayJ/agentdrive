@@ -18,8 +18,14 @@ use std::{
 };
 use tokio::{process::Command, runtime::Handle};
 
+struct Mounted {
+    binding: MountBinding,
+    session: BackgroundSession,
+    source: String,
+}
+
 pub(super) struct Driver {
-    mounts: Arc<Mutex<BTreeMap<MountId, (MountBinding, BackgroundSession)>>>,
+    mounts: Arc<Mutex<BTreeMap<MountId, Mounted>>>,
 }
 impl Driver {
     pub fn new() -> Result<Self> {
@@ -54,12 +60,24 @@ impl Driver {
                     MountOption::RW
                 },
             ];
-            config.n_threads = Some(
-                std::thread::available_parallelism()
-                    .map(usize::from)
-                    .unwrap_or(2)
-                    .clamp(2, 8),
-            );
+            #[cfg(all(target_os = "macos", feature = "macos-fuse-t"))]
+            config.mount_options.extend([
+                MountOption::CUSTOM("backend=nfs".into()),
+                MountOption::CUSTOM("noattrcache".into()),
+            ]);
+            #[cfg(target_os = "linux")]
+            {
+                config.n_threads = Some(
+                    std::thread::available_parallelism()
+                        .map(usize::from)
+                        .unwrap_or(2)
+                        .clamp(2, 8),
+                );
+            }
+            #[cfg(target_os = "macos")]
+            {
+                config.n_threads = Some(1);
+            }
             let filesystem = Fuse {
                 binding: binding.clone(),
                 files,
@@ -69,7 +87,31 @@ impl Driver {
                 directories: Mutex::new(BTreeMap::new()),
             };
             let session = fuser::spawn_mount(filesystem, &binding.path, &config)?;
-            mounts.lock().insert(binding.id, (binding, session));
+            #[cfg(target_os = "macos")]
+            {
+                let deadline = std::time::Instant::now() + Duration::from_secs(15);
+                loop {
+                    if session.guard.is_finished() {
+                        session.join()?;
+                        return Err(Error::new(ErrorCode::Io, "FUSE session ended before the directory was mounted"));
+                    }
+                    if native_source(&binding.path)?.is_some() {
+                        break;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return Err(Error::new(ErrorCode::Io, "native mount did not appear within 15 seconds; check the filesystem driver logs"));
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
+            let source = native_source(&binding.path)?.ok_or_else(|| {
+                Error::new(ErrorCode::Io, "mounted filesystem is absent from the mount table")
+            })?;
+            mounts.lock().insert(binding.id, Mounted {
+                binding,
+                session,
+                source,
+            });
             Ok(())
         })
         .await
@@ -77,10 +119,10 @@ impl Driver {
     }
 
     pub async fn status(&self, binding: &MountBinding) -> Result<NativeMountState> {
-        if let Some((current, session)) = self.mounts.lock().get(&binding.id)
-            && current.generation == binding.generation
-            && current.path == binding.path
-            && !session.guard.is_finished()
+        if let Some(current) = self.mounts.lock().get(&binding.id)
+            && current.binding.generation == binding.generation
+            && current.binding.path == binding.path
+            && !current.session.guard.is_finished()
         {
             return Ok(NativeMountState::Mounted);
         }
@@ -104,7 +146,21 @@ impl Driver {
             .await
             .map_err(|error| Error::new(ErrorCode::Io, error.to_string()))??;
         if let Some(source) = source {
-            if source != format!("agentdrive:{}", binding.id) {
+            let owned = source == format!("agentdrive:{}", binding.id)
+                && self
+                    .mounts
+                    .lock()
+                    .get(&binding.id)
+                    .is_none_or(|current| current.source == source);
+            #[cfg(all(target_os = "macos", feature = "macos-fuse-t"))]
+            let owned = owned
+                || self.mounts.lock().get(&binding.id).is_some_and(|current| {
+                    current.binding.path == binding.path
+                        && current.binding.generation == binding.generation
+                        && !current.session.guard.is_finished()
+                        && current.source == source
+                });
+            if !owned {
                 return Err(Error::new(
                     ErrorCode::MountBusy,
                     "mount path belongs to a different filesystem",
@@ -142,7 +198,7 @@ impl Driver {
             .mounts
             .lock()
             .remove(&binding.id)
-            .map(|(_, session)| session);
+            .map(|mounted| mounted.session);
         if let Some(session) = session {
             tokio::task::spawn_blocking(move || session.join())
                 .await
@@ -309,6 +365,7 @@ fn attr(inode: Inode) -> FileAttr {
     }
 }
 fn errno(error: Error) -> Errno {
+    tracing::debug!(code = ?error.code, message = %error.message, "filesystem request failed");
     match error.code {
         ErrorCode::NotFound => Errno::ENOENT,
         ErrorCode::AlreadyExists | ErrorCode::NameConflict => Errno::EEXIST,
@@ -384,7 +441,6 @@ impl Filesystem for Fuse {
     ) {
         if uid.is_some_and(|uid| uid != self.binding.identity.uid)
             || gid.is_some_and(|gid| gid != self.binding.identity.gid)
-            || crtime.is_some()
             || bkuptime.is_some()
             || flags.is_some_and(|flags| !flags.is_empty())
         {
@@ -404,6 +460,7 @@ impl Filesystem for Fuse {
                 mode,
                 size,
                 modified_ns,
+                created_ns: crtime.map(time_ns),
             },
         )) {
             Ok(inode) => reply.attr(&Duration::ZERO, &attr(inode)),

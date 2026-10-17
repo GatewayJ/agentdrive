@@ -83,7 +83,7 @@ Fields below are inside `request`. A suffix `?` means the field may be omitted. 
 | `workspace_export` | `workspace`, `revision`, `destination`, `paths?` | Exports selected paths into a new allowed host directory. Omitted/null paths select the whole revision. |
 | `revision_commit` | `guard`, `kind`, `message?`, `durability?` | `kind` accepts `commit` or `checkpoint`; returns `result.revision` and `result.branch`. `message` permits up to 4096 UTF-8 bytes without NUL. |
 | `branch_create` | `workspace`, `name`, `source?`, `source_branch?` | Provide at most one source. Omission uses the selected branch; branch sources include unsaved working content. Returns `result.branch` without changing the selection. |
-| `branch_switch` | `workspace`, `branch` | Save the previous branch and update this location's selection and mount; occupied mounts require `mount_release`. |
+| `branch_switch` | `workspace`, `branch` | Save the previous branch and update this location's selection and mount. An existing mount always returns `waiting_for_quiesce`; call `mount_release` to continue after releasing directory use. Without a mount, switching completes directly. |
 | `branch_restore` | `guard`, `revision`, `durability?` | Restores a branch, with mount release when required. |
 | `sync` | `workspace`, `direction`, `branches?` | `direction`: `push`, `pull`, `both`; omission/null of `branches` selects all. `both` pushes before pulling. On pull, discovery imports remote history before filtering branch IDs in the result. |
 | `cache_prefetch` | `workspace`, `revision`, `paths?` | Downloads a `RevisionRange`; `result.status`. |
@@ -120,7 +120,7 @@ Call `workspace_status` for an existing workspace and inspect `capabilities`:
 | Field | Current meaning |
 | --- | --- |
 | `format_version` | Persisted format version, currently `1`. |
-| `platform_mount` | `linux-fuse`, `windows-winfsp`, `macos-macfuse`, or `macos-macfuse-feature-required`, according to the build. This describes the compiled adapter; a successful mount also needs the OS driver and permissions. |
+| `platform_mount` | `linux-fuse`, `windows-winfsp`, `macos-macfuse`, `macos-fuse-t`, or `macos-macfuse-feature-required`, according to the build. This describes the compiled adapter; a successful mount also needs the OS driver and permissions. |
 | `file_operations` | `lookup`, `getattr`, `readdir`, `create`, `mkdir`, `read`, `write`, `truncate`, `chmod`, `rename`, `unlink`, `rmdir`, `fsync`. These describe mounted filesystem operations. |
 | `remote_configured` | Whether S3 is currently enabled; a saved profile with `enabled: false` returns `false`. This flag does not test connectivity or credentials. |
 | `automatic_text_merge` | `false`; conflicts require explicit resolution. |

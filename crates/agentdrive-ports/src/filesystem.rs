@@ -8,6 +8,7 @@ pub struct AttributeUpdate {
     pub mode: Option<u32>,
     pub size: Option<u64>,
     pub modified_ns: Option<i64>,
+    pub created_ns: Option<i64>,
 }
 
 #[derive(Clone, Debug)]

@@ -14,6 +14,17 @@ use std::{
     sync::Arc,
 };
 
+fn user_entries(path: &std::path::Path) -> usize {
+    std::fs::read_dir(path)
+        .unwrap()
+        .filter(|entry| {
+            let name = entry.as_ref().unwrap().file_name();
+            // macOS 会为不支持扩展属性的文件系统创建 AppleDouble 文件。
+            !cfg!(target_os = "macos") || !name.to_string_lossy().starts_with("._")
+        })
+        .count()
+}
+
 fn context() -> RequestContext {
     RequestContext {
         principal: "native-test".to_owned().try_into().unwrap(),
@@ -134,10 +145,7 @@ async fn native_mount_supports_file_io_durable_snapshots_and_read_only_history()
             std::fs::read(path.join("directory/Renamed")).unwrap(),
             expected
         );
-        assert_eq!(
-            std::fs::read_dir(path.join("directory")).unwrap().count(),
-            1
-        );
+        assert_eq!(user_entries(&path.join("directory")), 1);
         std::fs::write(path.join("temporary"), b"remove").unwrap();
         std::fs::remove_file(path.join("temporary")).unwrap();
         for index in 0..130 {
@@ -193,7 +201,7 @@ async fn native_mount_supports_file_io_durable_snapshots_and_read_only_history()
             std::fs::read(history_path.join("directory/Renamed")).unwrap(),
             expected
         );
-        assert_eq!(std::fs::read_dir(&history_path).unwrap().count(), 131);
+        assert_eq!(user_entries(&history_path), 131);
         assert!(std::fs::write(history_path.join("forbidden"), b"readonly").is_err());
     })
     .await

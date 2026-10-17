@@ -20,7 +20,7 @@ python3 tests/cli_smoke.py
 make -j "$(getconf _NPROCESSORS_ONLN)" test CARGO_FLAGS='-p agentdrive-platform --test native_mount -- --ignored --nocapture'
 ```
 
-macOS 在 `CARGO_FLAGS` 中添加 `--features macos-mount`。Windows 在 PowerShell 中使用 `make -j $env:NUMBER_OF_PROCESSORS`。集成测试管理自己的临时状态和挂载目录，覆盖大于 3 MiB 的文件、截断、随机位置写入、原子追加、重命名、fsync、超过 128 个目录项、历史版本只读访问，以及卸载。
+macOS 在 `CARGO_FLAGS` 中添加 `--features macos-fuse-t`。Windows 在 PowerShell 中使用 `make -j $env:NUMBER_OF_PROCESSORS`。集成测试管理自己的临时状态和挂载目录，覆盖大于 3 MiB 的文件、截断、随机位置写入、原子追加、重命名、fsync、超过 128 个目录项、历史版本只读访问，以及卸载。
 
 WinFsp wrapper 的空指针卷 flush 回归测试在 Windows 上单独执行：
 
@@ -50,13 +50,13 @@ python3 tests/storage_smoke.py
 | 检查 | 已验证环境 |
 | --- | --- |
 | Workspace 测试和 Clippy | macOS、Linux、Windows |
-| 原生挂载文件操作和版本访问 | Linux root 用户与普通用户；安装 WinFsp 2.1 的 Windows |
+| 原生挂载文件操作和版本访问 | Linux root 用户与普通用户；安装 WinFsp 2.1 的 Windows；macOS 26.5 与 FUSE-T 1.2.9 |
 | CLI、stdio MCP、目录元数据、重启恢复 | macOS、Linux、Windows |
 | S3 条件写入和分段内容 | 隔离的 RustFS 实例 |
 | 两个守护进程之间的 S3 同步和所有权交接 | macOS 和 Linux |
 | macFUSE 回调编译 | macOS |
 
-[GitHub Actions](https://github.com/GatewayJ/agentdrive/actions) 会为每次提交运行仓库内的测试矩阵。macOS 原生挂载需要安装并启用 macFUSE 驱动，该内核挂载测试尚未在开发环境执行。
+[GitHub Actions](https://github.com/GatewayJ/agentdrive/actions) 会为每次提交运行仓库内的测试矩阵。macOS 26.5 使用 FUSE-T 1.2.9 已通过两项原生挂载测试，覆盖原目录转换、独占创建、持有打开句柄时重命名、超过 128 个目录项、历史版本只读访问及正常卸载。目录项数量断言会排除 macOS 生成的 AppleDouble 元数据文件。
 
 [CLI 使用](cli.zh-CN.md)中的创建、导入、读取、导出和挂载示例已通过临时守护进程执行验证。[MCP 参数表](mcp.zh-CN.md)已与运行中的守护进程返回的 30 个工具 schema 核对。S3 配置已根据守护进程配置加载器、适配器，以及锁定版本 `object_store` 的凭据和 endpoint 选择逻辑检查。上述文档检查不代表已经在 AWS S3 部署环境完成验证。
 
@@ -72,3 +72,9 @@ python3 tests/config_smoke.py
 `config_smoke.py` 使用临时目录运行 daemon，验证文件热更新、错误配置保留、启动配置修改提示、单个缓存容量字段的 HTTP 保存、版本冲突和重启恢复。该脚本无需挂载驱动。配置测试覆盖已有文件的读取和快照一致性；engine 缓存测试验证修改容量后按 75% 目标清理，并保留当前分支内容。
 
 目录转换测试覆盖新 workspace 的 `main` 初始内容、指定 workspace 导入、Agent 重启确认、原目录备份、无效输入，以及挂载失败和 daemon 重启后的重试。
+
+## FUSE-T 与 RustFS 本机验证（2026-10-17）
+
+macOS 26.5、FUSE-T 1.2.9 与独立 RustFS 容器环境中，Codex 创建普通目录并在转换后的原路径继续写入。验证内容包含 12 MiB 文件、空文件、中文名称、创建、修改、重命名和删除。Codex 通过 stdio MCP 创建、切换分支并请求远端保存。main 与 feature 的版本在独立 daemon 中从 RustFS 恢复，全部文件清单和 SHA-256 一致。往返切换保持两个分支的独立内容。正常重启 daemon 后调用 `mount_prepare`，分支选择及文件内容保留。指定已有 workspace 的导入在原路径创建新的 branch。
+
+停止 RustFS 后，本地保存成功、远端保存返回失败；恢复服务并同步后，原保存操作得到远端确认，独立恢复的全部文件校验一致。FUSE-T 构建通过 44 个 workspace 测试与 Clippy、两项原生挂载测试、56 个 fuser 测试，以及 CLI/stdio smoke 测试。原生测试耗时 134.14 秒。本次未验证多进程文件锁及生产环境吞吐量。生命周期与元数据行为见 [FUSE-T 使用说明](integrations.zh-CN.md#macos-fuse-t)。

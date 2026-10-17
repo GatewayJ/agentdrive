@@ -1,7 +1,7 @@
 [workspace]
 members = ["apps/*", "crates/*"]
 resolver = "3"
-exclude = ["vendor/winfsp_wrs"]
+exclude = ["vendor/winfsp_wrs", "vendor/fuser"]
 
 [workspace.package]
 version = "0.1.0"
@@ -64,3 +64,5 @@ strip = "debuginfo"
 
 [patch.crates-io]
 winfsp_wrs = { path = "vendor/winfsp_wrs" }
+
+fuser = { path = "vendor/fuser" }

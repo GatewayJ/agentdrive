@@ -429,6 +429,7 @@ impl FileSystem for FileService {
         if attributes.mode.is_none()
             && attributes.size.is_none()
             && attributes.modified_ns.is_none()
+            && attributes.created_ns.is_none()
         {
             return Ok(Self::local_attributes(&mount, node.inode));
         }
@@ -464,6 +465,9 @@ impl FileSystem for FileService {
         }
         if let Some(mode) = attributes.mode {
             node.inode.mode = mode & 0o777;
+        }
+        if let Some(created_ns) = attributes.created_ns {
+            node.inode.created_ns = created_ns;
         }
         node.inode.modified_ns = attributes
             .modified_ns

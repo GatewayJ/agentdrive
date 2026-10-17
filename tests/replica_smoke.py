@@ -91,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-replica-') as temporary:
         adopted = next(item for item in second.call('workspace_status', {'workspace': workspace})['branches'] if item['id'] == branch['id'])
         assert adopted['owner'] == status['location'] and adopted['state'] == 'writable', adopted
         assert adopted['authority_epoch'] == current['authority_epoch'] + 1
-        if status['capabilities']['platform_mount'] in ('linux-fuse', 'windows-winfsp', 'macos-macfuse'):
+        if status['capabilities']['platform_mount'] in ('linux-fuse', 'windows-winfsp', 'macos-macfuse', 'macos-fuse-t'):
             mounted_workspace = first.call('workspace_create', {'name': 'location-mounts'}, 'mount-create')['result']['workspace']['id']
             mount_path = first.root / 'mounts' / 'shared'
             original = first.call('mount_prepare', {'workspace': mounted_workspace, 'path': str(mount_path)}, 'mount-root')['result']['binding']

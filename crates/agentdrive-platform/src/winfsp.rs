@@ -604,6 +604,7 @@ impl FileSystemInterface for WindowsFs {
                     mode,
                     size: None,
                     modified_ns: (modified != 0).then_some(nanoseconds(modified)),
+                    created_ns: None,
                 },
             ))
             .map(info)

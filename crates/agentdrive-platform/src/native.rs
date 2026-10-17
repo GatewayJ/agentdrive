@@ -109,7 +109,7 @@ impl MountDriver for NativeMountDriver {
             let _ = file_system;
             Err(Error::new(
                 ErrorCode::Unsupported,
-                "native mounts require macFUSE and a build with the macos-mount feature",
+                "native mounts require FUSE-T with macos-fuse-t, or macFUSE with macos-mount",
             ))
         }
     }
@@ -166,7 +166,15 @@ impl MountDriver for NativeMountDriver {
         {
             "windows-winfsp"
         }
-        #[cfg(all(target_os = "macos", feature = "macos-mount"))]
+        #[cfg(all(target_os = "macos", feature = "macos-fuse-t"))]
+        {
+            "macos-fuse-t"
+        }
+        #[cfg(all(
+            target_os = "macos",
+            feature = "macos-mount",
+            not(feature = "macos-fuse-t")
+        ))]
         {
             "macos-macfuse"
         }

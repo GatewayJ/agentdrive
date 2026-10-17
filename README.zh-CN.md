@@ -11,7 +11,7 @@ AgentDrive 为 Agent 提供可持久保存的工作区、显式管理的工作�
 功能包括：
 
 - 跨平台文件名称、按内容寻址的对象、分页的目录和 inode 索引，以及 SQLite 事务。
-- Linux FUSE、macOS macFUSE 和 Windows WinFsp 适配；快照、分支恢复和版本历史。
+- Linux FUSE、macOS FUSE-T/macFUSE 和 Windows WinFsp 适配；快照、分支恢复和版本历史。
 - S3/RustFS 同步、限制内存用量的流式传输、离线缓存保留、在线所有权交接，以及可以编辑文件的三方合并候选结果。
 - ACP 和 Codex app-server 生命周期集成、分支命令，以及提供分支历史与运行配置管理的 Dashboard。
 - 通过需要身份验证的 Streamable HTTP 提供 30 个具有明确类型的 MCP 工具，同时提供 stdio 代理和 JSON CLI。
@@ -28,10 +28,10 @@ make -j "$(getconf _NPROCESSORS_ONLN)" verify
 | 平台 | 原生文件系统要求 | 构建方式 |
 | --- | --- | --- |
 | Linux | FUSE 3 工具、`/dev/fuse` 和挂载权限 | 使用默认 features |
-| macOS | 已安装并启用 [macFUSE](https://macfuse.github.io/)，以及 `pkg-config` | `make -j "$(sysctl -n hw.ncpu)" build FEATURES=macos-mount` |
+| macOS | [FUSE-T](https://github.com/macos-fuse-t/fuse-t) 和 `pkg-config` | `make -j "$(sysctl -n hw.ncpu)" build FEATURES=macos-fuse-t` |
 | Windows | MSVC，以及包含 Developer 功能的 [WinFsp 2.1](https://github.com/winfsp/winfsp/releases/tag/v2.1) | PowerShell：`make -j $env:NUMBER_OF_PROCESSORS build` |
 
-macOS 默认构建包含守护进程、CLI 和存储操作。原生挂载需要启用 `macos-mount`。Windows 构建会从注册的安装路径加载 WinFsp；Windows 状态目录应位于本地 NTFS 卷。
+macOS 默认构建包含守护进程、CLI 和存储操作。原生挂载使用 `macos-fuse-t`，无需内核扩展。Make 会选择 FUSE-T 动态库；直接运行 Cargo 时需要设置 `PKG_CONFIG_PATH="$PWD/build/fuse-t"`。已有 macFUSE 环境可继续使用 `FEATURES=macos-mount`。Windows 构建会从注册的安装路径加载 WinFsp；Windows 状态目录应位于本地 NTFS 卷。
 
 ## 运行
 
@@ -102,7 +102,7 @@ S3 模式只需设置“本地缓存容量”，默认为 2 GiB，配置文件�
 
 ## 验证与功能范围
 
-CI 会在 Linux、macOS 和 Windows 上运行 workspace 测试，并执行 Linux/Windows 原生挂载测试、macFUSE 回调编译检查、CLI/stdio 集成测试，以及连接实际 RustFS 服务的后端测试。原生挂载测试覆盖数 MiB 的文件写入、截断、追加、持有打开句柄时重命名、目录枚举、fsync、历史版本只读挂载和卸载。macOS 需要在已启用 macFUSE 的环境手动运行同一项测试；开发环境尚未执行 macOS 内核挂载验证。测试命令和当前验证记录见[验证文档](docs/validation.zh-CN.md)。
+CI 会在 Linux、macOS 和 Windows 上运行 workspace 测试，并执行 Linux/Windows 原生挂载测试、macFUSE 回调编译检查、CLI/stdio 集成测试，以及连接实际 RustFS 服务的后端测试。原生挂载测试覆盖数 MiB 的文件写入、截断、追加、持有打开句柄时重命名、目录枚举、fsync、历史版本只读挂载和卸载。macOS 使用 FUSE-T 运行原生挂载验证。测试命令和当前验证记录见[验证文档](docs/validation.zh-CN.md)。
 
 文件操作支持普通文件和目录、分支内原子追加、重命名、权限、时间戳、截断和 fsync。文件内容以整个文件为单位保存为不可变对象；编辑后的文件通过流式处理重新生成对象。分支和合并操作会在内存中构建元数据树。每个工作区可配置的 inode 数量上限为一百万；容量限制应根据可用内存和磁盘空间设置。
 

@@ -2,7 +2,7 @@
 
 [English](integrations.md) | [简体中文](integrations.zh-CN.md)
 
-启动 `agentdrived` 并配置 `AGENTDRIVE_TOKEN_FILE`。原生目录需要 FUSE、macFUSE 或 WinFsp。挂载路径必须位于 daemon 配置的 `mount_roots` 中。Agent 的执行环境需要能够访问该目录。
+启动 `agentdrived` 并配置 `AGENTDRIVE_TOKEN_FILE`。原生目录需要 FUSE、FUSE-T/macFUSE 或 WinFsp。挂载路径必须位于 daemon 配置的 `mount_roots` 中。Agent 的执行环境需要能够访问该目录。
 
 ## MCP 与挂载目录
 
@@ -97,3 +97,11 @@ agentdrive integrate --protocol codex-app-server --workspace "$WORKSPACE" \
 只读 JSON 接口为 `GET /api/workspaces` 和 `GET /api/workspaces/{workspace}`。后者返回 `status` 和 `revisions`，其中 `selected_branch` 是当前 location 的选择。管理员通过 `/settings` 编辑运行配置，详见[配置说明](configuration.zh-CN.md)。
 
 协议参考：[ACP 会话](https://agentclientprotocol.com/protocol/v1/session-setup)、[ACP 回合](https://agentclientprotocol.com/protocol/v1/prompt-turn)、[Codex app-server](https://developers.openai.com/codex/app-server/)。
+
+## macOS FUSE-T
+
+安装 FUSE-T 1.2.9 和 pkg-config，使用 `make -j "$(sysctl -n hw.ncpu)" build FEATURES=macos-fuse-t` 编译。AgentDrive 使用本机 NFS 后端并关闭属性缓存，无需内核扩展。FUSE-T 的[许可条款](https://github.com/macos-fuse-t/fuse-t)要求商业使用或随商业软件分发时取得商业许可。
+
+macOS 可能生成 AppleDouble `._` 元数据文件，AgentDrive 会将这些文件作为普通文件保存。已有挂载时，`branch_switch` 固定返回 `waiting_for_quiesce`，需要调用 `mount_release` 完成切换；继续之前需要释放文件句柄和目录占用。运行中的 Agent 或 MCP stdio 代理可能占用目录：退出 Agent，通过目录之外的进程调用 `mount_release`，然后在原路径重新启动 Agent。客户端允许时，将 MCP 代理的工作目录设置在挂载目录之外。
+
+文件写入和 `fsync` 遵循 binding 的 durability 设置。默认 `local` 设置下，使用 `mount_save` 的 `durability: "remote"` 并检查 `remote_confirmed`，确认内容已保存到 RustFS。仅凭本地文件写入成功无法确认远端保存。

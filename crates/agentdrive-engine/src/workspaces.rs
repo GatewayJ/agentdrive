@@ -193,7 +193,7 @@ impl WorkspaceApi for WorkspaceService {
         if self.mount_capability == "macos-macfuse-feature-required" {
             return Err(Error::new(
                 ErrorCode::Unsupported,
-                "directory conversion requires macFUSE and the macos-mount feature",
+                "directory conversion requires FUSE-T with macos-fuse-t, or macFUSE with macos-mount",
             ));
         }
         request.path = self.driver.normalize_path(&request.path).await?;

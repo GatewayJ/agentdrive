@@ -7,7 +7,7 @@ AgentDrive gives agents durable workspaces, explicit workspace branches, immutab
 The implementation includes:
 
 - Portable file names, content-addressed objects, paged directory/inode indexes, and SQLite transactions.
-- Linux FUSE, macOS macFUSE, and Windows WinFsp adapters; snapshots, branch restore, and revision history.
+- Linux FUSE, macOS FUSE-T/macFUSE, and Windows WinFsp adapters; snapshots, branch restore, and revision history.
 - S3/RustFS replication, bounded streaming transfers, offline cache pins, online ownership transfer, and editable three-way merge candidates.
 - ACP and Codex app-server lifecycle bridges, explicit branch commands, and a dashboard for branch history and runtime settings.
 - 30 typed MCP tools over authenticated Streamable HTTP, with a stdio proxy and JSON CLI.
@@ -24,10 +24,10 @@ make -j "$(getconf _NPROCESSORS_ONLN)" verify
 | Platform | Native filesystem requirements | Build |
 | --- | --- | --- |
 | Linux | FUSE 3 utilities, `/dev/fuse`, permission to mount | Default features |
-| macOS | [macFUSE](https://macfuse.github.io/) installed and enabled, `pkg-config` | `make -j "$(sysctl -n hw.ncpu)" build FEATURES=macos-mount` |
+| macOS | [FUSE-T](https://github.com/macos-fuse-t/fuse-t) and `pkg-config` | `make -j "$(sysctl -n hw.ncpu)" build FEATURES=macos-fuse-t` |
 | Windows | MSVC, [WinFsp 2.1](https://github.com/winfsp/winfsp/releases/tag/v2.1) including its Developer feature | PowerShell: `make -j $env:NUMBER_OF_PROCESSORS build` |
 
-The default macOS build provides the daemon, CLI, and storage operations. Enable `macos-mount` for native mounts. The Windows build loads WinFsp from its registered installation path. Use a local NTFS volume for Windows state.
+The default macOS build provides the daemon, CLI, and storage operations. Enable `macos-fuse-t` for native mounts without a kernel extension. Make selects the FUSE-T library; direct Cargo builds must set `PKG_CONFIG_PATH="$PWD/build/fuse-t"`. Existing macFUSE installations can use `FEATURES=macos-mount`. The Windows build loads WinFsp from its registered installation path. Use a local NTFS volume for Windows state.
 
 ## Run
 
@@ -98,7 +98,7 @@ S3 mode exposes one **Local cache capacity** setting, default 2 GiB (`cache.max_
 
 ## Validation and scope
 
-CI runs workspace tests on Linux, macOS, and Windows; native mount tests on Linux and Windows; macFUSE callback compilation; CLI/stdio integration; and a real RustFS backend test. The native mount test covers multi-megabyte writes, truncation, append, rename with an open handle, directory enumeration, fsync, historical read-only mounts, and unmount. Run the same test manually on macOS with an enabled macFUSE installation; macOS kernel mounting has not been verified in the development environment. See [validation](docs/validation.md) for commands and current execution evidence.
+CI runs workspace tests on Linux, macOS, and Windows; native mount tests on Linux and Windows; macFUSE callback compilation; CLI/stdio integration; and a real RustFS backend test. The native mount test covers multi-megabyte writes, truncation, append, rename with an open handle, directory enumeration, fsync, historical read-only mounts, and unmount. The same native tests pass on macOS 26.5 with FUSE-T 1.2.9. See [validation](docs/validation.md) for commands and current execution evidence.
 
 File operations cover regular files and directories, atomic branch append, rename, permissions, timestamps, truncate, and fsync. File contents are stored as whole-file immutable objects; edited files are resealed by streaming. Metadata trees are materialized in memory for branch and merge operations. The configurable maximum is one million inodes per workspace; size limits should reflect available memory and disk.
 

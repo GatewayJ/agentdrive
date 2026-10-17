@@ -83,7 +83,7 @@ jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 | `workspace_export` | `workspace`, `revision`, `destination`, `paths?` | 将选定路径导出到允许范围内的新主机目录。省略 paths 或设置为 `null` 时选择整个版本。 |
 | `revision_commit` | `guard`, `kind`, `message?`, `durability?` | `kind` 接受 `commit` 或 `checkpoint`，返回 `result.revision` 和 `result.branch`。 `message` 最多 4096 UTF-8 字节，不能含有 NUL。 |
 | `branch_create` | `workspace`, `name`, `source?`, `source_branch?` | 最多提供一个来源。省略时使用当前分支；分支来源包含尚未保存的工作内容。返回 `result.branch`，保持当前选择。 |
-| `branch_switch` | `workspace`, `branch` | 保存原分支，更新当前 location 的分支选择和挂载；已有挂载需要 `mount_release`。 |
+| `branch_switch` | `workspace`, `branch` | 保存原分支，更新当前 location 的分支选择和挂载。已有挂载时固定返回 `waiting_for_quiesce`；释放目录占用后调用 `mount_release` 继续。没有挂载时直接完成切换。 |
 | `branch_restore` | `guard`, `revision`, `durability?` | 恢复分支，需要时通过挂载释放继续操作。 |
 | `sync` | `workspace`, `direction`, `branches?` | `direction` 为 `push`、`pull`、`both`；省略 branches 或设置为 `null` 时选择全部。`both` 先推送后拉取。拉取时，发现过程会导入远端历史，再过滤结果中的 branch ID。 |
 | `cache_prefetch` | `workspace`, `revision`, `paths?` | 下载 `RevisionRange`，返回 `result.status`。 |
@@ -120,7 +120,7 @@ jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 | 字段 | 当前含义 |
 | --- | --- |
 | `format_version` | 持久化格式版本，当前为 `1`。 |
-| `platform_mount` | 根据构建结果返回 `linux-fuse`、`windows-winfsp`、`macos-macfuse` 或 `macos-macfuse-feature-required`。该值表示已编译的适配器；挂载成功还需要操作系统驱动和权限。 |
+| `platform_mount` | 根据构建结果返回 `linux-fuse`、`windows-winfsp`、`macos-macfuse`、`macos-fuse-t` 或 `macos-macfuse-feature-required`。该值表示已编译的适配器；挂载成功还需要操作系统驱动和权限。 |
 | `file_operations` | `lookup`、`getattr`、`readdir`、`create`、`mkdir`、`read`、`write`、`truncate`、`chmod`、`rename`、`unlink`、`rmdir`、`fsync`，表示挂载文件系统支持的操作。 |
 | `remote_configured` | 当前是否启用 S3；保存的配置为 `enabled: false` 时返回 `false`。此字段不会测试连接或凭据。 |
 | `automatic_text_merge` | `false`，冲突需要明确解决。 |

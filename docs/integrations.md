@@ -2,7 +2,7 @@
 
 [English](integrations.md) | [简体中文](integrations.zh-CN.md)
 
-Start `agentdrived` and configure `AGENTDRIVE_TOKEN_FILE`. Native directories require FUSE, macFUSE, or WinFsp. Mount paths must be inside the daemon's `mount_roots`. The agent's execution environment must be able to access the mounted directory.
+Start `agentdrived` and configure `AGENTDRIVE_TOKEN_FILE`. Native directories require FUSE, FUSE-T/macFUSE, or WinFsp. Mount paths must be inside the daemon's `mount_roots`. The agent's execution environment must be able to access the mounted directory.
 
 ## MCP and mounted directories
 
@@ -97,3 +97,11 @@ Run `agentdrive dashboard --open` to open the daemon page. The browser reads the
 Read-only endpoints are `GET /api/workspaces` and `GET /api/workspaces/{workspace}`. The latter returns `status` and `revisions`; `selected_branch` is this location's selection. Administrators edit runtime settings at `/settings`; see [configuration](configuration.md).
 
 Protocol references: [ACP sessions](https://agentclientprotocol.com/protocol/v1/session-setup), [ACP turns](https://agentclientprotocol.com/protocol/v1/prompt-turn), and [Codex app-server](https://developers.openai.com/codex/app-server/).
+
+## macOS FUSE-T
+
+Install FUSE-T 1.2.9 and pkg-config, then build with `make -j "$(sysctl -n hw.ncpu)" build FEATURES=macos-fuse-t`. AgentDrive uses the local NFS backend and disables its attribute cache. FUSE-T runs without a kernel extension. Its [license](https://github.com/macos-fuse-t/fuse-t) requires a commercial license for commercial use or distribution with commercial software.
+
+macOS can create AppleDouble `._` metadata files on this filesystem; AgentDrive stores them as ordinary workspace files. With an existing mount, `branch_switch` always returns `waiting_for_quiesce`; call `mount_release` to complete the change. Release open handles and processes using the mount before continuing. A running Agent or its MCP stdio proxy can keep the directory occupied: stop that Agent, run `mount_release` from a process outside the mount, and restart the Agent at the same path. Configure the MCP proxy's working directory outside the mount when the client supports it.
+
+File writes and `fsync` follow the binding's durability setting. With the default `local` setting, use `mount_save` with `durability: "remote"` and check `remote_confirmed` to confirm publication to RustFS. A successful local file write alone does not confirm remote publication.
