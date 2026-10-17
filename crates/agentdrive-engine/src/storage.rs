@@ -11,7 +11,7 @@ impl Engine {
         persist: &mut dyn FnMut() -> Result<()>,
     ) -> Result<()> {
         let _lifecycle = self.runtime.lifecycle.lock().await;
-        let _publication = self.publisher.publication.lock().await;
+        let _publication = self.publisher.publication.write().await;
         let _objects = self.runtime.objects.write().await;
         let trees = &self.revisions.trees;
         let content = &trees.content;

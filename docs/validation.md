@@ -108,3 +108,28 @@ On 2026-10-17, identical debug-build tests compared `099fe55` with this change o
 | 10,000 | 5,487 / 33 | 2,797 / 11 | 37,951 / 29 |
 
 This single local engine/SQLite comparison uses isolated temporary directories and excludes FUSE, MCP and S3. It demonstrates removal of work proportional to unrelated nodes for these operations. It is not an end-to-end speedup claim or a CI timing threshold.
+
+## Checkpoints and publication optimization (2026-10-18)
+
+macOS 26.5, FUSE-T 1.2.9, debug builds, and a dedicated RustFS container. `make -j8 verify build FEATURES=macos-fuse-t` passed with 59 workspace tests. All three native mount tests, the real S3 backend test, and all six Python smoke suites passed. The engine benchmark now includes ten writes followed by fsync and 1000 capacity queries:
+
+| Background files | Write ×100 ms | Readdir ×50 ms | Rename ×50 ms | Write + fsync ×10 ms | STATFS ×1000 ms |
+| --- | --- | --- | --- | --- | --- |
+| 100 | 45 | 11 | 34 | 391 | 115 |
+| 1000 | 36 | 10 | 33 | 505 | 117 |
+| 10000 | 35 | 11 | 33 | 577 | 114 |
+
+The native run imported an existing directory into a new workspace at the same path, created 543 background files with explicit fsync, saved remotely, switched branches through MCP, wrote independent contents, and restarted the daemon. RustFS was stopped while twenty local saves and one remote save accumulated. After restart, all 21 operations were confirmed in a batch of 21 in 1.10 seconds; every original operation result was preserved. A fresh daemon downloaded main (1093 files) and feature (1138 files), with all paths, sizes and SHA-256 values matching. Counts include AppleDouble files. The queue ended empty.
+
+| Measurement | Result |
+| --- | --- |
+| Create 543 files + explicit fsync | 82.19 s; revisions 1 → 3 |
+| Native write ×100 / explicit fsync | 0.40 / 57.29 ms |
+| Native target-directory readdir ×50 | 12.39 ms; warm repeat 0.77 ms |
+| Native rename ×50 | 637.11 ms; prior run 1149.95 ms |
+| Final bulk-save return / remote confirmation | 25.74 / 140.53 ms |
+| SQLite SUM / maintained counters, 1000 reads over 6949 objects | 344.03 / 1.21 ms; equal byte counts |
+
+The earlier 1507-second save waited behind hundreds of fsync-created revision jobs. The new run allowed autosave/background publication while creating files, and the final save transferred 12 changed objects. These are workload observations, not a fixed speedup ratio. OS caches affect native write/readdir/STATFS timings; SQL measurements isolate database query costs. Whole-file sealing and durable object flushes remain measurable costs, and 543 native creates still take about 82 seconds.
+
+New regression tests cover checkpoint/revision separation, checkpoint recovery and forks, remote checkpoint mounting, incremental index growth/deletion and old-root preservation, unconfirmed-object reclamation, object-counter migration, bounded save polling and old request fingerprint compatibility. Merged publication tests inject remote outages and a lost branch CAS response. A FUSE-T mirror probe checked cache/xattr feasibility; see [integration observations](integrations.md#macos-fuse-t). Cache options and xattr behavior remain unchanged. Linux and Windows execution was not repeated in this local run.

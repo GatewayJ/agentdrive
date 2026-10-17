@@ -15,6 +15,7 @@ Read these receipt fields independently:
 | `mount_ready` | The requested native attachment is ready, when relevant |
 | `phase` | Current workflow state |
 | `error` | A typed failure, possibly alongside a completed local save |
+| `sync_progress` | Optional queue, stage and transfer counters for publication |
 
 A remote error can accompany `local_saved: true`. Keep the existing operation ID, restore remote access, and run `sync` or allow the daemon to retry its persistent publication queue. A remote timeout does not establish whether a conditional write committed; the publisher checks the recorded operation identity.
 
@@ -38,9 +39,9 @@ Keep the state directory on a local filesystem with correct file flush and atomi
 
 ## Replication, cache, and ownership
 
-`sync` supports `push`, `pull`, and `both`. Pulling a workspace onto a fresh location imports its history. The first writable `mount_prepare` also imports a missing workspace and creates this location’s branch from the root branch’s latest published saved revision. Later mounts reuse the local selection. A remote history reference does not grant local write ownership.
+`sync` supports `push`, `pull`, and `both`. Pulling a workspace onto a fresh location imports its history. The first writable `mount_prepare` also imports a missing workspace and creates this location’s branch from the root branch’s latest published working root. Later mounts reuse the local selection. A remote history reference does not grant local write ownership.
 
-Use `cache_prefetch` to download a revision or selected paths. Use `cache_pin` with `enabled: true` to retain a complete selection for offline use; `cache_status` reports both completeness and pin protection. Unpinning permits later collection after other protection is absent. Cache collection only removes remotely confirmed immutable objects without active readers or protected references.
+Use `cache_prefetch` to download a revision or selected paths. Use `cache_pin` with `enabled: true` to retain a complete selection for offline use; `cache_status` reports both completeness and pin protection. Unpinning permits later collection after other protection is absent. Cache capacity eviction removes remotely confirmed objects without active readers or protected references. Unconfirmed objects superseded by checkpoints can also be reclaimed after checking all retained roots and active readers.
 
 While S3 is enabled, set the local cache capacity in Dashboard Settings or `cache.max_bytes`. Collection starts above that capacity or below the internal 64 MiB free-space threshold and targets 75% of the configured capacity. Protected content can keep usage above the setting. Local mode retains all history; switching from S3 hydrates missing historical content before disabling the remote connection. See [configuration](configuration.md) for storage switching and the local SQLite database's role.
 
@@ -81,3 +82,11 @@ Example `merge-edits.json` arguments:
 ```
 
 See [configuration and S3](configuration.md) for remote credentials and [CLI usage](cli.md) for executable examples.
+
+## Checkpoints and synchronization progress
+
+Local fsync persists the current working tree without adding a revision. Use `mount_save` or `revision_commit` for a historical version. Autosave continues on its five-second quiet/thirty-second continuous-write schedule. Remote fsync publishes the checkpoint and waits for confirmation; merged checkpoint jobs guarantee the latest durable state, while explicit revisions remain in history.
+
+`mount_save.wait_for_remote_ms` accepts 0–120000 milliseconds (default 30000). This bounds waiting after the local save, not local capture time. A timeout returns `local_saved: true` with `remote_confirmed: false`; publication continues and the timeout alone is not a failure. Poll `operation_get` using the returned ID, or `operation_by_request` using the original request ID. Do not submit a new save to poll progress. Actual remote failures remain in `error` and persistent jobs are retried. Filesystem remote fsync has no bounded-success shortcut.
+
+`sync_progress.stage` is `queued`, `preparing`, `transferring`, `publishing`, or `complete`. `pending_jobs` counts queued workspace jobs; `jobs_before` is the queue position when waiting; `batch_jobs` counts operations sharing this publication. `total_objects` and `total_bytes` are null until the object plan is ready; completion counters describe objects verified/transferred in the current attempt, including metadata. They exclude reused remote subtrees and are not wire-byte counters. Active counters live in memory; completed counters persist with the receipt. After restart or retry, pending operations return queue status and the next attempt starts new counters. `updated_ns` timestamps the sample. Publication confirmation remains the meaning of `remote_confirmed`.

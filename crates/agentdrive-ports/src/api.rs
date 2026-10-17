@@ -269,6 +269,9 @@ pub struct SaveMount {
     pub expected_binding_generation: u64,
     #[serde(default)]
     pub durability: Durability,
+    /// Remote wait bound (0..=120000 ms); defaults to 30000 ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_for_remote_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
@@ -433,5 +436,32 @@ pub struct Services {
 impl std::fmt::Debug for Services {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Services").finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+
+    #[test]
+    fn omitted_save_wait_preserves_existing_request_fingerprints() {
+        #[derive(Serialize)]
+        struct LegacySaveMount {
+            mount: MountId,
+            expected_binding_generation: u64,
+            durability: Durability,
+        }
+        let old = LegacySaveMount {
+            mount: MountId::new(),
+            expected_binding_generation: 1,
+            durability: Durability::Remote,
+        };
+        let current = SaveMount {
+            mount: old.mount,
+            expected_binding_generation: old.expected_binding_generation,
+            durability: old.durability,
+            wait_for_remote_ms: None,
+        };
+        assert_eq!(encode(&old).unwrap(), encode(&current).unwrap());
     }
 }

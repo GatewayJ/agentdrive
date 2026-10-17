@@ -51,3 +51,14 @@ CREATE TABLE IF NOT EXISTS objects (
     last_access_ns INTEGER NOT NULL,
     PRIMARY KEY(workspace, hash)
 );
+CREATE TABLE IF NOT EXISTS node_deltas (
+    branch TEXT NOT NULL,
+    path TEXT NOT NULL,
+    previous BLOB,
+    PRIMARY KEY(branch, path)
+);
+CREATE TABLE IF NOT EXISTS branch_history (
+    branch TEXT PRIMARY KEY,
+    source_generation INTEGER NOT NULL,
+    root BLOB NOT NULL
+);

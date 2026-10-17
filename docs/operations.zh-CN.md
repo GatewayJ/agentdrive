@@ -15,6 +15,7 @@
 | `mount_ready` | 涉及原生挂载时，请求的挂载关联已经就绪 |
 | `phase` | 当前操作阶段 |
 | `error` | 具有明确类型的失败信息，可能与已完成的本地保存同时存在 |
+| `sync_progress` | 可选的同步队列、阶段和传输计数 |
 
 远端错误可能伴随 `local_saved: true`。请保留已有 operation ID，恢复远端连接，然后运行 `sync`，或者等待守护进程重试持久化的发布队列。远端超时无法确认条件写入是否已提交，发布程序会检查已记录的操作身份。
 
@@ -38,9 +39,9 @@
 
 ## 同步、缓存与所有权
 
-`sync` 支持 `push`、`pull` 和 `both`。在新的 location 拉取工作区会导入其历史。首次可写 `mount_prepare` 也会自动导入尚未存在的工作区，并从根分支最新发布的保存版本创建当前 location 的分支；后续挂载复用本机选择。持有远端历史引用不会获得本地写入所有权。
+`sync` 支持 `push`、`pull` 和 `both`。在新的 location 拉取工作区会导入其历史。首次可写 `mount_prepare` 也会自动导入尚未存在的工作区，并从根分支最新发布的工作根对象创建当前 location 的分支；后续挂载复用本机选择。持有远端历史引用不会获得本地写入所有权。
 
-使用 `cache_prefetch` 下载指定版本或路径。使用 `cache_pin` 并设置 `enabled: true`，保留完整选择范围，以供离线使用。`cache_status` 会报告内容是否完整以及是否受到保留设置保护。取消保留后，如果不存在其他保护，缓存可以在之后回收。缓存回收只移除已经获得远端确认、没有活动读取者且没有受保护引用的不可变对象。
+使用 `cache_prefetch` 下载指定版本或路径。使用 `cache_pin` 并设置 `enabled: true`，保留完整选择范围，以供离线使用。`cache_status` 会报告内容是否完整以及是否受到保留设置保护。取消保留后，如果不存在其他保护，缓存可以在之后回收。容量回收移除已经获得远端确认、没有活动读取者且没有受保护引用的不可变对象。被后续检查点替代的未确认对象，在检查全部保留引用及活动读取者后也可以回收。
 
 启用 S3 后，通过 Dashboard 设置或 `cache.max_bytes` 调整本地缓存容量。超过容量或磁盘剩余空间低于内部的 64 MiB 阈值时开始清理，容量目标为设置值的 75%。受保护的内容可能使实际占用超过设置容量。本地模式完整保留历史；从 S3 切换回本地时，会下载缺少的历史内容，完成后停用远程连接。存储切换和本地 SQLite 数据库的职责见[配置说明](configuration.zh-CN.md)。
 
@@ -81,3 +82,11 @@ agentdrive call merge_apply --request-id "$RUN_ID-apply" --json - < merge-apply.
 ```
 
 远端凭据见[配置与 S3](configuration.zh-CN.md)，可执行示例见 [CLI 使用](cli.zh-CN.md)。
+
+## 检查点与同步进度
+
+本地 fsync 保存当前工作内容，不增加 revision。需要历史版本时调用 `mount_save` 或 `revision_commit`。自动保存继续遵循五秒无新写入、三十秒持续写入的期限。远端 fsync 发布检查点并等待确认；合并检查点同步任务保证最新持久状态，显式 revision 继续保留在历史中。
+
+`mount_save.wait_for_remote_ms` 接受 0–120000 毫秒，默认 30000。该参数限制本地保存完成后的远端等待时间，本地内容捕获耗时单独计算。等待到期时返回 `local_saved: true`、`remote_confirmed: false`，发布继续进行，等待到期本身不代表失败。使用返回的 ID 查询 `operation_get`，或使用原 request ID 查询 `operation_by_request`，无需重复创建保存请求。实际远端错误保留在 `error` 中，持久化任务会继续重试。文件系统的远端 fsync 必须确认完成才能成功返回。
+
+`sync_progress.stage` 包含 `queued`、`preparing`、`transferring`、`publishing` 和 `complete`。`pending_jobs` 表示 workspace 队列数量，等待时的 `jobs_before` 表示队列位置，`batch_jobs` 表示本次共同发布的操作数量。对象计划生成前，`total_objects` 和 `total_bytes` 为 null；完成计数表示本次验证或传输的对象，包含元数据，不包含直接复用的远端子树，也不等于网络传输字节。活动计数保存在内存，完成计数随操作结果持久保存；重启或重试后返回队列状态，新一轮发布重新计数。`updated_ns` 记录采样时间。最终确认仍然检查 `remote_confirmed`。

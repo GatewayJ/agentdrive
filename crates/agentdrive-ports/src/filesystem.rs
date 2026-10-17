@@ -23,7 +23,7 @@ pub struct DurabilityReceipt {
     pub mutation_seq: u64,
     pub local_saved: bool,
     pub remote_confirmed: bool,
-    pub operation: OperationId,
+    pub operation: Option<OperationId>,
 }
 
 #[async_trait]
@@ -87,5 +87,5 @@ pub trait FileSystem: Send + Sync {
         directory: bool,
     ) -> Result<()>;
     async fn fsync(&self, context: &FsContext) -> Result<DurabilityReceipt>;
-    async fn statfs(&self, context: &FsContext) -> Result<StorageStats>;
+    async fn statfs(&self, context: &FsContext) -> Result<VolumeStats>;
 }

@@ -54,6 +54,9 @@ pub(crate) fn initialize(connection: &mut Connection, version: u32) -> Result<Lo
         }
     };
     initialize_node_queries(&transaction)?;
+    transaction
+        .execute_batch(include_str!("object_usage.sql"))
+        .map_err(sql_error)?;
     transaction.commit().map_err(sql_error)?;
     Ok(location)
 }
@@ -313,6 +316,30 @@ impl LocalStateStore for LocalBackend {
         )
         .await
     }
+    async fn node_deltas(&self, branch: BranchId) -> Result<Vec<NodeDelta>> {
+        self.db(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT d.previous,n.data FROM node_deltas d LEFT JOIN nodes n ON n.branch=d.branch AND n.path=d.path WHERE d.branch=?1 ORDER BY d.path"
+            ).map_err(sql_error)?;
+            let rows = statement.query_map([branch.to_string()], |row| {
+                Ok((row.get::<_, Option<Vec<u8>>>(0)?, row.get::<_, Option<Vec<u8>>>(1)?))
+            }).map_err(sql_error)?;
+            rows.map(|row| {
+                let (before, after) = row.map_err(sql_error)?;
+                Ok(NodeDelta {
+                    before: before.map(|value| decode(&value)).transpose()?,
+                    after: after.map(|value| decode(&value)).transpose()?,
+                })
+            }).collect()
+        }).await
+    }
+    async fn history_index(&self, branch: BranchId) -> Result<Option<ObjectRef>> {
+        self.one(
+            "SELECT root FROM branch_history WHERE branch=?1",
+            vec![branch.to_string()],
+        )
+        .await
+    }
     async fn children(&self, branch: BranchId, parent: &WorkspacePath) -> Result<Vec<Node>> {
         self.many(
             "SELECT data FROM nodes WHERE branch=?1 AND parent=?2 ORDER BY path",
@@ -500,15 +527,23 @@ impl LocalStateStore for LocalBackend {
             }
             for change in &commit.node_changes {
                 match change {
-                    NodeChange::Put { branch, node } => put_node(&transaction, *branch, node)?,
+                    NodeChange::Put { branch, node } => {
+                        remember_node(&transaction, *branch, &node.path)?;
+                        put_node(&transaction, *branch, node)?;
+                    }
                     NodeChange::Remove { branch, path } => {
+                        remember_node(&transaction, *branch, path)?;
                         transaction.execute("DELETE FROM nodes WHERE branch=?1 AND path=?2", params![branch.to_string(), path.lookup_key()]).map_err(sql_error)?;
                     }
                     NodeChange::Replace { branch, nodes } => {
                         transaction.execute("DELETE FROM nodes WHERE branch=?1", [branch.to_string()]).map_err(sql_error)?;
                         for node in nodes { put_node(&transaction, *branch, node)?; }
+                        transaction.execute("DELETE FROM node_deltas WHERE branch=?1", [branch.to_string()]).map_err(sql_error)?;
                     }
                 }
+            }
+            for branch in &commit.checkpointed_branches {
+                transaction.execute("DELETE FROM node_deltas WHERE branch=?1", [branch.to_string()]).map_err(sql_error)?;
             }
             for revision in &commit.revisions {
                 ensure_root(&transaction, revision.workspace, &revision.root)?;
@@ -525,11 +560,13 @@ impl LocalStateStore for LocalBackend {
             }
             for merge in &commit.merges { upsert(&transaction, "merges", merge.id.to_string(), merge.workspace, merge)?; }
             for job in &commit.sync_jobs {
+                put_history(&transaction, &job.reference)?;
                 transaction.execute("INSERT INTO sync_jobs(id,workspace,branch,source_generation,data) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
                     params![job.operation.to_string(), job.reference.workspace.to_string(), job.reference.branch.to_string(), db_integer(job.reference.source_generation)?, encode(job)?]).map_err(sql_error)?;
             }
             for id in &commit.completed_jobs { transaction.execute("DELETE FROM sync_jobs WHERE id=?1", [id.to_string()]).map_err(sql_error)?; }
             for reference in &commit.remote_refs {
+                put_history(&transaction, reference)?;
                 let existing: Option<BranchRef> = read_one(&transaction, "SELECT data FROM remote_refs WHERE id=?1", &[reference.branch.to_string()])?;
                 if existing.as_ref().is_some_and(|old| old.source_generation > reference.source_generation) { continue; }
                 if existing.as_ref().is_some_and(|old| old.source_generation == reference.source_generation && old != reference) {
@@ -546,6 +583,26 @@ impl LocalStateStore for LocalBackend {
             Ok(())
         }).await
     }
+}
+
+fn remember_node(
+    transaction: &Transaction<'_>,
+    branch: BranchId,
+    path: &WorkspacePath,
+) -> Result<()> {
+    transaction.execute(
+        "INSERT OR IGNORE INTO node_deltas(branch,path,previous) VALUES(?1,?2,(SELECT data FROM nodes WHERE branch=?1 AND path=?2))",
+        params![branch.to_string(), path.lookup_key()],
+    ).map_err(sql_error)?;
+    Ok(())
+}
+
+fn put_history(transaction: &Transaction<'_>, reference: &BranchRef) -> Result<()> {
+    transaction.execute(
+        "INSERT INTO branch_history(branch,source_generation,root) VALUES(?1,?2,?3) ON CONFLICT(branch) DO UPDATE SET source_generation=excluded.source_generation,root=excluded.root WHERE excluded.source_generation>branch_history.source_generation",
+        params![reference.branch.to_string(), db_integer(reference.source_generation)?, encode(&reference.record_index)?],
+    ).map_err(sql_error)?;
+    Ok(())
 }
 
 fn put_operation(transaction: &Transaction<'_>, record: &OperationRecord) -> Result<()> {

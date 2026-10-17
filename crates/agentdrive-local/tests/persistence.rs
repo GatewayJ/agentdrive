@@ -81,6 +81,7 @@ fn operation(request: &str) -> OperationRecord {
         error: None,
         pending: None,
         created_ns: 1,
+        sync_progress: None,
     }
 }
 
@@ -156,4 +157,43 @@ fn unknown_database_format_is_unchanged() {
         ErrorCode::Unsupported
     );
     assert_eq!(before, std::fs::read(database).unwrap());
+}
+
+#[tokio::test]
+async fn object_usage_survives_duplicates_migration_and_removal() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = LocalBackend::open(dir.path()).unwrap();
+    let workspace = WorkspaceId::new();
+    let value = Bytes::from_static(b"accounted bytes");
+    let object = backend
+        .put(workspace, ObjectKind::File, value.clone())
+        .await
+        .unwrap();
+    backend
+        .put(workspace, ObjectKind::File, value)
+        .await
+        .unwrap();
+    assert_eq!(backend.stats().await.unwrap().protected_bytes, object.size);
+    backend.confirm_remote(workspace, &object).await.unwrap();
+    backend.confirm_remote(workspace, &object).await.unwrap();
+    let stats = backend.stats().await.unwrap();
+    assert_eq!(
+        (stats.cached_bytes, stats.protected_bytes),
+        (object.size, 0)
+    );
+    drop(backend);
+    let db = rusqlite::Connection::open(dir.path().join("meta.db")).unwrap();
+    db.execute_batch("DROP TRIGGER objects_usage_insert; DROP TRIGGER objects_usage_update; DROP TRIGGER objects_usage_delete; DROP TABLE object_usage;").unwrap();
+    drop(db);
+    let backend = LocalBackend::open(dir.path()).unwrap();
+    assert_eq!(backend.stats().await.unwrap().cached_bytes, object.size);
+    assert!(
+        !backend
+            .discard_unconfirmed(workspace, &object)
+            .await
+            .unwrap()
+    );
+    assert!(backend.evict(workspace, &object).await.unwrap());
+    assert_eq!(backend.stats().await.unwrap().cached_bytes, 0);
+    assert!(backend.volume_stats().await.unwrap().total_bytes > 0);
 }

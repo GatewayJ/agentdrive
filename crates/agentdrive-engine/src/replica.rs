@@ -3,8 +3,12 @@ use agentdrive_model::*;
 use agentdrive_ports::*;
 use async_trait::async_trait;
 use futures::{StreamExt, stream::FuturesUnordered};
-use std::{collections::BTreeMap, sync::Arc};
-use tokio::sync::{Mutex, Semaphore};
+use parking_lot::Mutex as ProgressMutex;
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Weak},
+};
+use tokio::sync::{Mutex, RwLock, Semaphore};
 
 #[derive(Debug)]
 pub struct ReplicaService {
@@ -12,8 +16,63 @@ pub struct ReplicaService {
     trees: Arc<TreeService>,
     content: Arc<ContentService>,
     operations: Arc<OperationService>,
-    pub(crate) publication: Mutex<()>,
+    pub(crate) publication: RwLock<()>,
+    workspaces: ProgressMutex<BTreeMap<WorkspaceId, Weak<Mutex<()>>>>,
     uploads: Semaphore,
+}
+
+fn compatible(previous: &BranchRef, next: &BranchRef) -> bool {
+    previous.workspace == next.workspace
+        && previous.branch == next.branch
+        && previous.owner == next.owner
+        && previous.authority_epoch == next.authority_epoch
+        && previous.generation == next.generation
+        && previous.source_generation.checked_add(1) == Some(next.source_generation)
+        && previous.durable_seq <= next.durable_seq
+        && !previous.deleted
+        && !next.deleted
+        && !previous.write_stopped
+        && !next.write_stopped
+}
+
+struct SyncActivity {
+    runtime: Arc<Runtime>,
+    operations: Vec<OperationId>,
+    progress: Arc<ProgressMutex<SyncProgress>>,
+}
+
+impl SyncActivity {
+    fn new(runtime: Arc<Runtime>, jobs: &[SyncJob], pending_jobs: usize) -> Self {
+        let progress = Arc::new(ProgressMutex::new(SyncProgress {
+            stage: SyncStage::Preparing,
+            pending_jobs,
+            jobs_before: 0,
+            batch_jobs: jobs.len(),
+            total_objects: None,
+            completed_objects: 0,
+            total_bytes: None,
+            completed_bytes: 0,
+            updated_ns: runtime.clock.now_ns(),
+        }));
+        let operations: Vec<_> = jobs.iter().map(|job| job.operation).collect();
+        for id in &operations {
+            runtime.sync_progress.lock().insert(*id, progress.clone());
+        }
+        Self {
+            runtime,
+            operations,
+            progress,
+        }
+    }
+}
+
+impl Drop for SyncActivity {
+    fn drop(&mut self) {
+        let mut progress = self.runtime.sync_progress.lock();
+        for id in &self.operations {
+            progress.remove(id);
+        }
+    }
 }
 
 impl ReplicaService {
@@ -28,7 +87,8 @@ impl ReplicaService {
             trees,
             content,
             operations,
-            publication: Mutex::new(()),
+            publication: RwLock::new(()),
+            workspaces: ProgressMutex::new(BTreeMap::new()),
             uploads: Semaphore::new(4),
         })
     }
@@ -37,6 +97,17 @@ impl ReplicaService {
         &self,
         workspace: WorkspaceId,
         roots: Vec<ObjectRef>,
+    ) -> Result<()> {
+        self.upload_closure_progress(workspace, roots, Vec::new(), None)
+            .await
+    }
+
+    async fn upload_closure_progress(
+        &self,
+        workspace: WorkspaceId,
+        roots: Vec<ObjectRef>,
+        retained: Vec<ObjectRef>,
+        progress: Option<&Arc<ProgressMutex<SyncProgress>>>,
     ) -> Result<()> {
         let remote = self.content.remote().ok_or_else(|| {
             Error::new(
@@ -53,15 +124,30 @@ impl ReplicaService {
                         Error::new(ErrorCode::Unavailable, "upload scheduler closed")
                     })?;
                 remote
-                    .upload(
-                        workspace,
-                        self.content.local.open(workspace, &object).await?,
-                    )
+                    .upload(workspace, self.content.open(workspace, &object).await?)
                     .await?;
-                self.content.local.confirm_remote(workspace, &object).await
+                self.content
+                    .local
+                    .confirm_remote(workspace, &object)
+                    .await?;
+                if let Some(progress) = progress {
+                    let mut progress = progress.lock();
+                    progress.completed_objects += 1;
+                    progress.completed_bytes += object.size;
+                    progress.updated_ns = self.runtime.clock.now_ns();
+                }
+                Ok(())
             }
         };
-        let mut objects = self.trees.closure(workspace, roots).await?.into_iter();
+        let objects = self.trees.closure_delta(workspace, roots, retained).await?;
+        if let Some(progress) = progress {
+            let mut progress = progress.lock();
+            progress.stage = SyncStage::Transferring;
+            progress.total_objects = Some(objects.len() as u64);
+            progress.total_bytes = Some(objects.iter().map(|object| object.size).sum());
+            progress.updated_ns = self.runtime.clock.now_ns();
+        }
+        let mut objects = objects.into_iter();
         let mut pending = FuturesUnordered::new();
         for object in objects.by_ref().take(4) {
             pending.push(upload(object));
@@ -89,67 +175,140 @@ impl ReplicaService {
         reference: &BranchRef,
         operation: &OperationRecord,
     ) -> Result<bool> {
-        for entry in self
+        let Some(HistoryRecord::Operation(existing)) = self
+            .trees
+            .index_entry::<HistoryRecord>(
+                reference.workspace,
+                &reference.record_index,
+                &format!("operation/{}", operation.id),
+            )
+            .await?
+        else {
+            return Ok(false);
+        };
+        if existing.fingerprint != operation.fingerprint
+            || existing.principal != operation.principal
+            || existing.result != operation.result
+            || existing.branch != operation.branch
+        {
+            return Err(Error::integrity(
+                "remote operation result differs from its local durable result",
+            ));
+        }
+        Ok(true)
+    }
+
+    async fn verify_batch(&self, reference: &BranchRef, jobs: &[SyncJob]) -> Result<()> {
+        if let [job] = jobs {
+            let operation = self
+                .runtime
+                .state
+                .operation(job.operation)
+                .await?
+                .ok_or_else(|| Error::integrity("sync job operation is missing"))?;
+            return if self.contains_operation(reference, &operation).await? {
+                Ok(())
+            } else {
+                Err(Error::integrity(
+                    "publication does not retain a covered operation",
+                ))
+            };
+        }
+        let records: BTreeMap<_, _> = self
             .trees
             .load_index::<HistoryRecord>(reference.workspace, &reference.record_index, 1_000_000)
             .await?
-        {
-            if let HistoryRecord::Operation(existing) = entry.value
-                && existing.id == operation.id
-            {
-                if existing.fingerprint != operation.fingerprint
-                    || existing.principal != operation.principal
-                    || existing.result != operation.result
-                {
-                    return Err(Error::integrity(
-                        "remote operation result differs from its local durable result",
-                    ));
-                }
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    async fn acknowledge(&self, job: &SyncJob, remote: BranchRef) -> Result<()> {
-        let mut operation = self
-            .runtime
-            .state
-            .operation(job.operation)
-            .await?
-            .ok_or_else(|| Error::integrity("sync job operation is missing"))?;
-        operation.remote_confirmed = true;
-        operation.error = None;
-        if operation.pending.is_none() {
-            operation.phase = OperationPhase::Complete;
-        }
-        self.runtime
-            .state
-            .commit(LocalCommit {
-                operations: vec![operation],
-                completed_jobs: vec![job.operation],
-                remote_refs: vec![remote],
-                ..Default::default()
+            .into_iter()
+            .filter_map(|entry| match entry.value {
+                HistoryRecord::Operation(record) => Some((record.id, record)),
+                _ => None,
             })
-            .await?;
-        if let Err(error) = self
-            .content
-            .release_remote(job.reference.workspace, job.operation)
-            .await
-        {
-            tracing::warn!(operation = %job.operation, error = %error, "publication confirmed; retention registration remains for recovery");
+            .collect();
+        for job in jobs {
+            let local = self
+                .runtime
+                .state
+                .operation(job.operation)
+                .await?
+                .ok_or_else(|| Error::integrity("sync job operation is missing"))?;
+            let remote = records.get(&job.operation).ok_or_else(|| {
+                Error::integrity("publication does not retain a covered operation")
+            })?;
+            if remote.fingerprint != local.fingerprint
+                || remote.principal != local.principal
+                || remote.result != local.result
+                || remote.branch != local.branch
+            {
+                return Err(Error::integrity(
+                    "publication changed a covered operation result",
+                ));
+            }
         }
         Ok(())
     }
 
-    async fn publish_job(&self, job: &SyncJob) -> Result<()> {
+    async fn acknowledge(
+        &self,
+        jobs: &[SyncJob],
+        remote: BranchRef,
+        progress: &Arc<ProgressMutex<SyncProgress>>,
+    ) -> Result<()> {
+        let mut commit = LocalCommit::default();
+        let mut completed = progress.lock().clone();
+        completed.stage = SyncStage::Complete;
+        completed.pending_jobs = completed.pending_jobs.saturating_sub(jobs.len());
+        completed.updated_ns = self.runtime.clock.now_ns();
+        for job in jobs {
+            let mut operation = self
+                .runtime
+                .state
+                .operation(job.operation)
+                .await?
+                .ok_or_else(|| Error::integrity("sync job operation is missing"))?;
+            operation.remote_confirmed = true;
+            operation.error = None;
+            operation.sync_progress = Some(completed.clone());
+            if operation.pending.is_none() {
+                operation.phase = OperationPhase::Complete;
+            }
+            commit.operations.push(operation);
+            commit.completed_jobs.push(job.operation);
+        }
+        commit.remote_refs.push(remote.clone());
+        self.runtime.state.commit(commit).await?;
+        if let Err(error) = self
+            .content
+            .control(remote.workspace, |control| {
+                let mut changed = false;
+                for job in jobs {
+                    changed |= control.active_operations.remove(&job.operation).is_some();
+                    changed |= control.history_pins.remove(&job.operation).is_some();
+                }
+                Ok(changed)
+            })
+            .await
+        {
+            tracing::warn!(%error, "publication confirmed; retention registration remains for recovery");
+        }
+        Ok(())
+    }
+
+    async fn publish_batch(
+        &self,
+        jobs: &[SyncJob],
+        progress: &Arc<ProgressMutex<SyncProgress>>,
+    ) -> Result<()> {
         let refs = self.content.refs().ok_or_else(|| {
             Error::new(
                 ErrorCode::RemoteRequired,
                 "remote storage is not configured",
             )
         })?;
+        let job = jobs
+            .last()
+            .ok_or_else(|| Error::integrity("empty publication batch"))?;
         let reference = &job.reference;
+        self.verify_batch(reference, jobs).await?;
         let operation = self
             .runtime
             .state
@@ -173,11 +332,13 @@ impl ReplicaService {
         let mut uploaded = false;
         for _ in 0..8 {
             let current = refs.get(&key).await?;
+            let mut retained = Vec::new();
             if let Some(current) = &current {
                 let remote =
                     decode_branch_ref(reference.workspace, reference.branch, &current.bytes)?;
                 if remote == *reference || self.contains_operation(&remote, &operation).await? {
-                    return self.acknowledge(job, remote).await;
+                    self.verify_batch(&remote, jobs).await?;
+                    return self.acknowledge(jobs, remote, progress).await;
                 }
                 if remote.owner != reference.owner
                     || remote.authority_epoch != reference.authority_epoch
@@ -192,6 +353,7 @@ impl ReplicaService {
                         "remote publication is ahead without the expected operation record",
                     ));
                 }
+                retained.extend([remote.working_root, remote.record_index]);
             } else if reference.authority_epoch != 1 {
                 return Err(Error::new(
                     ErrorCode::StaleAuthority,
@@ -199,24 +361,33 @@ impl ReplicaService {
                 ));
             }
             if !uploaded {
-                self.upload_closure(
+                self.upload_closure_progress(
                     reference.workspace,
                     vec![
                         reference.working_root.clone(),
                         reference.record_index.clone(),
                     ],
+                    retained,
+                    Some(progress),
                 )
                 .await?;
                 uploaded = true;
             }
-            let update = RefUpdate {
-                key: key.clone(),
-                expected_version: current.map(|value| value.version),
-                bytes: encode(reference)?.into(),
-            };
-            match refs.compare_exchange(update).await? {
+            {
+                let mut progress = progress.lock();
+                progress.stage = SyncStage::Publishing;
+                progress.updated_ns = self.runtime.clock.now_ns();
+            }
+            match refs
+                .compare_exchange(RefUpdate {
+                    key: key.clone(),
+                    expected_version: current.map(|value| value.version),
+                    bytes: encode(reference)?.into(),
+                })
+                .await?
+            {
                 CasOutcome::Applied { .. } => {
-                    return self.acknowledge(job, reference.clone()).await;
+                    return self.acknowledge(jobs, reference.clone(), progress).await;
                 }
                 CasOutcome::Conflict | CasOutcome::Unknown => continue,
             }
@@ -409,39 +580,68 @@ impl ReplicaPublisher for ReplicaService {
     }
 
     async fn drain(&self, workspace: WorkspaceId, branch: Option<BranchId>) -> Result<()> {
-        let _publication = self.publication.lock().await;
+        let _publication = self.publication.read().await;
+        let gate = {
+            let mut workspaces = self.workspaces.lock();
+            if let Some(gate) = workspaces.get(&workspace).and_then(Weak::upgrade) {
+                gate
+            } else {
+                workspaces.retain(|_, gate| gate.strong_count() != 0);
+                let gate = Arc::new(Mutex::new(()));
+                workspaces.insert(workspace, Arc::downgrade(&gate));
+                gate
+            }
+        };
+        let _workspace = gate.lock().await;
         self.publish_workspace(workspace).await?;
-        let mut blocked = std::collections::BTreeSet::new();
-        let mut first_error = None;
-        for mut job in self.runtime.state.sync_jobs(workspace).await? {
-            if branch.is_some_and(|branch| branch != job.reference.branch)
-                || blocked.contains(&job.reference.branch)
-            {
+        let jobs = self.runtime.state.sync_jobs(workspace).await?;
+        let mut batches: Vec<Vec<SyncJob>> = Vec::new();
+        for job in jobs {
+            if branch.is_some_and(|branch| branch != job.reference.branch) {
                 continue;
             }
-            if let Err(error) = self.publish_job(&job).await {
-                job.attempts = job.attempts.saturating_add(1);
-                job.error = Some(error.clone());
-                let mut operation = self
-                    .runtime
-                    .state
-                    .operation(job.operation)
-                    .await?
-                    .ok_or_else(|| Error::integrity("sync operation is missing"))?;
-                operation.error = Some(error.clone());
-                if operation.pending.is_none() {
-                    operation.phase = OperationPhase::LocalSaved;
+            if let Some(batch) = batches.last_mut()
+                && compatible(&batch[batch.len() - 1].reference, &job.reference)
+            {
+                batch.push(job);
+            } else {
+                batches.push(vec![job]);
+            }
+        }
+        let mut blocked = std::collections::BTreeSet::new();
+        let mut first_error = None;
+        for batch in batches {
+            let id = batch[0].reference.branch;
+            if blocked.contains(&id) {
+                continue;
+            }
+            let activity = SyncActivity::new(
+                self.runtime.clone(),
+                &batch,
+                self.runtime.state.sync_jobs(workspace).await?.len(),
+            );
+            if let Err(error) = self.publish_batch(&batch, &activity.progress).await {
+                let mut commit = LocalCommit::default();
+                for mut job in batch {
+                    job.attempts = job.attempts.saturating_add(1);
+                    job.error = Some(error.clone());
+                    let mut operation = self
+                        .runtime
+                        .state
+                        .operation(job.operation)
+                        .await?
+                        .ok_or_else(|| Error::integrity("sync operation is missing"))?;
+                    operation.error = Some(error.clone());
+                    operation.sync_progress = Some(activity.progress.lock().clone());
+                    if operation.pending.is_none() {
+                        operation.phase = OperationPhase::LocalSaved;
+                    }
+                    commit.sync_jobs.push(job);
+                    commit.operations.push(operation);
                 }
-                let mut commit = LocalCommit {
-                    sync_jobs: vec![job.clone()],
-                    operations: vec![operation],
-                    ..Default::default()
-                };
                 if error.code == ErrorCode::StaleAuthority {
-                    let _gate = self.runtime.lock_branch(job.reference.branch).await;
-                    if let Some(mut branch) =
-                        self.runtime.state.branch(job.reference.branch).await?
-                    {
+                    let _gate = self.runtime.lock_branch(id).await;
+                    if let Some(mut branch) = self.runtime.state.branch(id).await? {
                         branch.state = BranchState::Stopped;
                         commit.branches.push(branch);
                     }
@@ -449,7 +649,7 @@ impl ReplicaPublisher for ReplicaService {
                 } else {
                     self.runtime.state.commit(commit).await?;
                 }
-                blocked.insert(job.reference.branch);
+                blocked.insert(id);
                 first_error.get_or_insert(error);
             }
         }
@@ -462,42 +662,79 @@ impl ReplicaPublisher for ReplicaService {
         new_revision: Option<&Revision>,
         operation: &OperationRecord,
     ) -> Result<SyncJob> {
+        let base = self.runtime.state.history_index(branch.id).await?;
         let mut records = BTreeMap::new();
-        for revision in self.runtime.state.revisions(branch.workspace).await? {
-            records.insert(
-                format!("revision/{}", revision.id),
-                HistoryRecord::Revision(revision),
-            );
+        if base.is_none() {
+            for revision in self.runtime.state.revisions(branch.workspace).await? {
+                records.insert(
+                    format!("revision/{}", revision.id),
+                    HistoryRecord::Revision(revision),
+                );
+            }
+            for mut record in self.runtime.state.operations(branch.workspace).await? {
+                if record.branch == Some(branch.id) && record.local_saved {
+                    record.sync_progress = None;
+                    records.insert(
+                        format!("operation/{}", record.id),
+                        HistoryRecord::Operation(Box::new(record)),
+                    );
+                }
+            }
         }
         if let Some(revision) = new_revision {
+            let mut parents = revision.parents.clone();
+            while let Some(id) = parents.pop() {
+                let key = format!("revision/{id}");
+                if records.contains_key(&key) {
+                    continue;
+                }
+                if let Some(base) = &base
+                    && self
+                        .trees
+                        .index_entry::<HistoryRecord>(branch.workspace, base, &key)
+                        .await?
+                        .is_some()
+                {
+                    continue;
+                }
+                let parent = self.trees.revision(branch.workspace, id).await?;
+                parents.extend(parent.parents.iter().copied());
+                records.insert(key, HistoryRecord::Revision(parent));
+            }
             records.insert(
                 format!("revision/{}", revision.id),
                 HistoryRecord::Revision(revision.clone()),
             );
         }
-        for record in self.runtime.state.operations(branch.workspace).await? {
-            if record.branch == Some(branch.id) && record.local_saved {
-                records.insert(
-                    format!("operation/{}", record.id),
-                    HistoryRecord::Operation(Box::new(record)),
-                );
-            }
-        }
+        let mut record = operation.clone();
+        record.sync_progress = None;
         records.insert(
             format!("operation/{}", operation.id),
-            HistoryRecord::Operation(Box::new(operation.clone())),
+            HistoryRecord::Operation(Box::new(record)),
         );
-        let record_index = self
-            .trees
-            .save_index(
-                branch.workspace,
-                ObjectKind::RecordIndex,
-                records
-                    .into_iter()
-                    .map(|(key, value)| IndexEntry { key, value })
-                    .collect(),
-            )
-            .await?;
+        let record_index = if let Some(base) = base {
+            self.trees
+                .update_index(
+                    branch.workspace,
+                    &base,
+                    records
+                        .into_iter()
+                        .map(|(key, value)| (key, Some(value)))
+                        .collect(),
+                )
+                .await?
+        } else {
+            self.trees
+                .save_index(
+                    branch.workspace,
+                    ObjectKind::RecordIndex,
+                    records
+                        .into_iter()
+                        .map(|(key, value)| IndexEntry { key, value })
+                        .collect(),
+                )
+                .await?
+        };
         Ok(SyncJob {
             operation: operation.id,
             reference: BranchRef {

@@ -8,6 +8,11 @@ use agentdrive_ports::*;
 use async_trait::async_trait;
 use std::{collections::BTreeSet, sync::Arc};
 
+pub(crate) struct ForkSource {
+    pub revision: RevisionId,
+    pub working_root: Option<ObjectRef>,
+}
+
 pub struct RevisionService {
     pub(crate) runtime: Arc<Runtime>,
     pub(crate) trees: Arc<TreeService>,
@@ -23,6 +28,29 @@ impl std::fmt::Debug for RevisionService {
 }
 
 impl RevisionService {
+    pub(crate) async fn finish_bounded(
+        self: &Arc<Self>,
+        operation: OperationRecord,
+        durability: Durability,
+        wait_ms: u64,
+    ) -> Result<OperationRecord> {
+        if durability == Durability::Local {
+            return self.operations.progress(operation).await;
+        }
+        let id = operation.id;
+        let actor = operation.principal.clone();
+        let service = self.clone();
+        // The publication owns its cleanup even after the caller stops waiting.
+        let task =
+            tokio::spawn(async move { service.finish_durability(operation, durability).await });
+        match tokio::time::timeout(std::time::Duration::from_millis(wait_ms), task).await {
+            Ok(result) => {
+                result.map_err(|error| Error::new(ErrorCode::Unavailable, error.to_string()))??;
+                self.operations.get(&actor, id).await
+            }
+            Err(_) => self.operations.get(&actor, id).await,
+        }
+    }
     pub fn new(
         runtime: Arc<Runtime>,
         trees: Arc<TreeService>,
@@ -37,6 +65,49 @@ impl RevisionService {
             publisher,
             snapshots,
         })
+    }
+
+    pub(crate) async fn autosave(&self, id: BranchId, actor: Principal) -> Result<()> {
+        let _gate = self.runtime.lock_branch(id).await;
+        let _protection = self.runtime.objects.read().await;
+        let branch = self.runtime.branch(id).await?;
+        let guard = BranchGuard::from(&branch);
+        let start = self
+            .operations
+            .start(
+                RequestContext {
+                    principal: actor,
+                    request_id: format!("autosave-{}", OperationId::new()),
+                },
+                "autosave",
+                &guard,
+                Some(branch.workspace),
+                Some(id),
+            )
+            .await?;
+        let OperationStart::New(context) = start else {
+            return Err(Error::integrity(
+                "generated autosave operation already exists",
+            ));
+        };
+        if let Err(error) = self
+            .save_locked(
+                context.clone(),
+                SaveRevision {
+                    message: None,
+                    guard,
+                    kind: RevisionKind::Autosave,
+                    parents: None,
+                    replace_root: None,
+                    durability: Durability::Local,
+                },
+            )
+            .await
+        {
+            self.operations.fail(&context, error.clone()).await?;
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub(crate) async fn finish_durability(
@@ -55,6 +126,9 @@ impl RevisionService {
                     .operation(operation.id)
                     .await?
                     .ok_or_else(|| Error::integrity("saved operation is missing"))?;
+                if current.remote_confirmed {
+                    return Ok(current);
+                }
                 current.error = Some(error);
                 self.runtime
                     .state
@@ -141,10 +215,14 @@ impl RevisionService {
             .revision(branch.workspace, branch.formal_head)
             .await?;
         let reuse = request.parents.is_none() && captured.root == formal.root;
+        let autosave_root = if let Some(id) = branch.autosave_head {
+            Some(self.trees.revision(branch.workspace, id).await?.root)
+        } else {
+            None
+        };
         let reuse_autosave = request.parents.is_none()
             && request.kind != RevisionKind::Commit
-            && captured.root == branch.working_root
-            && branch.autosave_head.is_some();
+            && autosave_root.as_ref() == Some(&captured.root);
         let revision_id = if reuse {
             branch.formal_head
         } else if reuse_autosave {
@@ -239,10 +317,22 @@ impl RevisionService {
                 guards: vec![request.guard],
                 branches: vec![branch.clone()],
                 revisions: revision.into_iter().collect(),
-                node_changes: vec![NodeChange::Replace {
-                    branch: branch.id,
-                    nodes: captured.nodes,
-                }],
+                node_changes: if replacing {
+                    vec![NodeChange::Replace {
+                        branch: branch.id,
+                        nodes: captured.nodes,
+                    }]
+                } else {
+                    captured
+                        .nodes
+                        .into_iter()
+                        .map(|node| NodeChange::Put {
+                            branch: branch.id,
+                            node,
+                        })
+                        .collect()
+                },
+                checkpointed_branches: vec![branch.id],
                 operations: vec![operation.clone()],
                 merges,
                 sync_jobs: vec![job],
@@ -259,7 +349,16 @@ impl RevisionService {
         actor: &Principal,
     ) -> Result<Branch> {
         if branch.mutation_seq == branch.saved_seq {
-            return Ok(branch.clone());
+            let version = self
+                .trees
+                .revision(
+                    branch.workspace,
+                    branch.autosave_head.unwrap_or(branch.formal_head),
+                )
+                .await?;
+            if branch.working_root == version.root {
+                return Ok(branch.clone());
+            }
         }
         let request = SaveRevision {
             message: None,
@@ -300,14 +399,15 @@ impl RevisionService {
         &self,
         context: OperationContext,
         workspace: WorkspaceId,
-        source: RevisionId,
+        source: ForkSource,
         name: String,
         source_branch: Option<BranchId>,
         select: bool,
     ) -> Result<OperationRecord> {
         validate_label(&name, "branch name")?;
-        let revision = self.trees.revision(workspace, source).await?;
-        let tree = self.trees.tree(workspace, &revision.root).await?;
+        let revision = self.trees.revision(workspace, source.revision).await?;
+        let root = source.working_root.unwrap_or_else(|| revision.root.clone());
+        let tree = self.trees.tree(workspace, &root).await?;
         let id = BranchId::new();
         let next_inode = increment(tree.values().map(|inode| inode.id.0).max().unwrap_or(1))?;
         let branch = Branch {
@@ -320,13 +420,13 @@ impl RevisionService {
             mutation_seq: 0,
             saved_seq: 0,
             source_generation: 1,
-            formal_head: source,
+            formal_head: source.revision,
             autosave_head: None,
-            working_root: revision.root.clone(),
-            base_revision: source,
+            working_root: root.clone(),
+            base_revision: source.revision,
             source_branch,
             next_inode,
-            dirty: false,
+            dirty: root != revision.root,
             state: BranchState::Writable,
             protected: false,
         };
@@ -354,7 +454,7 @@ impl RevisionService {
                 } else {
                     Vec::new()
                 },
-                new_branches: vec![branch],
+                new_branches: vec![branch.clone()],
                 node_changes: vec![NodeChange::Replace {
                     branch: id,
                     nodes: tree
@@ -371,6 +471,9 @@ impl RevisionService {
                 ..Default::default()
             })
             .await?;
+        if branch.dirty {
+            self.runtime.mark_dirty(&branch);
+        }
         Ok(operation)
     }
 }
@@ -407,59 +510,97 @@ impl DurabilityService for RevisionService {
         actor: Principal,
         durability: Durability,
     ) -> Result<DurabilityReceipt> {
-        let (operation, sequence) = {
+        let (record, sequence) = {
             let _gate = self.runtime.lock_branch(branch).await;
             let _protection = self.runtime.objects.read().await;
-            let branch = self.runtime.branch(branch).await?;
-            let request = SaveRevision {
-                message: None,
-                guard: BranchGuard::from(&branch),
-                kind: RevisionKind::Autosave,
-                parents: None,
-                replace_root: None,
-                durability,
-            };
-            let context = RequestContext {
-                principal: actor,
-                request_id: format!("fsync-{}", OperationId::new()),
-            };
-            let start = self
-                .operations
-                .start(
-                    context,
-                    "fsync",
-                    &request.guard,
-                    Some(branch.workspace),
-                    Some(branch.id),
-                )
+            let mut branch = self.runtime.branch(branch).await?;
+            branch.check_write(self.runtime.location, branch.authority_epoch)?;
+            self.runtime
+                .authorize(&actor, branch.workspace, Some(branch.id), Permission::Write)
                 .await?;
-            let OperationStart::New(context) = start else {
-                return Err(Error::integrity("generated fsync operation already exists"));
-            };
-            match self.save_locked(context.clone(), request).await {
-                Ok(record) => (record, branch.mutation_seq),
-                Err(error) => {
-                    self.operations.fail(&context, error.clone()).await?;
-                    return Err(error);
-                }
+            let guard = BranchGuard::from(&branch);
+            let mut commit = LocalCommit::default();
+            if branch.saved_seq != branch.mutation_seq {
+                let captured = self.snapshots.capture(&branch).await?;
+                branch.working_root = captured.root;
+                branch.saved_seq = captured.captured_seq;
+                branch.dirty = branch.working_root
+                    != self
+                        .trees
+                        .revision(branch.workspace, branch.formal_head)
+                        .await?
+                        .root;
+                commit.node_changes = captured
+                    .nodes
+                    .into_iter()
+                    .map(|node| NodeChange::Put {
+                        branch: branch.id,
+                        node,
+                    })
+                    .collect();
+                commit.checkpointed_branches.push(branch.id);
+                commit.branches.push(branch.clone());
+                commit.guards.push(guard);
             }
+            let record = if durability == Durability::Remote {
+                let start = self
+                    .operations
+                    .start(
+                        RequestContext {
+                            principal: actor,
+                            request_id: format!("fsync-{}", OperationId::new()),
+                        },
+                        "fsync_checkpoint",
+                        &guard,
+                        Some(branch.workspace),
+                        Some(branch.id),
+                    )
+                    .await?;
+                let OperationStart::New(context) = start else {
+                    return Err(Error::integrity(
+                        "generated checkpoint operation already exists",
+                    ));
+                };
+                let mut operation = context.operation;
+                operation.local_saved = true;
+                operation.phase = OperationPhase::LocalSaved;
+                operation.result = Some(CommandResult::Updated);
+                branch.source_generation = increment(branch.source_generation)?;
+                commit.branches = vec![branch.clone()];
+                commit.operations.push(operation.clone());
+                commit
+                    .sync_jobs
+                    .push(self.publisher.build_job(&branch, None, &operation).await?);
+                Some(operation)
+            } else {
+                None
+            };
+            if !commit.branches.is_empty() {
+                self.runtime.state.commit(commit).await?;
+            }
+            (record, branch.saved_seq)
         };
-        let operation = self.finish_durability(operation, durability).await?;
-        if durability == Durability::Remote && !operation.remote_confirmed {
-            return Err(operation.error.unwrap_or_else(|| {
-                Error::new(
-                    ErrorCode::RemoteUnknown,
-                    "remote durability is not confirmed",
-                )
-                .retryable()
-            }));
-        }
+        let operation = if let Some(record) = record {
+            let operation = self.finish_durability(record, durability).await?;
+            if !operation.remote_confirmed {
+                return Err(operation.error.unwrap_or_else(|| {
+                    Error::new(
+                        ErrorCode::RemoteUnknown,
+                        "remote durability is not confirmed",
+                    )
+                    .retryable()
+                }));
+            }
+            Some(operation.id)
+        } else {
+            None
+        };
         Ok(DurabilityReceipt {
             branch,
             mutation_seq: sequence,
             local_saved: true,
-            remote_confirmed: operation.remote_confirmed,
-            operation: operation.id,
+            remote_confirmed: durability == Durability::Remote,
+            operation,
         })
     }
 }
@@ -618,7 +759,10 @@ impl RevisionApi for VersionService {
                 .fork_locked(
                     operation.clone(),
                     request.workspace,
-                    source,
+                    ForkSource {
+                        revision: source,
+                        working_root: None,
+                    },
                     request.name,
                     source_branch,
                     false,

@@ -256,13 +256,11 @@ impl CacheApi for CacheService {
 
     async fn collect(&self) -> Result<u64> {
         let _exclusive = self.runtime.objects.write().await;
-        if self.trees.content.remote().is_none() {
-            return Ok(0);
-        }
         let snapshot = self.config.load();
         let config = &snapshot.values.cache;
         let mut entries = Vec::new();
         let mut protected = BTreeSet::new();
+        let mut retained = BTreeSet::new();
         for workspace in self.runtime.state.workspaces().await? {
             for pin in self.runtime.state.cache_pins(workspace.id).await? {
                 protected.extend(
@@ -297,10 +295,49 @@ impl CacheApi for CacheService {
                     .into_iter()
                     .map(|object| (workspace.id, object.id)),
             );
-            for revision in self.runtime.state.revisions(workspace.id).await? {
+            let revisions = self.runtime.state.revisions(workspace.id).await?;
+            let cached = self.trees.content.local.objects(workspace.id).await?;
+            if cached.iter().any(|object| !object.remote_confirmed) {
+                retained.extend(
+                    self.trees
+                        .closure(
+                            workspace.id,
+                            revisions
+                                .iter()
+                                .map(|revision| revision.root.clone())
+                                .collect(),
+                        )
+                        .await?
+                        .into_iter()
+                        .map(|object| (workspace.id, object.id)),
+                );
+            }
+            for revision in revisions {
                 protected.insert((workspace.id, revision.root.id));
             }
-            entries.extend(self.trees.content.local.objects(workspace.id).await?);
+            entries.extend(cached);
+        }
+        retained.extend(protected.iter().cloned());
+        let mut reclaimed = 0;
+        let mut remaining = Vec::new();
+        for entry in entries {
+            if !entry.remote_confirmed
+                && !retained.contains(&(entry.workspace, entry.reference.id.clone()))
+                && self
+                    .trees
+                    .content
+                    .local
+                    .discard_unconfirmed(entry.workspace, &entry.reference)
+                    .await?
+            {
+                reclaimed += entry.reference.size;
+            } else {
+                remaining.push(entry);
+            }
+        }
+        let mut entries = remaining;
+        if self.trees.content.remote().is_none() {
+            return Ok(reclaimed);
         }
         let mut total = entries
             .iter()
@@ -309,7 +346,7 @@ impl CacheApi for CacheService {
         let initial = self.trees.content.local.stats().await?;
         let mut free = initial.available_bytes;
         if total <= config.max_bytes && free >= MIN_FREE_BYTES {
-            return Ok(0);
+            return Ok(reclaimed);
         }
         let target = config.max_bytes - config.max_bytes.div_ceil(4);
         entries.sort_by_key(|entry| entry.last_access_ns);
@@ -332,6 +369,6 @@ impl CacheApi for CacheService {
                 freed = freed.saturating_add(entry.reference.size);
             }
         }
-        Ok(freed)
+        Ok(freed + reclaimed)
     }
 }

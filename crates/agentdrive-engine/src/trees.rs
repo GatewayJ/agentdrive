@@ -2,6 +2,7 @@ use crate::{ContentService, Runtime};
 use agentdrive_model::*;
 use agentdrive_ports::*;
 use async_trait::async_trait;
+use futures::{FutureExt, future::BoxFuture};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -15,6 +16,191 @@ pub struct TreeService {
 }
 
 impl TreeService {
+    pub(crate) async fn index_entry<T: DeserializeOwned>(
+        &self,
+        workspace: WorkspaceId,
+        root: &ObjectRef,
+        key: &str,
+    ) -> Result<Option<T>> {
+        let mut reference = root.clone();
+        for _ in 0..=32 {
+            match decode::<IndexPage<T>>(&self.content.metadata(workspace, &reference).await?)? {
+                IndexPage::Leaf { entries } => {
+                    return Ok(entries
+                        .into_iter()
+                        .find(|entry| entry.key == key)
+                        .map(|entry| entry.value));
+                }
+                IndexPage::Branch { children } => {
+                    let Some(child) = children
+                        .into_iter()
+                        .rev()
+                        .find(|child| child.first_key.as_str() <= key)
+                    else {
+                        return Ok(None);
+                    };
+                    reference = child.object;
+                }
+            }
+        }
+        Err(Error::integrity("index exceeds maximum depth"))
+    }
+    /// Copy only affected index pages; old roots remain readable.
+    pub(crate) async fn update_index<T>(
+        &self,
+        workspace: WorkspaceId,
+        root: &ObjectRef,
+        changes: BTreeMap<String, Option<T>>,
+    ) -> Result<ObjectRef>
+    where
+        T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+    {
+        if changes.is_empty() {
+            return Ok(root.clone());
+        }
+        let mut pages = self
+            .update_page(workspace, root.clone(), changes, 0)
+            .await?;
+        if pages.is_empty() {
+            return self.save_index::<T>(workspace, root.kind, vec![]).await;
+        }
+        while pages.len() > 1 {
+            pages = self
+                .write_index_branches::<T>(workspace, root.kind, pages)
+                .await?;
+        }
+        Ok(pages.remove(0).object)
+    }
+
+    fn update_page<T>(
+        &self,
+        workspace: WorkspaceId,
+        root: ObjectRef,
+        mut changes: BTreeMap<String, Option<T>>,
+        depth: u32,
+    ) -> BoxFuture<'_, Result<Vec<IndexChild>>>
+    where
+        T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+    {
+        async move {
+            if depth > 32 {
+                return Err(Error::integrity("index exceeds maximum depth"));
+            }
+            let bytes = self.content.metadata(workspace, &root).await?;
+            let page: IndexPage<T> = decode(&bytes)?;
+            match page {
+                IndexPage::Leaf { entries } => {
+                    let mut values: BTreeMap<_, _> = entries
+                        .into_iter()
+                        .map(|entry| (entry.key, entry.value))
+                        .collect();
+                    for (key, value) in changes {
+                        if let Some(value) = value {
+                            values.insert(key, value);
+                        } else {
+                            values.remove(&key);
+                        }
+                    }
+                    let entries: Vec<_> = values
+                        .into_iter()
+                        .map(|(key, value)| IndexEntry { key, value })
+                        .collect();
+                    let mut result = Vec::new();
+                    for chunk in entries.chunks(INDEX_PAGE_ENTRIES) {
+                        let data = encode(&IndexPage::Leaf {
+                            entries: chunk.to_vec(),
+                        })?;
+                        let object = if object_ref(root.kind, &data) == root {
+                            root.clone()
+                        } else {
+                            self.content
+                                .local
+                                .put(workspace, root.kind, data.into())
+                                .await?
+                        };
+                        result.push(IndexChild {
+                            first_key: chunk[0].key.clone(),
+                            object,
+                        });
+                    }
+                    Ok(result)
+                }
+                IndexPage::Branch { children } => {
+                    if children.is_empty()
+                        || children
+                            .windows(2)
+                            .any(|pair| pair[0].first_key >= pair[1].first_key)
+                    {
+                        return Err(Error::integrity("invalid index children"));
+                    }
+                    let mut result = Vec::new();
+                    for (index, child) in children.iter().enumerate() {
+                        let rest = children
+                            .get(index + 1)
+                            .map(|next| changes.split_off(&next.first_key))
+                            .unwrap_or_default();
+                        let selected = std::mem::replace(&mut changes, rest);
+                        if selected.is_empty() {
+                            result.push(child.clone());
+                        } else {
+                            result.extend(
+                                self.update_page(
+                                    workspace,
+                                    child.object.clone(),
+                                    selected,
+                                    depth + 1,
+                                )
+                                .await?,
+                            );
+                        }
+                    }
+                    if result.is_empty() {
+                        return Ok(vec![]);
+                    }
+                    let data = encode(&IndexPage::<T>::Branch {
+                        children: result.clone(),
+                    })?;
+                    if object_ref(root.kind, &data) == root {
+                        return Ok(vec![IndexChild {
+                            first_key: result[0].first_key.clone(),
+                            object: root,
+                        }]);
+                    }
+                    self.write_index_branches::<T>(workspace, root.kind, result)
+                        .await
+                }
+            }
+        }
+        .boxed()
+    }
+
+    async fn write_index_branches<T: Serialize>(
+        &self,
+        workspace: WorkspaceId,
+        kind: ObjectKind,
+        children: Vec<IndexChild>,
+    ) -> Result<Vec<IndexChild>> {
+        let mut result = Vec::new();
+        for chunk in children.chunks(INDEX_PAGE_ENTRIES) {
+            let object = self
+                .content
+                .local
+                .put(
+                    workspace,
+                    kind,
+                    encode(&IndexPage::<T>::Branch {
+                        children: chunk.to_vec(),
+                    })?
+                    .into(),
+                )
+                .await?;
+            result.push(IndexChild {
+                first_key: chunk[0].first_key.clone(),
+                object,
+            });
+        }
+        Ok(result)
+    }
     pub fn new(runtime: Arc<Runtime>, content: Arc<ContentService>) -> Arc<Self> {
         Arc::new(Self { runtime, content })
     }
@@ -231,12 +417,62 @@ impl TreeService {
         }
         Ok(result.into_values().collect())
     }
+
+    /// Compare immutable graphs against roots retained by the current remote reference.
+    /// Common subtrees need neither traversal nor another remote integrity check.
+    pub(crate) async fn closure_delta(
+        &self,
+        workspace: WorkspaceId,
+        roots: Vec<ObjectRef>,
+        retained: Vec<ObjectRef>,
+    ) -> Result<Vec<ObjectRef>> {
+        let mut old: BTreeMap<_, _> = retained.iter().map(|r| (r.id.clone(), r.clone())).collect();
+        let mut pending_old = retained;
+        let mut pending_new = roots;
+        let mut result = BTreeMap::new();
+        let mut seen_old = BTreeSet::new();
+        while !pending_new.is_empty() {
+            let new_ids: BTreeSet<_> = pending_new.iter().map(|r| r.id.clone()).collect();
+            let mut next_old = Vec::new();
+            for reference in pending_old {
+                if !seen_old.insert(reference.id.clone()) || new_ids.contains(&reference.id) {
+                    continue;
+                }
+                for child in self.children(workspace, &reference).await? {
+                    if let Some(existing) = old.insert(child.id.clone(), child.clone())
+                        && existing != child
+                    {
+                        return Err(Error::integrity("object has conflicting references"));
+                    }
+                    next_old.push(child);
+                }
+            }
+            pending_old = next_old;
+            let mut next_new = Vec::new();
+            for reference in pending_new {
+                if let Some(existing) = old.get(&reference.id).or_else(|| result.get(&reference.id))
+                {
+                    if existing != &reference {
+                        return Err(Error::integrity("object has conflicting references"));
+                    }
+                    continue;
+                }
+                next_new.extend(self.children(workspace, &reference).await?);
+                result.insert(reference.id.clone(), reference);
+            }
+            pending_new = next_new;
+        }
+        Ok(result
+            .into_iter()
+            .filter_map(|(id, reference)| (!old.contains_key(&id)).then_some(reference))
+            .collect())
+    }
 }
 
-fn inode_key(id: InodeId) -> String {
+pub(crate) fn inode_key(id: InodeId) -> String {
     format!("{:020}", id.0)
 }
-fn directory_key(entry: &DirectoryEntry) -> Result<String> {
+pub(crate) fn directory_key(entry: &DirectoryEntry) -> Result<String> {
     Ok(format!(
         "{}/{}",
         inode_key(entry.parent),
@@ -441,5 +677,187 @@ impl RevisionReader for TreeService {
                 .into(),
             )
             .await
+    }
+}
+
+#[cfg(test)]
+mod incremental_tests {
+    use super::*;
+    use agentdrive_local::LocalBackend;
+    use agentdrive_test_support::ManualClock;
+
+    #[tokio::test]
+    async fn graph_delta_covers_new_objects_across_index_growth_and_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = Arc::new(LocalBackend::open(dir.path()).unwrap());
+        let runtime = Runtime::new(local.clone(), Arc::new(ManualClock::default()))
+            .await
+            .unwrap();
+        let trees = TreeService::new(runtime, ContentService::new(local, None, None));
+        let workspace = WorkspaceId::new();
+        let entry = |i: u64| DirectoryEntry {
+            parent: InodeId::ROOT,
+            name: format!("file-{i:05}"),
+            inode: InodeId(i + 2),
+        };
+        let first = trees
+            .save_index(
+                workspace,
+                ObjectKind::DirectoryIndex,
+                (0..128)
+                    .map(|i| {
+                        let value = entry(i);
+                        IndexEntry {
+                            key: directory_key(&value).unwrap(),
+                            value,
+                        }
+                    })
+                    .collect(),
+            )
+            .await
+            .unwrap();
+        let mut previous = first;
+        for count in [260u64, 400, 80, 0] {
+            let changes = (0..400u64)
+                .map(|i| {
+                    (
+                        directory_key(&entry(i)).unwrap(),
+                        (i < count).then(|| entry(i)),
+                    )
+                })
+                .collect();
+            let next = trees
+                .update_index(workspace, &previous, changes)
+                .await
+                .unwrap();
+            let old: BTreeSet<_> = trees
+                .closure(workspace, vec![previous.clone()])
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .collect();
+            let needed: BTreeSet<_> = trees
+                .closure(workspace, vec![next.clone()])
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .filter(|id| !old.contains(id))
+                .collect();
+            let delta: BTreeSet<_> = trees
+                .closure_delta(workspace, vec![next.clone()], vec![previous])
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .collect();
+            assert_eq!(needed, delta);
+            assert!(
+                trees
+                    .closure_delta(workspace, vec![next.clone()], vec![next.clone()])
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            previous = next;
+        }
+    }
+
+    #[tokio::test]
+    async fn index_edits_preserve_old_roots_and_handle_multiple_levels() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = Arc::new(LocalBackend::open(dir.path()).unwrap());
+        let runtime = Runtime::new(local.clone(), Arc::new(ManualClock::default()))
+            .await
+            .unwrap();
+        let trees = TreeService::new(runtime, ContentService::new(local.clone(), None, None));
+        let workspace = WorkspaceId::new();
+        let expected: BTreeMap<_, _> = (0..17_000u64).map(|i| (format!("{i:08}"), i)).collect();
+        let root = trees
+            .save_index(
+                workspace,
+                ObjectKind::DirectoryIndex,
+                expected
+                    .iter()
+                    .map(|(key, value)| IndexEntry {
+                        key: key.clone(),
+                        value: *value,
+                    })
+                    .collect(),
+            )
+            .await
+            .unwrap();
+        let before = local.objects(workspace).await.unwrap().len();
+        let changed = trees
+            .update_index(
+                workspace,
+                &root,
+                BTreeMap::from([("00008191".into(), Some(999_999u64))]),
+            )
+            .await
+            .unwrap();
+        assert!(local.objects(workspace).await.unwrap().len() - before <= 3);
+        assert_eq!(
+            trees
+                .index_entry::<u64>(workspace, &changed, "00008191")
+                .await
+                .unwrap(),
+            Some(999_999)
+        );
+        assert_eq!(
+            trees
+                .index_entry::<u64>(workspace, &root, "00008191")
+                .await
+                .unwrap(),
+            Some(8191)
+        );
+        let mut changes: BTreeMap<_, Option<u64>> =
+            expected.keys().map(|key| (key.clone(), None)).collect();
+        changes.insert("!first".into(), Some(1));
+        changes.insert("zz-last".into(), Some(2));
+        let small = trees
+            .update_index(workspace, &changed, changes)
+            .await
+            .unwrap();
+        assert_eq!(
+            trees
+                .load_index::<u64>(workspace, &small, 20_000)
+                .await
+                .unwrap(),
+            vec![
+                IndexEntry {
+                    key: "!first".into(),
+                    value: 1
+                },
+                IndexEntry {
+                    key: "zz-last".into(),
+                    value: 2
+                }
+            ]
+        );
+        let empty = trees
+            .update_index::<u64>(
+                workspace,
+                &small,
+                BTreeMap::from([("!first".into(), None), ("zz-last".into(), None)]),
+            )
+            .await
+            .unwrap();
+        assert!(
+            trees
+                .load_index::<u64>(workspace, &empty, 20_000)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            trees
+                .load_index::<u64>(workspace, &root, 20_000)
+                .await
+                .unwrap()
+                .len(),
+            17_000
+        );
     }
 }

@@ -20,6 +20,36 @@ use std::{
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
 
 impl LocalBackend {
+    async fn remove_cached(
+        &self,
+        workspace: WorkspaceId,
+        object: &ObjectRef,
+        confirmed: bool,
+    ) -> Result<bool> {
+        let object = object.clone();
+        self.blocking(move |backend| {
+            let _guard = backend.inner.object_io.lock();
+            let key = (workspace, object.id.clone());
+            if backend.inner.leases.lock().get(&key).is_some_and(|count| *count > 0) { return Ok(false); }
+            let mut connection = backend.inner.connection.lock();
+            let transaction = connection.transaction().map_err(sql_error)?;
+            let eligible: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM objects WHERE workspace=?1 AND hash=?2 AND remote_confirmed=?3)",
+                params![workspace.to_string(), object.id.as_str(), confirmed], |row| row.get(0)).map_err(sql_error)?;
+            if !eligible { return Ok(false); }
+            let path = backend.object_path(workspace, &object.id);
+            match std::fs::remove_file(&path) {
+                Ok(()) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                Err(error) => return Err(error.into()),
+            }
+            sync_directory(path.parent().ok_or_else(|| Error::integrity("object path has no parent"))?)?;
+            transaction.execute("DELETE FROM objects WHERE workspace=?1 AND hash=?2", params![workspace.to_string(), object.id.as_str()]).map_err(sql_error)?;
+            transaction.commit().map_err(sql_error)?;
+            backend.inner.verified.lock().remove(&key);
+            Ok(true)
+        }).await
+    }
+
     pub(crate) fn object_path(&self, workspace: WorkspaceId, object: &ObjectId) -> PathBuf {
         self.inner
             .root
@@ -108,6 +138,33 @@ impl LocalBackend {
             return Err(Error::integrity(
                 "downloaded object failed digest verification",
             ));
+        }
+        let existing = reference.clone();
+        let reusable = self
+            .blocking(move |backend| {
+                let _guard = backend.inner.object_io.lock();
+                let indexed: bool = backend
+                    .inner
+                    .connection
+                    .lock()
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM objects WHERE workspace=?1 AND hash=?2)",
+                        params![workspace.to_string(), existing.id.as_str()],
+                        |row| row.get(0),
+                    )
+                    .map_err(sql_error)?;
+                if !indexed {
+                    return Ok(false);
+                }
+                match backend.verify_file(workspace, &existing) {
+                    Ok(_) => Ok(true),
+                    Err(error) if error.code == ErrorCode::NotFound => Ok(false),
+                    Err(error) => Err(error),
+                }
+            })
+            .await?;
+        if reusable {
+            return Ok(reference);
         }
         output.sync_all().await?;
         drop(output);
@@ -294,7 +351,7 @@ impl LocalObjectStore for LocalBackend {
         self.db(move |connection| {
             connection
                 .execute(
-                    "UPDATE objects SET remote_confirmed=1 WHERE workspace=?1 AND hash=?2",
+                    "UPDATE objects SET remote_confirmed=1 WHERE workspace=?1 AND hash=?2 AND remote_confirmed=0",
                     params![workspace.to_string(), id.as_str()],
                 )
                 .map_err(sql_error)?;
@@ -315,38 +372,48 @@ impl LocalObjectStore for LocalBackend {
     }
 
     async fn evict(&self, workspace: WorkspaceId, object: &ObjectRef) -> Result<bool> {
-        let object = object.clone();
-        self.blocking(move |backend| {
-            let _guard = backend.inner.object_io.lock();
-            let key = (workspace, object.id.clone());
-            if backend.inner.leases.lock().get(&key).is_some_and(|count| *count > 0) { return Ok(false); }
-            let mut connection = backend.inner.connection.lock();
-            let transaction = connection.transaction().map_err(sql_error)?;
-            let eligible: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM objects WHERE workspace=?1 AND hash=?2 AND remote_confirmed=1)",
-                params![workspace.to_string(), object.id.as_str()], |row| row.get(0)).map_err(sql_error)?;
-            if !eligible { return Ok(false); }
-            let path = backend.object_path(workspace, &object.id);
-            match std::fs::remove_file(&path) {
-                Ok(()) => (),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-                Err(error) => return Err(error.into()),
-            }
-            sync_directory(path.parent().ok_or_else(|| Error::integrity("object path has no parent"))?)?;
-            transaction.execute("DELETE FROM objects WHERE workspace=?1 AND hash=?2", params![workspace.to_string(), object.id.as_str()]).map_err(sql_error)?;
-            transaction.commit().map_err(sql_error)?;
-            backend.inner.verified.lock().remove(&key);
-            Ok(true)
-        }).await
+        self.remove_cached(workspace, object, true).await
+    }
+
+    async fn discard_unconfirmed(
+        &self,
+        workspace: WorkspaceId,
+        object: &ObjectRef,
+    ) -> Result<bool> {
+        self.remove_cached(workspace, object, false).await
     }
 
     async fn stats(&self) -> Result<StorageStats> {
         self.blocking(|backend| {
             let total_bytes = fs4::total_space(&backend.inner.root)?;
             let available_bytes = fs4::available_space(&backend.inner.root)?;
-            let (cached_bytes, protected_bytes) = backend.inner.connection.lock().query_row(
-                "SELECT COALESCE(SUM(CASE WHEN remote_confirmed=1 THEN size ELSE 0 END),0),COALESCE(SUM(CASE WHEN remote_confirmed=0 THEN size ELSE 0 END),0) FROM objects", [],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))).map_err(sql_error)?;
-            Ok(StorageStats { total_bytes, available_bytes, cached_bytes: unsigned_integer(cached_bytes)?, protected_bytes: unsigned_integer(protected_bytes)? })
-        }).await
+            let (cached_bytes, protected_bytes) = backend
+                .inner
+                .connection
+                .lock()
+                .query_row(
+                    "SELECT cached_bytes,protected_bytes FROM object_usage WHERE id=1",
+                    [],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .map_err(sql_error)?;
+            Ok(StorageStats {
+                total_bytes,
+                available_bytes,
+                cached_bytes: unsigned_integer(cached_bytes)?,
+                protected_bytes: unsigned_integer(protected_bytes)?,
+            })
+        })
+        .await
+    }
+
+    async fn volume_stats(&self) -> Result<VolumeStats> {
+        self.blocking(|backend| {
+            Ok(VolumeStats {
+                total_bytes: fs4::total_space(&backend.inner.root)?,
+                available_bytes: fs4::available_space(&backend.inner.root)?,
+            })
+        })
+        .await
     }
 }

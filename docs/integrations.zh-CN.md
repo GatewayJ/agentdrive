@@ -105,3 +105,5 @@ agentdrive integrate --protocol codex-app-server --workspace "$WORKSPACE" \
 macOS 可能生成 AppleDouble `._` 元数据文件，AgentDrive 会将这些文件作为普通文件保存。`branch_switch` 在一次调用中尝试正常卸载和重新挂载。运行中的 Agent、终端或 MCP stdio 代理可能占用目录。遇到 `MOUNT_BUSY`，退出相关进程或重启 Agent，通过目录之外的进程使用相同 request ID 重试 `branch_switch`。客户端允许时，将 MCP 代理的工作目录设置在挂载目录之外。
 
 文件写入和 `fsync` 遵循 binding 的 durability 设置。默认 `local` 设置下，使用 `mount_save` 的 `durability: "remote"` 并检查 `remote_confirmed`，确认内容已保存到 RustFS。仅凭本地文件写入成功无法确认远端保存。
+
+2026-10-18 的 FUSE-T 1.2.9 NFS 探针使用带有 xattr 回调的镜像文件系统，比较 `noattrcache`、默认缓存及 `nonamedattr`。默认缓存将该负载的 GETATTR 次数从 2028 减至 454，但三种设置下，外部 chmod 的可见延迟均约为 4.5–4.8 秒；通过挂载路径执行 chmod 后立即可见。xattr 回调调用次数均为零，自定义属性通过 `._` 文件保存，探针中的 ResourceFork 写入失败。因此 AgentDrive 保留当前缓存设置和 AppleDouble 文件。仅增加 xattr 方法尚未证明能在该后端消除配套文件。[FUSE-T 开发文档](https://github.com/macos-fuse-t/fuse-t/wiki)说明属性缓存由客户端管理、FUSE TTL 不生效，NFS 不支持通知。这些结果仅适用于本次 NFS 后端测试。

@@ -897,9 +897,9 @@ impl FileSystem for FileService {
             .await
     }
 
-    async fn statfs(&self, context: &FsContext) -> Result<StorageStats> {
+    async fn statfs(&self, context: &FsContext) -> Result<VolumeStats> {
         self.binding(context, false).await?;
-        self.trees.content.local.stats().await
+        self.trees.content.local.volume_stats().await
     }
 }
 

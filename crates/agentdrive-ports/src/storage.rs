@@ -29,6 +29,7 @@ pub struct LocalCommit {
     pub new_branches: Vec<Branch>,
     pub branches: Vec<Branch>,
     pub node_changes: Vec<NodeChange>,
+    pub checkpointed_branches: Vec<BranchId>,
     pub revisions: Vec<Revision>,
     pub operations: Vec<OperationRecord>,
     pub mounts: Vec<MountBinding>,
@@ -53,6 +54,13 @@ pub enum NodeChange {
         branch: BranchId,
         nodes: Vec<Node>,
     },
+}
+
+/// Changes since the last durable tree root, including removed paths.
+#[derive(Clone, Debug)]
+pub struct NodeDelta {
+    pub before: Option<Node>,
+    pub after: Option<Node>,
 }
 
 #[derive(Clone, Debug)]
@@ -84,6 +92,8 @@ pub trait LocalStateStore: Send + Sync {
     async fn branch(&self, id: BranchId) -> Result<Option<Branch>>;
     async fn branches(&self, workspace: WorkspaceId) -> Result<Vec<Branch>>;
     async fn nodes(&self, branch: BranchId) -> Result<Vec<Node>>;
+    async fn node_deltas(&self, branch: BranchId) -> Result<Vec<NodeDelta>>;
+    async fn history_index(&self, branch: BranchId) -> Result<Option<ObjectRef>>;
     /// 仅返回直接子项，保留显示名称的大小写。
     async fn children(&self, branch: BranchId, parent: &WorkspacePath) -> Result<Vec<Node>>;
     /// 返回根节点及后代，用于目录移动；普通文件只返回自身。
@@ -160,7 +170,11 @@ pub trait LocalObjectStore: Send + Sync {
     async fn confirm_remote(&self, workspace: WorkspaceId, object: &ObjectRef) -> Result<()>;
     async fn objects(&self, workspace: WorkspaceId) -> Result<Vec<CachedObject>>;
     async fn evict(&self, workspace: WorkspaceId, object: &ObjectRef) -> Result<bool>;
+    /// Caller proves the object is unreachable while holding the object retention barrier.
+    async fn discard_unconfirmed(&self, workspace: WorkspaceId, object: &ObjectRef)
+    -> Result<bool>;
     async fn stats(&self) -> Result<StorageStats>;
+    async fn volume_stats(&self) -> Result<VolumeStats>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]

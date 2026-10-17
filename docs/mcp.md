@@ -92,8 +92,8 @@ Fields below are inside `request`. A suffix `?` means the field may be omitted. 
 | `merge_prepare` | `workspace`, `source`, `target`, `base?` | `source` and optional `base` are revision IDs; `target` is a `BranchGuard`; returns `result.candidate`. |
 | `merge_resolve` | `merge`, `candidate`, `resolutions` | `candidate` is the current candidate revision ID; edits any candidate path using `source`, `target`, `delete`, `replace` or `copy` and returns a new candidate. |
 | `merge_apply` | `merge`, `candidate`, `target`, `durability?` | Requires resolved conflicts and a clean target matching its `BranchGuard`; may require mount release. |
-| `mount_prepare` | `workspace`, `path`, `branch?`, `access?`, `revision?`, `durability?` | Defaults to `read_write`. An omitted branch reuses this location's selection; a new location imports the workspace and creates its branch from the latest published root revision. Identical requests from the same principal reuse the binding. An explicit branch must exist locally; a revision requires `read_only`. |
-| `mount_save` | `mount`, `expected_binding_generation`, `durability?` | Save the mounted files and return a revision receipt. A stale binding returns `STALE_BINDING`. |
+| `mount_prepare` | `workspace`, `path`, `branch?`, `access?`, `revision?`, `durability?` | Defaults to `read_write`. An omitted branch reuses this location's selection; a new location imports the workspace and creates its branch from the latest published working root. Identical requests from the same principal reuse the binding. An explicit branch must exist locally; a revision requires `read_only`. |
+| `mount_save` | `mount`, `expected_binding_generation`, `durability?`, `wait_for_remote_ms?` | Save the mounted files and return a revision receipt. A stale binding returns `STALE_BINDING`. |
 | `mount_release` | `operation`, `expected_binding_generation` | Continues a pending operation after processes release the original mount. The operation ID comes from the pending receipt. |
 | `mount_unmount` | `mount`, `generation` | Uses the binding ID and generation from `workspace_status.mounts`; requests normal unmount. |
 
@@ -112,6 +112,8 @@ Fields below are inside `request`. A suffix `?` means the field may be omitted. 
 | `operation_get` | `operation` | Operation receipt visible to the principal. |
 | `operation_by_request` | `request_id` | Original operation receipt for this principal. |
 | `operation_cancel` | `operation` | Cancels an eligible operation before commit or attachment changes; returns its receipt. This tool modifies state. |
+
+`mount_save.wait_for_remote_ms` defaults to 30000 and accepts 0–120000. When waiting expires, publication continues; poll the original operation and inspect `remote_confirmed` and `sync_progress`. See [progress semantics](operations.md#checkpoints-and-synchronization-progress).
 
 ## Runtime capabilities
 

@@ -152,9 +152,7 @@ impl Engine {
                     .workspace(branch.workspace)
                     .await?
                     .ok_or_else(|| Error::integrity("workspace is missing"))?;
-                self.revisions
-                    .flush(id, workspace.owner, Durability::Local)
-                    .await?;
+                self.revisions.autosave(id, workspace.owner).await?;
                 saved += 1;
             }
         }

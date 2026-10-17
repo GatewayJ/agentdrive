@@ -38,6 +38,7 @@ pub struct MemoryRemote {
     refs: Mutex<BTreeMap<RefKey, (u64, Bytes)>>,
     available: AtomicBool,
     lose_response: AtomicBool,
+    lose_branch_response: AtomicBool,
 }
 impl Default for MemoryRemote {
     fn default() -> Self {
@@ -46,12 +47,16 @@ impl Default for MemoryRemote {
             refs: Mutex::new(BTreeMap::new()),
             available: AtomicBool::new(true),
             lose_response: AtomicBool::new(false),
+            lose_branch_response: AtomicBool::new(false),
         }
     }
 }
 impl MemoryRemote {
     pub fn set_available(&self, available: bool) {
         self.available.store(available, Ordering::SeqCst);
+    }
+    pub fn lose_next_branch_cas_response(&self) {
+        self.lose_branch_response.store(true, Ordering::SeqCst);
     }
     pub fn lose_next_cas_response(&self) {
         self.lose_response.store(true, Ordering::SeqCst);
@@ -124,14 +129,18 @@ impl RemoteRefStore for MemoryRemote {
             .get(&update.key)
             .map(|(version, _)| version + 1)
             .unwrap_or(1);
+        let lose_branch_response = matches!(update.key, RefKey::Branch { .. })
+            && self.lose_branch_response.swap(false, Ordering::SeqCst);
         refs.insert(update.key, (next, update.bytes));
-        Ok(if self.lose_response.swap(false, Ordering::SeqCst) {
-            CasOutcome::Unknown
-        } else {
-            CasOutcome::Applied {
-                version: next.to_string(),
-            }
-        })
+        Ok(
+            if self.lose_response.swap(false, Ordering::SeqCst) || lose_branch_response {
+                CasOutcome::Unknown
+            } else {
+                CasOutcome::Applied {
+                    version: next.to_string(),
+                }
+            },
+        )
     }
     async fn list_branches(&self, workspace: WorkspaceId) -> Result<Vec<BranchId>> {
         self.check()?;

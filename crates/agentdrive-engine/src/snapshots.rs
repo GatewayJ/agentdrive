@@ -50,6 +50,16 @@ impl SnapshotService {
                     .revision(workspace.id, branch.formal_head)
                     .await?;
                 recovered.dirty = formal.root != recovered.working_root;
+                let version = self
+                    .trees
+                    .revision(
+                        workspace.id,
+                        branch.autosave_head.unwrap_or(branch.formal_head),
+                    )
+                    .await?;
+                if recovered.working_root != version.root {
+                    self.runtime.mark_dirty(&recovered);
+                }
                 self.runtime
                     .state
                     .commit(LocalCommit {
@@ -100,31 +110,113 @@ impl SnapshotService {
 #[async_trait]
 impl SnapshotCapture for SnapshotService {
     async fn capture(&self, branch: &Branch) -> Result<CapturedTree> {
-        let mut nodes = self.runtime.state.nodes(branch.id).await?;
-        let mut tree = FileTree::new();
-        for node in &mut nodes {
-            if node.dirty && node.inode.kind == FileKind::File {
-                let object = self
+        let deltas = self.runtime.state.node_deltas(branch.id).await?;
+        let previous: std::collections::BTreeMap<_, _> = deltas
+            .iter()
+            .filter_map(|delta| delta.before.as_ref())
+            .map(|node| (node.path.lookup_key(), node))
+            .collect();
+        let mut directories = std::collections::BTreeMap::new();
+        let mut inodes = std::collections::BTreeMap::new();
+        let mut nodes = Vec::new();
+        // Remove old keys before inserting new keys, including case-only renames.
+        for delta in &deltas {
+            if let Some(node) = &delta.before {
+                inodes.insert(crate::trees::inode_key(node.inode.id), None);
+                if let Some(parent) = node.path.parent() {
+                    let parent = if let Some(parent) = previous.get(&parent.lookup_key()) {
+                        (*parent).clone()
+                    } else {
+                        self.runtime
+                            .state
+                            .node_at(branch.id, &parent)
+                            .await?
+                            .ok_or_else(|| Error::integrity("checkpoint parent is missing"))?
+                    };
+                    let entry = DirectoryEntry {
+                        parent: parent.inode.id,
+                        name: node.path.name().to_owned(),
+                        inode: node.inode.id,
+                    };
+                    directories.insert(crate::trees::directory_key(&entry)?, None);
+                }
+            }
+        }
+        for delta in &deltas {
+            if let Some(mut node) = delta.after.clone() {
+                if node.dirty && node.inode.kind == FileKind::File {
+                    let object = self
+                        .trees
+                        .content
+                        .local
+                        .seal(WorkingFile {
+                            workspace: branch.workspace,
+                            branch: branch.id,
+                            inode: node.inode.id,
+                        })
+                        .await?;
+                    if object.size != node.inode.size {
+                        return Err(Error::integrity(
+                            "working file size differs from committed metadata",
+                        ));
+                    }
+                    node.inode.content = Some(object);
+                }
+                node.dirty = false;
+                inodes.insert(
+                    crate::trees::inode_key(node.inode.id),
+                    Some(node.inode.clone()),
+                );
+                if let Some(parent) = node.path.parent() {
+                    let parent = self
+                        .runtime
+                        .state
+                        .node_at(branch.id, &parent)
+                        .await?
+                        .ok_or_else(|| Error::integrity("checkpoint parent is missing"))?;
+                    let entry = DirectoryEntry {
+                        parent: parent.inode.id,
+                        name: node.path.name().to_owned(),
+                        inode: node.inode.id,
+                    };
+                    directories.insert(crate::trees::directory_key(&entry)?, Some(entry));
+                }
+                nodes.push(node);
+            }
+        }
+        let root = if deltas.is_empty() {
+            branch.working_root.clone()
+        } else {
+            let old: TreeRoot = decode(
+                &self
                     .trees
                     .content
+                    .metadata(branch.workspace, &branch.working_root)
+                    .await?,
+            )?;
+            let directories = self
+                .trees
+                .update_index(branch.workspace, &old.directories, directories)
+                .await?;
+            let inodes = self
+                .trees
+                .update_index(branch.workspace, &old.inodes, inodes)
+                .await?;
+            let data = encode(&TreeRoot {
+                format_version: FORMAT_VERSION,
+                directories,
+                inodes,
+            })?;
+            if object_ref(ObjectKind::Tree, &data) == branch.working_root {
+                branch.working_root.clone()
+            } else {
+                self.trees
+                    .content
                     .local
-                    .seal(WorkingFile {
-                        workspace: branch.workspace,
-                        branch: branch.id,
-                        inode: node.inode.id,
-                    })
-                    .await?;
-                if object.size != node.inode.size {
-                    return Err(Error::integrity(
-                        "working file size differs from committed metadata",
-                    ));
-                }
-                node.inode.content = Some(object);
+                    .put(branch.workspace, ObjectKind::Tree, data.into())
+                    .await?
             }
-            node.dirty = false;
-            tree.insert(node.path.clone(), node.inode.clone());
-        }
-        let root = self.trees.save_tree(branch.workspace, &tree).await?;
+        };
         Ok(CapturedTree {
             branch: branch.clone(),
             root,

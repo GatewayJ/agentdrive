@@ -17,6 +17,7 @@ pub struct Runtime {
     pub(crate) stopped: Mutex<BTreeSet<BranchId>>,
     branches: Mutex<BTreeMap<BranchId, Weak<AsyncMutex<()>>>>,
     pub(crate) dirty: Mutex<BTreeMap<BranchId, DirtyTime>>,
+    pub(crate) sync_progress: Mutex<BTreeMap<OperationId, Arc<Mutex<SyncProgress>>>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -46,6 +47,7 @@ impl Runtime {
             stopped: Mutex::new(BTreeSet::new()),
             branches: Mutex::new(BTreeMap::new()),
             dirty: Mutex::new(BTreeMap::new()),
+            sync_progress: Mutex::new(BTreeMap::new()),
         }))
     }
 

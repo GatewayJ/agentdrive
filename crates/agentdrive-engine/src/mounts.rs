@@ -166,12 +166,6 @@ impl MountService {
                 Error::new(ErrorCode::NotFound, "workspace root branch is unavailable")
             })?;
         let source = remote.autosave_head.unwrap_or(remote.formal_head);
-        let revision = self.revisions.trees.revision(workspace, source).await?;
-        if revision.root != remote.working_root {
-            return Err(Error::integrity(
-                "root branch saved revision does not match its working tree",
-            ));
-        }
         let name = format!("location-{}", self.runtime.location);
         let context = match self
             .operations
@@ -198,7 +192,10 @@ impl MountService {
             .fork_locked(
                 context.clone(),
                 workspace,
-                source,
+                crate::revisions::ForkSource {
+                    revision: source,
+                    working_root: Some(remote.working_root),
+                },
                 name,
                 Some(source_branch),
                 true,
@@ -959,6 +956,10 @@ impl MountApi for MountService {
 
     async fn save(&self, context: RequestContext, request: SaveMount) -> Result<OperationRecord> {
         let _lifecycle = self.runtime.lifecycle.lock().await;
+        let wait_ms = request.wait_for_remote_ms.unwrap_or(30_000);
+        if wait_ms > 120_000 {
+            return Err(Error::invalid("remote wait exceeds 120000 ms"));
+        }
         let mount = self
             .runtime
             .state
@@ -984,7 +985,7 @@ impl MountApi for MountService {
             )
             .await?
         {
-            OperationStart::Existing(record) => return Ok(record),
+            OperationStart::Existing(record) => return self.operations.progress(record).await,
             OperationStart::New(context) => context,
         };
         let result = async {
@@ -1024,7 +1025,7 @@ impl MountApi for MountService {
                     .await?
             };
             self.revisions
-                .finish_durability(record, request.durability)
+                .finish_bounded(record, request.durability, wait_ms)
                 .await
         }
         .await;

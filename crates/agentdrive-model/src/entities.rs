@@ -375,6 +375,31 @@ pub struct OperationRecord {
     pub error: Option<Error>,
     pub pending: Option<PendingAction>,
     pub created_ns: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_progress: Option<SyncProgress>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncStage {
+    Queued,
+    Preparing,
+    Transferring,
+    Publishing,
+    Complete,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SyncProgress {
+    pub stage: SyncStage,
+    pub pending_jobs: usize,
+    pub jobs_before: usize,
+    pub batch_jobs: usize,
+    pub total_objects: Option<u64>,
+    pub completed_objects: u64,
+    pub total_bytes: Option<u64>,
+    pub completed_bytes: u64,
+    pub updated_ns: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -490,6 +515,12 @@ pub struct StorageStats {
     pub available_bytes: u64,
     pub cached_bytes: u64,
     pub protected_bytes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct VolumeStats {
+    pub total_bytes: u64,
+    pub available_bytes: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

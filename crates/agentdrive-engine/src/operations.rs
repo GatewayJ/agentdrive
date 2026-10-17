@@ -15,6 +15,31 @@ impl OperationService {
         Arc::new(Self { runtime })
     }
 
+    pub(crate) async fn progress(&self, mut record: OperationRecord) -> Result<OperationRecord> {
+        let active = self.runtime.sync_progress.lock().get(&record.id).cloned();
+        if let Some(progress) = active {
+            record.sync_progress = Some(progress.lock().clone());
+        } else if !record.remote_confirmed
+            && let Some(workspace) = record.workspace
+        {
+            let jobs = self.runtime.state.sync_jobs(workspace).await?;
+            if let Some(position) = jobs.iter().position(|job| job.operation == record.id) {
+                record.sync_progress = Some(SyncProgress {
+                    stage: SyncStage::Queued,
+                    pending_jobs: jobs.len(),
+                    jobs_before: position,
+                    batch_jobs: 0,
+                    total_objects: None,
+                    completed_objects: 0,
+                    total_bytes: None,
+                    completed_bytes: 0,
+                    updated_ns: self.runtime.clock.now_ns(),
+                });
+            }
+        }
+        Ok(record)
+    }
+
     pub async fn start<T: Serialize + Sync>(
         &self,
         context: RequestContext,
@@ -41,7 +66,7 @@ impl OperationService {
         operation.error = None;
         commit.operations.push(operation.clone());
         self.runtime.state.commit(commit).await?;
-        Ok(operation)
+        self.progress(operation).await
     }
 }
 
@@ -72,6 +97,7 @@ impl OperationCoordinator for OperationService {
             error: None,
             pending: None,
             created_ns: self.runtime.clock.now_ns(),
+            sync_progress: None,
         };
         let reserved = self.runtime.state.reserve_operation(record).await?;
         Ok(if reserved.created {
@@ -120,15 +146,17 @@ impl OperationApi for OperationService {
                 "operation belongs to another principal",
             ));
         }
-        Ok(operation)
+        self.progress(operation).await
     }
 
     async fn by_request(&self, actor: &Principal, request: &str) -> Result<OperationRecord> {
-        self.runtime
+        let record = self
+            .runtime
             .state
             .operation_by_request(actor, request)
             .await?
-            .ok_or_else(|| Error::new(ErrorCode::NotFound, "request does not exist"))
+            .ok_or_else(|| Error::new(ErrorCode::NotFound, "request does not exist"))?;
+        self.progress(record).await
     }
 
     async fn cancel(&self, actor: &Principal, id: OperationId) -> Result<OperationRecord> {

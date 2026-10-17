@@ -197,6 +197,7 @@ async fn lifecycle(
                             mount,
                             expected_binding_generation,
                             durability: Durability::Local,
+                            wait_for_remote_ms: None,
                         }
                     )
                     .await?

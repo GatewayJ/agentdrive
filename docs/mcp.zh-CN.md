@@ -93,7 +93,7 @@ jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 | `merge_resolve` | `merge`, `candidate`, `resolutions` | `candidate` 为当前候选 revision ID；通过 `source`、`target`、`delete`、`replace` 或 `copy` 编辑候选中的路径，返回新候选版本。 |
 | `merge_apply` | `merge`, `candidate`, `target`, `durability?` | 要求全部冲突已处理，目标分支没有未保存的修改并符合 `BranchGuard`；可能要求释放挂载。 |
 | `mount_prepare` | `workspace`, `path`, `branch?`, `access?`, `revision?`, `durability?` | 默认 `read_write`。省略 branch 时复用本机选择；新 location 自动读取远程 workspace，并从主分支最近发布的版本创建本机分支。同一个 principal 使用同路径和相同参数时复用 binding。指定 branch 时使用该本机分支；提供 revision 要求 `read_only`。 |
-| `mount_save` | `mount`, `expected_binding_generation`, `durability?` | 保存当前挂载的文件内容，返回版本操作结果；过期 binding 返回 `STALE_BINDING`。 |
+| `mount_save` | `mount`, `expected_binding_generation`, `durability?`, `wait_for_remote_ms?` | 保存当前挂载的文件内容，返回版本操作结果；过期 binding 返回 `STALE_BINDING`。 |
 | `mount_release` | `operation`, `expected_binding_generation` | 使用目录的进程释放原始挂载后，继续等待中的操作。operation ID 来自等待中的操作结果记录。 |
 | `mount_unmount` | `mount`, `generation` | 使用 `workspace_status.mounts` 中的 binding ID 和 generation，请求正常卸载。 |
 
@@ -112,6 +112,8 @@ jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 | `operation_get` | `operation` | 当前 principal 可见的操作结果记录。 |
 | `operation_by_request` | `request_id` | 当前 principal 的原始操作结果记录。 |
 | `operation_cancel` | `operation` | 在提交或挂载关联发生变化前，取消符合条件的操作并返回其结果记录。该工具会修改状态。 |
+
+`mount_save.wait_for_remote_ms` 默认 30000，接受 0–120000。等待到期后继续发布；查询原 operation 并检查 `remote_confirmed` 和 `sync_progress`。详见[检查点与同步进度](operations.zh-CN.md#检查点与同步进度)。
 
 ## 运行时能力
 
