@@ -197,3 +197,50 @@ async fn object_usage_survives_duplicates_migration_and_removal() {
     assert_eq!(backend.stats().await.unwrap().cached_bytes, 0);
     assert!(backend.volume_stats().await.unwrap().total_bytes > 0);
 }
+
+#[tokio::test]
+async fn receipt_guards_reject_stale_updates_atomically() {
+    let directory = tempfile::tempdir().unwrap();
+    let backend = LocalBackend::open(directory.path()).unwrap();
+    let initial = operation("concurrent-receipt");
+    backend.reserve_operation(initial.clone()).await.unwrap();
+    let mut confirmed = initial.clone();
+    confirmed.local_saved = true;
+    confirmed.remote_confirmed = true;
+    backend
+        .commit(LocalCommit {
+            operations: vec![confirmed.clone()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let unrelated = operation("batch-receipt");
+    let error = backend
+        .commit(LocalCommit {
+            operation_guards: vec![initial.clone()],
+            operations: vec![unrelated.clone(), initial],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::TargetMoved);
+    assert!(backend.operation(unrelated.id).await.unwrap().is_none());
+    assert_eq!(
+        backend.operation(confirmed.id).await.unwrap(),
+        Some(confirmed.clone())
+    );
+    let mut complete = confirmed.clone();
+    complete.phase = OperationPhase::Complete;
+    backend
+        .commit(LocalCommit {
+            operation_guards: vec![confirmed],
+            operations: vec![complete.clone()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        backend.operation(complete.id).await.unwrap(),
+        Some(complete)
+    );
+}

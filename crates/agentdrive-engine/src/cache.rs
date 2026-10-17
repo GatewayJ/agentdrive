@@ -273,6 +273,15 @@ impl CacheApi for CacheService {
             for branch in self.runtime.state.branches(workspace.id).await? {
                 if branch.state != BranchState::Deleted {
                     roots.push(branch.working_root);
+                    if let Some(index) = self.runtime.state.history_index(branch.id).await? {
+                        protected.extend(
+                            self.trees
+                                .index_pages(workspace.id, index)
+                                .await?
+                                .into_iter()
+                                .map(|object| (workspace.id, object.id)),
+                        );
+                    }
                 }
             }
             for job in self.runtime.state.sync_jobs(workspace.id).await? {

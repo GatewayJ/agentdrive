@@ -253,29 +253,30 @@ impl ReplicaService {
         remote: BranchRef,
         progress: &Arc<ProgressMutex<SyncProgress>>,
     ) -> Result<()> {
-        let mut commit = LocalCommit::default();
         let mut completed = progress.lock().clone();
         completed.stage = SyncStage::Complete;
         completed.pending_jobs = completed.pending_jobs.saturating_sub(jobs.len());
         completed.updated_ns = self.runtime.clock.now_ns();
-        for job in jobs {
-            let mut operation = self
-                .runtime
-                .state
-                .operation(job.operation)
-                .await?
-                .ok_or_else(|| Error::integrity("sync job operation is missing"))?;
-            operation.remote_confirmed = true;
-            operation.error = None;
-            operation.sync_progress = Some(completed.clone());
-            if operation.pending.is_none() {
-                operation.phase = OperationPhase::Complete;
-            }
-            commit.operations.push(operation);
-            commit.completed_jobs.push(job.operation);
-        }
-        commit.remote_refs.push(remote.clone());
-        self.runtime.state.commit(commit).await?;
+        let ids: Vec<_> = jobs.iter().map(|job| job.operation).collect();
+        self.operations
+            .update(
+                &ids,
+                LocalCommit {
+                    completed_jobs: ids.clone(),
+                    remote_refs: vec![remote.clone()],
+                    ..Default::default()
+                },
+                |operation| {
+                    operation.remote_confirmed = true;
+                    operation.error = None;
+                    operation.sync_progress = Some(completed.clone());
+                    if operation.pending.is_none() {
+                        operation.phase = OperationPhase::Complete;
+                    }
+                },
+            )
+            .await?;
+        *progress.lock() = completed;
         if let Err(error) = self
             .content
             .control(remote.workspace, |control| {
@@ -622,33 +623,31 @@ impl ReplicaPublisher for ReplicaService {
             );
             if let Err(error) = self.publish_batch(&batch, &activity.progress).await {
                 let mut commit = LocalCommit::default();
+                let ids: Vec<_> = batch.iter().map(|job| job.operation).collect();
                 for mut job in batch {
                     job.attempts = job.attempts.saturating_add(1);
                     job.error = Some(error.clone());
-                    let mut operation = self
-                        .runtime
-                        .state
-                        .operation(job.operation)
-                        .await?
-                        .ok_or_else(|| Error::integrity("sync operation is missing"))?;
-                    operation.error = Some(error.clone());
-                    operation.sync_progress = Some(activity.progress.lock().clone());
-                    if operation.pending.is_none() {
-                        operation.phase = OperationPhase::LocalSaved;
-                    }
                     commit.sync_jobs.push(job);
-                    commit.operations.push(operation);
                 }
-                if error.code == ErrorCode::StaleAuthority {
-                    let _gate = self.runtime.lock_branch(id).await;
+                let _gate = if error.code == ErrorCode::StaleAuthority {
+                    let gate = self.runtime.lock_branch(id).await;
                     if let Some(mut branch) = self.runtime.state.branch(id).await? {
                         branch.state = BranchState::Stopped;
                         commit.branches.push(branch);
                     }
-                    self.runtime.state.commit(commit).await?;
+                    Some(gate)
                 } else {
-                    self.runtime.state.commit(commit).await?;
-                }
+                    None
+                };
+                self.operations
+                    .update(&ids, commit, |operation| {
+                        operation.error = Some(error.clone());
+                        operation.sync_progress = Some(activity.progress.lock().clone());
+                        if operation.pending.is_none() {
+                            operation.phase = OperationPhase::LocalSaved;
+                        }
+                    })
+                    .await?;
                 blocked.insert(id);
                 first_error.get_or_insert(error);
             }

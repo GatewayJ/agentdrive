@@ -508,6 +508,12 @@ impl LocalStateStore for LocalBackend {
         self.db(move |connection| {
             let transaction = connection.transaction().map_err(sql_error)?;
             for guard in &commit.guards { check_guard(&transaction, guard)?; }
+            for guard in &commit.operation_guards {
+                let current: Option<OperationRecord> = read_one(&transaction, "SELECT data FROM operations WHERE id=?1", &[guard.id.to_string()])?;
+                if current.as_ref() != Some(guard) {
+                    return Err(Error::new(ErrorCode::TargetMoved, "operation receipt changed before commit").retryable());
+                }
+            }
             for workspace in &commit.new_workspaces {
                 transaction.execute("INSERT INTO workspaces(id,data) VALUES(?1,?2)", params![workspace.id.to_string(), encode(workspace)?]).map_err(sql_error)?;
             }

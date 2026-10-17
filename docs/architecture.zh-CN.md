@@ -100,7 +100,7 @@ object ID 使用 SHA-256 对域分隔标记、格式版本、对象类型和内�
 
 文件系统 `fsync` 保存工作检查点，不创建 revision。本地检查点无需创建 operation 或同步任务；没有变化时，本地 fsync 直接返回。远端 fsync 额外发布工作根对象并等待远端确认，它拥有 operation 记录，中间检查点不会逐个保留为历史版本。自动保存仍按五秒无新写入、三十秒持续写入的期限创建 revision，daemon 每秒检查。显式 `mount_save`、`revision_commit`、创建 branch 和交接 branch 会按需要保存版本。检查点不会重置自动保存期限；重启恢复最新检查点后，尚未形成版本的内容会继续安排自动保存。
 
-`branch_history` 保存最新不可变历史索引的引用，用于增量更新；已有数据库缺少该记录时，在创建下一项同步任务时重建。`object_usage` 保存已确认缓存与未确认对象的字节计数，由 SQLite trigger 在对象新增、删除及远端确认时同步更新。`LocalObjectStore::volume_stats` 为文件系统 STATFS 提供宿主磁盘容量，无需扫描对象记录。缓存回收在持有对象保护锁、检查活动读取者后，可以移除 branch、同步队列、保留版本和 pin 均未引用的未确认对象。持久化继续使用 SQLite 和完整文件对象。
+`branch_history` 保存最新不可变历史索引的引用，用于增量更新；已有数据库缺少该记录时，在创建下一项同步任务时重建。`object_usage` 保存已确认缓存与未确认对象的字节计数，由 SQLite trigger 在对象新增、删除及远端确认时同步更新。`LocalObjectStore::volume_stats` 为文件系统 STATFS 提供宿主磁盘容量，无需扫描对象记录。缓存回收在持有对象保护锁、检查活动读取者后，可以移除 branch、同步队列、保留版本和 pin 均未引用的未确认对象。持久化继续使用 SQLite 和完整文件对象。本地保留的 branch 会保留最新历史索引的全部页面，保证远端不可用时仍能增量保存。此规则仅保留索引页面，历史文件内容仍按正常缓存策略回收。
 
 生命周期控制依次执行挂载变更、恢复、合并应用、所有权交接和取消操作。文件句柄携带挂载和分支的 generation，generation 变化后会拒绝旧句柄。一个挂载路径只能有一个活动关联，一个分支最多具有一个可写挂载。
 
@@ -112,7 +112,7 @@ object ID 使用 SHA-256 对域分隔标记、格式版本、对象类型和内�
 
 工作区由不可变对象、通过条件写入更新的工作区控制记录和分支引用组成。分支引用包含 owner、epoch、generation、source generation、head 和不可变历史索引。历史索引记录版本和操作结果。
 
-连续的同步任务只有在 branch、owner、authority epoch 和 generation 相同、source generation 连续、durable sequence 不减少时才能合并。停止、删除、generation 变化或所有权变化会结束当前任务组。发布前验证最新历史索引保留了每项 operation 的身份和原始结果，然后比较远端当前引用与最新对象树，只上传新增依赖。最新 branch 引用通过条件写入确认后，所有相关结果确认和队列清理在一个 SQLite 事务中提交。每个 workspace 按顺序发布，不同 workspace 的请求可以并行，共享四个上传许可；更换存储需要取得独占发布锁。
+连续的同步任务只有在 branch、owner、authority epoch 和 generation 相同、source generation 连续、durable sequence 不减少时才能合并。停止、删除、generation 变化或所有权变化会结束当前任务组。发布前验证最新历史索引保留了每项 operation 的身份和原始结果，然后比较远端当前引用与最新对象树，只上传新增依赖。最新 branch 引用通过条件写入确认后，所有相关结果确认和队列清理在一个 SQLite 事务中提交。每个 workspace 按顺序发布，不同 workspace 的请求可以并行，共享四个上传许可；更换存储需要取得独占发布锁。发布确认与挂载完成更新操作记录时，会在事务内检查原记录是否发生变化；并发修改触发重新读取和重试，从而保留远端确认与挂载状态。清理远端保留记录期间，已确认操作继续返回持久保存的完成进度。
 
 `OperationRecord.sync_progress` 提供队列位置、发布阶段及对象和字节计数。`mount_save` 可以限制远端等待时间，返回持久化结果后继续发布。文件系统的远端 fsync 仍然需要完成确认才能成功返回。
 

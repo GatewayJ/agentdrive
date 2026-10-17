@@ -120,24 +120,15 @@ impl RevisionService {
                 .workspace
                 .ok_or_else(|| Error::integrity("saved operation has no workspace"))?;
             if let Err(error) = self.publisher.drain(workspace, operation.branch).await {
-                let mut current = self
-                    .runtime
-                    .state
-                    .operation(operation.id)
-                    .await?
-                    .ok_or_else(|| Error::integrity("saved operation is missing"))?;
-                if current.remote_confirmed {
-                    return Ok(current);
-                }
-                current.error = Some(error);
-                self.runtime
-                    .state
-                    .commit(LocalCommit {
-                        operations: vec![current.clone()],
-                        ..Default::default()
+                let mut records = self
+                    .operations
+                    .update(&[operation.id], LocalCommit::default(), |current| {
+                        if !current.remote_confirmed {
+                            current.error = Some(error.clone());
+                        }
                     })
                     .await?;
-                return Ok(current);
+                return Ok(records.remove(0));
             }
         }
         self.runtime

@@ -3390,3 +3390,152 @@ async fn remote_save_can_return_a_receipt_before_publication_and_be_polled() {
     assert!(repeated.remote_confirmed);
     assert_eq!(repeated.sync_progress, confirmed.sync_progress);
 }
+
+#[tokio::test]
+async fn offline_save_retains_incremental_history_after_cache_collection() {
+    let remote = Arc::new(MemoryRemote::default());
+    let harness = Harness::new(Some(remote.clone())).await;
+    let workspace = harness.workspace().await;
+    let (binding, fs) = harness
+        .branch_mount(workspace.id, "offline-history", None)
+        .await;
+    harness.write_new(&fs, "initial", b"remote content").await;
+    harness.commit(binding.branch).await;
+    let old_content = harness
+        .local
+        .node_at(binding.branch, &path("/initial"))
+        .await
+        .unwrap()
+        .unwrap()
+        .inode
+        .content
+        .unwrap();
+    harness
+        .engine
+        .services
+        .files
+        .unlink(&fs, InodeId::ROOT, "initial", false)
+        .await
+        .unwrap();
+    for _ in 0..140 {
+        harness.commit(binding.branch).await;
+    }
+    harness.sync(workspace.id, SyncDirection::Push).await;
+    harness.engine.services.cache.collect().await.unwrap();
+    assert!(
+        !harness
+            .local
+            .contains(workspace.id, &old_content)
+            .await
+            .unwrap()
+    );
+    remote.set_available(false);
+    harness.write_new(&fs, "offline", b"offline content").await;
+    let record = success(
+        harness
+            .engine
+            .services
+            .mounts
+            .save(
+                context(),
+                SaveMount {
+                    mount: binding.id,
+                    expected_binding_generation: binding.generation,
+                    durability: Durability::Local,
+                    wait_for_remote_ms: None,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    assert!(record.local_saved);
+    remote.set_available(true);
+    harness.engine.sync_pending().await.unwrap();
+    assert!(
+        harness
+            .local
+            .operation(record.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .remote_confirmed
+    );
+}
+
+#[tokio::test]
+async fn mount_completion_preserves_concurrent_publication_receipt() {
+    let remote = Arc::new(MemoryRemote::default());
+    let harness = Harness::new(Some(remote)).await;
+    let workspace = harness.workspace().await;
+    let (binding, fs) = harness
+        .branch_mount(workspace.id, "restore-publication", None)
+        .await;
+    harness.write_new(&fs, "original", b"content").await;
+    harness.commit(binding.branch).await;
+    harness.sync(workspace.id, SyncDirection::Push).await;
+    let branch = harness.local.branch(binding.branch).await.unwrap().unwrap();
+    let pending = success(
+        harness
+            .engine
+            .services
+            .revisions
+            .restore(
+                context(),
+                RestoreBranch {
+                    guard: BranchGuard::from(&branch),
+                    revision: workspace.initial_revision,
+                    durability: Durability::Local,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    let (waiting, resume) = harness.driver.pause_next_mount();
+    let service = harness.engine.services.mounts.clone();
+    let id = pending.id;
+    let task = tokio::spawn(async move {
+        service
+            .release(
+                context(),
+                ReleaseMount {
+                    operation: id,
+                    expected_binding_generation: binding.generation,
+                },
+            )
+            .await
+            .unwrap()
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    harness.engine.sync_pending().await.unwrap();
+    assert!(
+        harness
+            .local
+            .operation(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .remote_confirmed
+    );
+    resume.send(()).unwrap();
+    let completed = success(task.await.unwrap());
+    assert_eq!(
+        completed.result,
+        Some(CommandResult::Operation { operation: id })
+    );
+    let stored = harness.local.operation(id).await.unwrap().unwrap();
+    assert!(stored.remote_confirmed);
+    assert_eq!(stored.phase, OperationPhase::Complete);
+    assert!(stored.pending.is_none());
+    assert_eq!(stored.mount_ready, Some(true));
+    assert!(
+        harness
+            .local
+            .sync_jobs(workspace.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

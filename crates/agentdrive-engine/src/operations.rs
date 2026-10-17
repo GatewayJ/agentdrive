@@ -15,9 +15,49 @@ impl OperationService {
         Arc::new(Self { runtime })
     }
 
+    /// Reapply a receipt update if publication or mount completion changed its input.
+    pub(crate) async fn update<F>(
+        &self,
+        ids: &[OperationId],
+        commit: LocalCommit,
+        update: F,
+    ) -> Result<Vec<OperationRecord>>
+    where
+        F: Fn(&mut OperationRecord) + Send + Sync,
+    {
+        for _ in 0..8 {
+            let mut commit = commit.clone();
+            let mut records = Vec::with_capacity(ids.len());
+            for id in ids {
+                let mut record = self
+                    .runtime
+                    .state
+                    .operation(*id)
+                    .await?
+                    .ok_or_else(|| Error::integrity("operation receipt is missing"))?;
+                commit.operation_guards.push(record.clone());
+                update(&mut record);
+                records.push(record);
+            }
+            commit.operations.extend(records.iter().cloned());
+            match self.runtime.state.commit(commit).await {
+                Ok(()) => return Ok(records),
+                Err(error) if error.code == ErrorCode::TargetMoved => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(Error::new(
+            ErrorCode::Busy,
+            "operation receipt kept changing during update",
+        )
+        .retryable())
+    }
+
     pub(crate) async fn progress(&self, mut record: OperationRecord) -> Result<OperationRecord> {
         let active = self.runtime.sync_progress.lock().get(&record.id).cloned();
-        if let Some(progress) = active {
+        if !record.remote_confirmed
+            && let Some(progress) = active
+        {
             record.sync_progress = Some(progress.lock().clone());
         } else if !record.remote_confirmed
             && let Some(workspace) = record.workspace

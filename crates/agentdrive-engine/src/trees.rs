@@ -16,6 +16,30 @@ pub struct TreeService {
 }
 
 impl TreeService {
+    /// Retain index pages without retaining the revision trees stored in their leaves.
+    pub(crate) async fn index_pages(
+        &self,
+        workspace: WorkspaceId,
+        root: ObjectRef,
+    ) -> Result<Vec<ObjectRef>> {
+        let kind = root.kind;
+        let mut pending = vec![(root, 0)];
+        let mut visited = BTreeSet::new();
+        let mut pages = Vec::new();
+        while let Some((reference, depth)) = pending.pop() {
+            if reference.kind != kind || depth > 32 || !visited.insert(reference.id.clone()) {
+                return Err(Error::integrity("invalid index graph"));
+            }
+            if let IndexPage::Branch { children } = decode::<IndexPage<serde::de::IgnoredAny>>(
+                &self.content.metadata(workspace, &reference).await?,
+            )? {
+                pending.extend(children.into_iter().map(|child| (child.object, depth + 1)));
+            }
+            pages.push(reference);
+        }
+        Ok(pages)
+    }
+
     pub(crate) async fn index_entry<T: DeserializeOwned>(
         &self,
         workspace: WorkspaceId,

@@ -165,6 +165,25 @@ pub struct MemoryMountDriver {
     pub fail_mount: AtomicBool,
     pub unmount_error: Mutex<Option<Error>>,
     pub busy: AtomicBool,
+    mount_pause: Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
+}
+impl MemoryMountDriver {
+    pub fn pause_next_mount(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (started, waiting) = tokio::sync::oneshot::channel();
+        let (resume, paused) = tokio::sync::oneshot::channel();
+        *self.mount_pause.lock() = Some((started, paused));
+        (waiting, resume)
+    }
 }
 #[async_trait]
 impl MountDriver for MemoryMountDriver {
@@ -181,6 +200,11 @@ impl MountDriver for MemoryMountDriver {
     async fn mount(&self, spec: MountSpec, _: Arc<dyn FileSystem>) -> Result<()> {
         if self.fail_mount.swap(false, Ordering::SeqCst) {
             return Err(Error::new(ErrorCode::Unavailable, "injected mount failure"));
+        }
+        let pause = self.mount_pause.lock().take();
+        if let Some((started, paused)) = pause {
+            let _ = started.send(());
+            let _ = paused.await;
         }
         let mut mounts = self.mounts.lock();
         if mounts.values().any(|mount| mount.path == spec.binding.path) {

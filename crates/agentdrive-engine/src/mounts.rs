@@ -480,17 +480,7 @@ impl MountService {
                         new.state = MountState::Preparing;
                         self.install_new(&new).await?;
                     }
-                    operation.pending = None;
-                    operation.mount_ready = Some(true);
-                    operation.phase = if operation.remote_confirmed {
-                        OperationPhase::Complete
-                    } else {
-                        OperationPhase::LocalSaved
-                    };
-                    let mut commit = LocalCommit {
-                        operations: vec![operation.clone()],
-                        ..Default::default()
-                    };
+                    let mut commit = LocalCommit::default();
                     if let Some(id) = merge {
                         let mut candidate = self
                             .runtime
@@ -503,8 +493,19 @@ impl MountService {
                         }
                         commit.merges.push(candidate);
                     }
-                    self.runtime.state.commit(commit).await?;
-                    Ok(operation.clone())
+                    let mut records = self
+                        .operations
+                        .update(&[operation.id], commit, |current| {
+                            current.pending = None;
+                            current.mount_ready = Some(true);
+                            current.phase = if current.remote_confirmed {
+                                OperationPhase::Complete
+                            } else {
+                                OperationPhase::LocalSaved
+                            };
+                        })
+                        .await?;
+                    Ok(records.remove(0))
                 }
                 PendingAction::Transfer { .. } => {
                     Err(Error::invalid("ownership transfer is not a mount action"))
@@ -515,7 +516,7 @@ impl MountService {
         match result {
             Ok(record) => Ok(record),
             Err(error) => {
-                let mut current = self
+                let current = self
                     .runtime
                     .state
                     .operation(operation.id)
@@ -534,34 +535,30 @@ impl MountService {
                         tracing::warn!(error = %restore_error, "previous mount requires recovery");
                     }
                 }
-                let branch_switch =
-                    matches!(current.pending, Some(PendingAction::BranchSwitch { .. }));
-                let mut error = error;
-                if branch_switch && error.code == ErrorCode::MountBusy {
-                    error.message = format!(
-                        "{}; close files and processes using the mounted directory, or restart the Agent, then retry branch_switch with the same request_id",
-                        error.message
-                    );
-                    error.retryable = true;
-                }
-                let needs_recovery = branch_switch && error.code != ErrorCode::MountBusy;
-                current.error = Some(error);
-                current.mount_ready = Some(false);
-                current.phase = if current.local_saved {
-                    OperationPhase::CommittedMountPending
-                } else if needs_recovery {
-                    OperationPhase::RecoveryRequired
-                } else {
-                    OperationPhase::WaitingForQuiesce
-                };
-                self.runtime
-                    .state
-                    .commit(LocalCommit {
-                        operations: vec![current.clone()],
-                        ..Default::default()
-                    })
-                    .await?;
-                Ok(current)
+                let mut records = self.operations.update(
+                    &[operation.id], LocalCommit::default(), |current| {
+                        let branch_switch = matches!(current.pending, Some(PendingAction::BranchSwitch { .. }));
+                        let mut error = error.clone();
+                        if branch_switch && error.code == ErrorCode::MountBusy {
+                            error.message = format!(
+                                "{}; close files and processes using the mounted directory, or restart the Agent, then retry branch_switch with the same request_id",
+                                error.message
+                            );
+                            error.retryable = true;
+                        }
+                        let needs_recovery = branch_switch && error.code != ErrorCode::MountBusy;
+                        current.error = Some(error);
+                        current.mount_ready = Some(false);
+                        current.phase = if current.local_saved {
+                            OperationPhase::CommittedMountPending
+                        } else if needs_recovery {
+                            OperationPhase::RecoveryRequired
+                        } else {
+                            OperationPhase::WaitingForQuiesce
+                        };
+                    }
+                ).await?;
+                Ok(records.remove(0))
             }
         }
     }
