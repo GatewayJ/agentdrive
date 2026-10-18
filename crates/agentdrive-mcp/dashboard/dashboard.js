@@ -38,14 +38,7 @@ async function api(path, options = {}) {
 }
 function chooseBranch(id) { revisionViewer.clear(); selectedBranch = id; render(); }
 function branchHistory(branch, revisions) {
-  const byId = new Map(revisions.map(revision => [revision.id, revision]));
-  const visited = new Set(); const pending = [branch.formal_head, branch.autosave_head];
-  while (pending.length) {
-    const id = pending.pop(); if (!id || visited.has(id)) continue;
-    const revision = byId.get(id); if (!revision) continue;
-    visited.add(id); pending.push(...revision.parents);
-  }
-  return revisions.filter(revision => visited.has(revision.id)).sort((a,b) => b.created_ns - a.created_ns || a.id.localeCompare(b.id));
+  return revisions.filter(revision => revision.branch === branch.id).sort((a,b) => b.created_ns - a.created_ns || a.id.localeCompare(b.id));
 }
 function render() {
   if (!snapshot) return;
@@ -79,7 +72,7 @@ function render() {
   const entries = branchHistory(branch,revisions);
   $('history-count').textContent = entries.length;
   const list = $('revision-list'); list.replaceChildren();
-  if (!entries.length) list.append(element('div','no-revisions','暂无保存的版本。'));
+  if (!entries.length) list.append(element('div','no-revisions','此分支尚未生成新版本。'));
   for (const revision of entries) {
     const row = element('div', 'revision-row');
     row.append(element('span','revision-node'));
