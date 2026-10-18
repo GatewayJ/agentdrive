@@ -21,16 +21,16 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-cli-') as temporary:
         listener.bind(('127.0.0.1', 0))
         port = listener.getsockname()[1]
     endpoint = f'http://127.0.0.1:{port}/mcp'
-    subprocess.run([str(binaries / ('agentdrived' + exe)), 'init', '--directory', str(root), '--listen', f'127.0.0.1:{port}'], check=True, capture_output=True, text=True)
+    subprocess.run([str(binaries / ('agentdrived' + exe)), 'init', '--directory', str(root), '--listen', f'127.0.0.1:{port}'], check=True, capture_output=True, text=True, encoding='utf-8')
     environment = os.environ.copy()
     environment.pop('AGENTDRIVE_TOKEN', None)
     environment.pop('AGENTDRIVE_TOKEN_FILE', None)
     for token_arguments in ([], ['--token-file', str(root / 'missing-token')]):
-        result = subprocess.run([str(binaries / ('agentdrive' + exe)), '--endpoint', endpoint, *token_arguments, 'dashboard'], env=environment, capture_output=True, text=True, timeout=10)
+        result = subprocess.run([str(binaries / ('agentdrive' + exe)), '--endpoint', endpoint, *token_arguments, 'dashboard'], env=environment, capture_output=True, text=True, encoding='utf-8', timeout=10)
         assert result.returncode == 0, (result.stdout, result.stderr)
         assert result.stdout.strip() == f'http://127.0.0.1:{port}/'
     config_path = root / 'agentdrive.json'
-    config = json.loads(config_path.read_text())
+    config = json.loads(config_path.read_text(encoding='utf-8'))
     assert not {'allowed_origins', 'cache', 'remote'} & config.keys(), config
     for cache, expected in [
         ({'max_bytes': 0}, 'cache capacity must be greater than zero'),
@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-cli-') as temporary:
     ]:
         config['cache'] = cache
         config_path.write_text(json.dumps(config))
-        invalid = subprocess.run([str(binaries / ('agentdrived' + exe)), 'serve', '--config', str(config_path)], capture_output=True, text=True, timeout=10)
+        invalid = subprocess.run([str(binaries / ('agentdrived' + exe)), 'serve', '--config', str(config_path)], capture_output=True, text=True, encoding='utf-8', timeout=10)
         assert invalid.returncode == 1 and expected in invalid.stderr, invalid.stderr
     config['cache'] = {'max_bytes': 3 * 1024 ** 3}
     config_path.write_text(json.dumps(config))
@@ -51,7 +51,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-cli-') as temporary:
         process = subprocess.Popen([str(binaries / ('agentdrived' + exe)), 'serve', '--config', str(root / 'agentdrive.json')], stdout=log, stderr=log)
         for _ in range(100):
             if process.poll() is not None:
-                raise AssertionError(log_path.read_text())
+                raise AssertionError(log_path.read_text(encoding='utf-8'))
             try:
                 with socket.create_connection(('127.0.0.1', port), timeout=0.1):
                     return process
@@ -64,16 +64,16 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-cli-') as temporary:
         command = client + ['call', tool, '--json', json.dumps(request)]
         if request_id:
             command += ['--request-id', request_id]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', timeout=30)
         if success:
-            assert result.returncode == 0, (result.stdout, result.stderr, log_path.read_text())
+            assert result.returncode == 0, (result.stdout, result.stderr, log_path.read_text(encoding='utf-8'))
         else:
             assert result.returncode == 2, (result.stdout, result.stderr)
         return json.loads(result.stdout)
 
     try:
         daemon = start()
-        tools = json.loads(subprocess.check_output(client + ['tools'], text=True, timeout=30))
+        tools = json.loads(subprocess.check_output(client + ['tools'], text=True, encoding='utf-8', timeout=30))
         assert len(tools['tools']) == 30
         names = {tool['name'] for tool in tools['tools']}
         assert 'revision_files' in names and 'merge_validate' not in names
@@ -90,7 +90,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-cli-') as temporary:
         for kind in ('autosave', 'candidate'):
             rejected = call('revision_commit', {'guard': guard, 'kind': kind}, 'invalid-' + kind, success=False)
             assert rejected['error']['code'] == 'INVALID_ARGUMENT', rejected
-        proxy = subprocess.Popen(client + ['mcp'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, bufsize=1)
+        proxy = subprocess.Popen(client + ['mcp'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, encoding='utf-8', bufsize=1)
         responses = queue.Queue()
         def receive():
             for line in proxy.stdout:

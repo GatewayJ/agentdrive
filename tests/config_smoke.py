@@ -22,8 +22,8 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-config-') as temporary:
         address = f'127.0.0.1:{listener.getsockname()[1]}'
     subprocess.run([str(executable), 'init', '--directory', str(root), '--listen', address], check=True, capture_output=True)
     path = root / 'agentdrive.json'
-    original = json.loads(path.read_text())
-    token = (root / 'token').read_text().strip()
+    original = json.loads(path.read_text(encoding='utf-8'))
+    token = (root / 'token').read_text(encoding='utf-8').strip()
     endpoint = f'http://{address}/api/settings'
     daemon = None
     log = (root / 'daemon.log').open('w')
@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-config-') as temporary:
     def wait_for(predicate):
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
-            assert daemon.poll() is None, (root / 'daemon.log').read_text()
+            assert daemon.poll() is None, (root / 'daemon.log').read_text(encoding='utf-8')
             try:
                 status, data = request()
                 if status == 200 and predicate(data):
@@ -90,7 +90,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-config-') as temporary:
         assert status == 200, saved
         assert request('PUT', update)[0] == 409
         assert saved['runtime']['cache'] == runtime['cache']
-        assert json.loads(path.read_text())['cache'] == runtime['cache']
+        assert json.loads(path.read_text(encoding='utf-8'))['cache'] == runtime['cache']
         assert daemon.poll() is None
         daemon.terminate()
         daemon.wait(timeout=15)

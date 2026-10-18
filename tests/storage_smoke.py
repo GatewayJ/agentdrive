@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-storage-') as temporary:
         port = listener.getsockname()[1]
     subprocess.run([str(binaries / ('agentdrived' + exe)), 'init', '--directory', str(root), '--listen', f'127.0.0.1:{port}'], check=True, capture_output=True)
     config_path = root / 'agentdrive.json'
-    token = (root / 'token').read_text().strip()
+    token = (root / 'token').read_text(encoding='utf-8').strip()
     client = [str(binaries / ('agentdrive' + exe)), '--endpoint', f'http://127.0.0.1:{port}/mcp', '--token-file', str(root / 'token')]
     log = (root / 'daemon.log').open('w')
     daemon = None
@@ -51,7 +51,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-storage-') as temporary:
         command = client + ['call', tool, '--json', json.dumps(request)]
         if tool != 'workspace_status':
             command += ['--request-id', str(uuid.uuid4())]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', timeout=120)
         assert result.returncode == 0, (tool, result.stderr, result.stdout)
         result = json.loads(result.stdout)
         assert not result.get('error'), result
@@ -66,7 +66,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-storage-') as temporary:
             except OSError:
                 pass
             if process.poll() is not None:
-                raise AssertionError((root / 'daemon.log').read_text())
+                raise AssertionError((root / 'daemon.log').read_text(encoding='utf-8'))
             time.sleep(0.05)
         process.terminate()
         process.wait(timeout=20)
@@ -106,7 +106,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-storage-') as temporary:
         call('workspace_export', {'workspace': workspace, 'revision': revision, 'destination': str(destination)})
         assert (destination / 'image.bin').read_bytes() == payload
         # 直接编辑配置文件也使用同一条存储切换路径。
-        config = json.loads(config_path.read_text())
+        config = json.loads(config_path.read_text(encoding='utf-8'))
         config['remote']['enabled'] = True
         pending = root / 'pending.json'
         pending.write_text(json.dumps(config))

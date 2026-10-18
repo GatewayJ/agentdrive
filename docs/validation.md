@@ -16,6 +16,8 @@ Directory conversion tests cover initial `main` contents in a new workspace, imp
 
 `verify` runs rustfmt, Clippy with warnings denied, workspace tests, and `tests/architecture.py`. The architecture check validates production crate dependencies, keeps database/native-driver/protocol adapters out of the core, requires inherited workspace lint settings, and checks Python test syntax. Default Make builds use the committed lockfile. CI runs these checks on Linux, macOS and Windows; Linux and Windows additionally run the native branch-switch smoke suite. On Windows use `PYTHON=python` if `python3` is unavailable.
 
+CLI and MCP smoke tests decode process output and daemon files explicitly as UTF-8, including on Windows hosts with a different system code page.
+
 ## Native filesystems
 
 Install and enable the platform driver, then run:

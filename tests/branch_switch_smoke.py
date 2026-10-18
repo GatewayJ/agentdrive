@@ -23,7 +23,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-switch-') as temporary:
     subprocess.run([str(binaries / ('agentdrived' + exe)), 'init', '--directory', str(root),
                     '--listen', f'127.0.0.1:{port}'], check=True, capture_output=True)
     config_path = root / 'agentdrive.json'
-    config = json.loads(config_path.read_text())
+    config = json.loads(config_path.read_text(encoding='utf-8'))
     config['directory_roots'].append(str(root / 'mounts'))
     config_path.write_text(json.dumps(config))
     client = [str(binaries / ('agentdrive' + exe)), '--endpoint', f'http://127.0.0.1:{port}/mcp',
@@ -50,7 +50,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-switch-') as temporary:
         global proxy, responses
         responses = queue.Queue()
         proxy = subprocess.Popen(client + ['mcp'], cwd=root, stdin=subprocess.PIPE,
-                                 stdout=subprocess.PIPE, stderr=log, text=True, bufsize=1)
+                                 stdout=subprocess.PIPE, stderr=log, text=True, encoding='utf-8', bufsize=1)
         output, inbox = proxy.stdout, responses
         def receive():
             for line in output:
@@ -78,7 +78,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-switch-') as temporary:
             assert response.get('isError') is True and result['error']['code'] == error, result
         else:
             assert not response.get('isError') and not result.get('error'), result
-        print(tool, json.dumps(result, ensure_ascii=False), flush=True)
+        print(tool, json.dumps(result), flush=True)
         return result
 
     def switch(branch, request_id, error=None):
@@ -92,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-switch-') as temporary:
     try:
         daemon = subprocess.Popen([str(binaries / ('agentdrived' + exe)), 'serve', '--config', str(config_path)], stdout=log, stderr=log)
         for _ in range(100):
-            assert daemon.poll() is None, (root / 'daemon.log').read_text()
+            assert daemon.poll() is None, (root / 'daemon.log').read_text(encoding='utf-8')
             try:
                 with socket.create_connection(('127.0.0.1', port), timeout=.1):
                     break
@@ -124,7 +124,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-switch-') as temporary:
         retried = switch(main, 'to-main')
         assert retried['id'] == occupied['id']
         assert not (path / 'feature.txt').exists()
-        assert (path / 'main.txt').read_text() == 'main content'
+        assert (path / 'main.txt').read_text(encoding='utf-8') == 'main content'
         replay = switch(feature, 'to-feature')
         assert replay['id'] == completed['id']
         assert call('workspace_status', {'workspace': workspace})['selected_branch'] == main

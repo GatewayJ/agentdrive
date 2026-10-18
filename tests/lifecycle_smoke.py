@@ -27,7 +27,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-lifecycle-') as temporary:
         port = listener.getsockname()[1]
     base = f'http://127.0.0.1:{port}'
     subprocess.run([str(binaries / ('agentdrived' + exe)), 'init', '--directory', str(root), '--listen', f'127.0.0.1:{port}'], check=True, capture_output=True)
-    token = (root / 'token').read_text().strip()
+    token = (root / 'token').read_text(encoding='utf-8').strip()
     command = [str(binaries / ('agentdrive' + exe)), '--endpoint', base + '/mcp', '--token-file', str(root / 'token')]
     log = (root / 'test.log').open('w+')
     daemon = None
@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-lifecycle-') as temporary:
         process = subprocess.Popen([str(binaries / ('agentdrived' + exe)), 'serve', '--config', str(root / 'agentdrive.json')], stdout=log, stderr=log)
         for _ in range(100):
             if process.poll() is not None:
-                raise AssertionError((root / 'test.log').read_text())
+                raise AssertionError((root / 'test.log').read_text(encoding='utf-8'))
             try:
                 with socket.create_connection(('127.0.0.1', port), timeout=.1):
                     return process
@@ -49,8 +49,8 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-lifecycle-') as temporary:
         arguments = command + ['call', tool, '--json', json.dumps(request)]
         if identity:
             arguments += ['--request-id', identity]
-        result = subprocess.run(arguments, text=True, capture_output=True, timeout=30)
-        assert result.returncode == 0, (result.stdout, result.stderr, (root / 'test.log').read_text())
+        result = subprocess.run(arguments, text=True, encoding='utf-8', capture_output=True, timeout=30)
+        assert result.returncode == 0, (result.stdout, result.stderr, (root / 'test.log').read_text(encoding='utf-8'))
         return json.loads(result.stdout)
 
     def api(path, body=None):
@@ -63,7 +63,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-lifecycle-') as temporary:
 
     def spawn(protocol, workspace):
         arguments = command + ['integrate', '--protocol', protocol, '--workspace', workspace, '--mount-path', str(root / 'mounts' / protocol), '--', sys.executable, str(fixture), protocol]
-        process = subprocess.Popen(arguments, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, bufsize=1)
+        process = subprocess.Popen(arguments, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True, encoding='utf-8', bufsize=1)
         bridges.append(process)
         messages = queue.Queue()
         def read():
@@ -79,8 +79,8 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-lifecycle-') as temporary:
                 try:
                     message = messages.get(timeout=30)
                 except queue.Empty:
-                    raise AssertionError((root / 'test.log').read_text())
-                assert message is not None, (process.poll(), (root / 'test.log').read_text())
+                    raise AssertionError((root / 'test.log').read_text(encoding='utf-8'))
+                assert message is not None, (process.poll(), (root / 'test.log').read_text(encoding='utf-8'))
                 if predicate(message):
                     return message
             raise AssertionError('expected response was not received')
@@ -91,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-lifecycle-') as temporary:
         return process, send, wait
 
     def records(workspace):
-        config = json.loads((root / 'agentdrive.json').read_text())
+        config = json.loads((root / 'agentdrive.json').read_text(encoding='utf-8'))
         with closing(sqlite3.connect(str(Path(config['data_dir']) / 'meta.db'))) as database:
             return [record for row in database.execute("SELECT data FROM operations WHERE workspace=?", (workspace,)) if (record := json.loads(row[0]))["name"] == "mount_save"]
 
@@ -104,7 +104,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-lifecycle-') as temporary:
             peer, _, _ = spawn(protocol, workspace)
             peer.stdin.close()
             peer.wait(timeout=30)
-            assert peer.returncode == 0, (root / 'test.log').read_text()
+            assert peer.returncode == 0, (root / 'test.log').read_text(encoding='utf-8')
             connected = call('workspace_status', {'workspace': workspace})
             assert len(connected['branches']) == 1 and len(connected['mounts']) == 1, connected
             assert connected['mounts'][0] == shared, connected
@@ -148,7 +148,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-lifecycle-') as temporary:
                 wait(lambda message: message.get('method') == 'turn/completed' and message['params']['threadId'] == 'review-thread')
             process.stdin.close()
             process.wait(timeout=30)
-            assert process.returncode == 0, (root / 'test.log').read_text()
+            assert process.returncode == 0, (root / 'test.log').read_text(encoding='utf-8')
             assert len(records(workspace)) == (3 if protocol == 'acp' else 4), records(workspace)
             active_mount = next(item for item in call('workspace_status', {'workspace': workspace})['mounts'] if item['state'] == 'ready')
             assert Path(active_mount['path']).samefile(root / 'mounts' / protocol)
@@ -157,12 +157,12 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-lifecycle-') as temporary:
             send(prompt(6, 'exit'))
             process.wait(timeout=30)
             assert process.returncode != 0
-            assert (root / 'mounts' / protocol / 'result.txt').read_text().startswith('exit:')
+            assert (root / 'mounts' / protocol / 'result.txt').read_text(encoding='utf-8').startswith('exit:')
             previous_saves = {record['id'] for record in records(workspace)}
             process, send, wait = spawn(protocol, workspace)
             send(prompt(10, 'exit-success'))
             process.wait(timeout=30)
-            assert process.returncode == 0, (root / 'test.log').read_text()
+            assert process.returncode == 0, (root / 'test.log').read_text(encoding='utf-8')
             interrupted = [record for record in records(workspace) if record['id'] not in previous_saves]
             assert len(interrupted) == 1 and interrupted[0]['local_saved'], interrupted
             process, send, wait = spawn(protocol, workspace)
@@ -173,7 +173,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-lifecycle-') as temporary:
                 wait(lambda message: message.get('method') == 'turn/completed')
             process.stdin.close()
             process.wait(timeout=30)
-            assert process.returncode == 0, (root / 'test.log').read_text()
+            assert process.returncode == 0, (root / 'test.log').read_text(encoding='utf-8')
             assert len(call('workspace_status', {'workspace': workspace})['branches']) == 1
             if protocol == 'acp':
                 process, send, wait = spawn(protocol, workspace)
@@ -190,22 +190,22 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-lifecycle-') as temporary:
                 wait(lambda message: message.get('id') == 9)
                 process.stdin.close()
                 process.wait(timeout=30)
-                assert process.returncode == 0, (root / 'test.log').read_text()
+                assert process.returncode == 0, (root / 'test.log').read_text(encoding='utf-8')
             if protocol == 'acp':
                 branch = call('workspace_status', {'workspace': workspace})['branches'][0]
                 active = next(item for item in call('workspace_status', {'workspace': workspace})['mounts'] if item['state'] == 'ready')
                 call('mount_unmount', {'mount': active['id'], 'generation': active['generation']}, 'release-shared')
-                mounted = subprocess.run(command + ['mount', '--workspace', workspace, str(root / 'mounts' / 'explicit')], capture_output=True, text=True, timeout=30)
+                mounted = subprocess.run(command + ['mount', '--workspace', workspace, str(root / 'mounts' / 'explicit')], capture_output=True, text=True, encoding='utf-8', timeout=30)
                 assert mounted.returncode == 0, (mounted.stdout, mounted.stderr)
-                created = subprocess.run(command + ['branch', 'create', '--workspace', workspace, '--name', 'feature'], capture_output=True, text=True, timeout=30)
+                created = subprocess.run(command + ['branch', 'create', '--workspace', workspace, '--name', 'feature'], capture_output=True, text=True, encoding='utf-8', timeout=30)
                 assert created.returncode == 0, (created.stdout, created.stderr)
                 feature = json.loads(created.stdout)['result']['branch']
                 assert feature['source_branch'] == branch['id']
-                switched = subprocess.run(command + ['branch', 'switch', '--workspace', workspace, '--branch', feature['id']], capture_output=True, text=True, timeout=30)
+                switched = subprocess.run(command + ['branch', 'switch', '--workspace', workspace, '--branch', feature['id']], capture_output=True, text=True, encoding='utf-8', timeout=30)
                 assert switched.returncode == 0, (switched.stdout, switched.stderr)
                 receipt = json.loads(switched.stdout)
                 assert receipt['phase'] == 'complete' and receipt['mount_ready'], receipt
-                assert (root / 'mounts' / 'explicit' / 'result.txt').read_text().startswith('completed:')
+                assert (root / 'mounts' / 'explicit' / 'result.txt').read_text(encoding='utf-8').startswith('completed:')
                 assert call('workspace_status', {'workspace': workspace})['selected_branch'] == feature['id']
             dashboard = api('/api/workspaces/' + workspace)
             assert dashboard['revisions'] and dashboard['status']['selected_branch']

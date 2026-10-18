@@ -14,6 +14,8 @@ python3 tests/cli_smoke.py
 
 `verify` 执行 rustfmt、禁止警告的 Clippy、workspace 测试和 `tests/architecture.py`。架构检查验证生产 crate 的依赖方向，保证数据库、原生驱动及协议适配器位于核心模块之外，要求继承统一 lint 设置，并检查 Python 测试语法。Make 默认使用已提交的依赖锁定文件。CI 在 Linux、macOS、Windows 执行这些检查；Linux 和 Windows 额外执行原生 branch 切换集成测试。Windows 没有 `python3` 命令时使用 `PYTHON=python`。
 
+CLI 与 MCP 集成测试明确使用 UTF-8 读取进程输出和 daemon 文件，支持系统代码页不同的 Windows 环境。
+
 ## 原生文件系统
 
 安装并启用平台驱动后执行：

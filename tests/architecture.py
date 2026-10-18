@@ -25,7 +25,7 @@ ADAPTER_DEPENDENCIES = {
 def main():
     metadata = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--no-deps", "--format-version=1", "--locked"],
-        cwd=ROOT, text=True,
+        cwd=ROOT, text=True, encoding='utf-8',
     ))
     members = set(metadata["workspace_members"])
     packages = [p for p in metadata["packages"] if p["id"] in members]

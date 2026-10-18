@@ -24,9 +24,9 @@ class Daemon:
         with socket.socket() as listener:
             listener.bind(('127.0.0.1', 0))
             port = listener.getsockname()[1]
-        subprocess.run([str(binaries / ('agentdrived' + exe)), 'init', '--directory', str(root), '--listen', f'127.0.0.1:{port}'], capture_output=True, text=True, check=True)
+        subprocess.run([str(binaries / ('agentdrived' + exe)), 'init', '--directory', str(root), '--listen', f'127.0.0.1:{port}'], capture_output=True, text=True, encoding='utf-8', check=True)
         config_path = root / 'agentdrive.json'
-        config = json.loads(config_path.read_text())
+        config = json.loads(config_path.read_text(encoding='utf-8'))
         config['remote'] = {'bucket': 'agentdrive-integration', 'prefix': prefix, 'region': 'us-east-1', 'endpoint': endpoint, 'allow_http': True}
         config_path.write_text(json.dumps(config))
         self.client = [str(binaries / ('agentdrive' + exe)), '--endpoint', f'http://127.0.0.1:{port}/mcp', '--token-file', str(root / 'token')]
@@ -34,7 +34,7 @@ class Daemon:
         self.process = subprocess.Popen([str(binaries / ('agentdrived' + exe)), 'serve', '--config', str(config_path)], stdout=self.log, stderr=self.log)
         for _ in range(100):
             if self.process.poll() is not None:
-                raise AssertionError((root / 'daemon.log').read_text())
+                raise AssertionError((root / 'daemon.log').read_text(encoding='utf-8'))
             try:
                 with socket.create_connection(('127.0.0.1', port), timeout=0.1):
                     return
@@ -47,8 +47,8 @@ class Daemon:
         command = self.client + ['call', tool, '--json', json.dumps(request)]
         if request_id:
             command += ['--request-id', request_id]
-        output = subprocess.run(command, capture_output=True, text=True, timeout=120)
-        assert output.returncode == 0, (output.stdout, output.stderr, (self.root / 'daemon.log').read_text())
+        output = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', timeout=120)
+        assert output.returncode == 0, (output.stdout, output.stderr, (self.root / 'daemon.log').read_text(encoding='utf-8'))
         return json.loads(output.stdout)
 
     def stop(self):
@@ -107,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-replica-') as temporary:
                 mounted = remote_daemon.call('mount_prepare', request, 'mount-location')['result']['binding']
                 assert mounted['branch'] not in branches, mounted
                 branches.add(mounted['branch'])
-                assert (remote_path / 'shared.txt').read_text() == 'published root content'
+                assert (remote_path / 'shared.txt').read_text(encoding='utf-8') == 'published root content'
                 local_status = remote_daemon.call('workspace_status', {'workspace': mounted_workspace})
                 assert local_status['selected_branch'] == mounted['branch'], local_status
                 local_branch = next(item for item in local_status['branches'] if item['id'] == mounted['branch'])
