@@ -977,7 +977,7 @@ body:has(.revision-dialog[open]) { overflow:hidden; }
 
 .branch-files-body {padding:24px; min-width:0;}
 .branch-files-toolbar,.branch-file-navigation {display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom:16px;}
-.branch-directory {flex:1; display:flex; align-items:center; flex-wrap:wrap; min-width:100px; color:var(--muted);}
+.branch-directory {flex:1; display:flex; align-items:center; flex-wrap:wrap; min-width:100px; margin:0; color:var(--muted);}
 .directory-segment {border:0; border-radius:4px; background:transparent; color:inherit; padding:5px 3px; overflow-wrap:anywhere; min-width:0; text-align:left;}
 .directory-segment:hover {background:var(--green-bg); color:var(--green);}
 .directory-segment[aria-current] {color:var(--ink); font-weight:600;}
