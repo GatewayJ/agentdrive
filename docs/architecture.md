@@ -46,6 +46,8 @@
 
 `agentdrive-ports` describes the interfaces used by the engine. Storage and platform adapters implement those interfaces. The configuration crate depends on model types and does not construct database, mount, S3 or HTTP services. The daemon supplies one `LiveConfig` handle to the engine and HTTP gateway. Only `ConfigStore` publishes replacement snapshots; consumers obtain a consistent snapshot for each operation.
 
+The HTTP workspace presenter in `mcp/workspace_view` derives typed dashboard statistics and creation origins from `WorkspaceApi::status` and `RevisionApi::list`. It performs no storage reads of its own. The browser workspace module draws the source-revision connections and mount inventory; the revision viewer owns metadata and diff dialogs.
+
 ## File interfaces and transaction boundaries
 
 Revision browsing follows `dashboard / MCP -> RevisionApi -> TreeQuery -> ContentResolver / LocalStateStore`. The engine checks workspace access and revision membership before reading either side, and retains the object barrier while resolving metadata and content. The HTTP adapter translates requests and responses; the browser selects a parent, requests pages, and renders text using text nodes. Stale browser requests are cancelled when the version or parent changes.

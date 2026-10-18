@@ -46,6 +46,8 @@
 
 `agentdrive-ports` 定义 engine 使用的接口，存储和平台适配器负责实现接口。配置模块依赖 model 中的数据类型，数据库、挂载、S3 和 HTTP 服务由 daemon 创建。daemon 将同一个 `LiveConfig` 传给 engine 和 HTTP 入口；`ConfigStore` 统一发布配置，使用配置的模块为每次操作取得完整快照。
 
+HTTP 工作区展示模块 `mcp/workspace_view` 通过 `WorkspaceApi::status` 与 `RevisionApi::list` 的结果生成有类型的统计和创建来源信息。数据读取继续由应用接口负责。浏览器的 workspace 模块负责来源版本连接图及挂载目录表，revision viewer 负责版本信息与差异弹框。
+
 ## 文件操作接口与事务边界
 
 版本浏览按照 `dashboard / MCP -> RevisionApi -> TreeQuery -> ContentResolver / LocalStateStore` 调用。engine 验证工作区读取权限与两个版本所属工作区，读取元数据和内容期间持有对象保护锁。HTTP 入口转换参数和结果；浏览器选择父版本、请求分页结果，通过文本节点显示内容。切换版本或父版本时取消过期请求。

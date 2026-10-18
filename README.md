@@ -64,7 +64,7 @@ agentdrive branch switch --workspace "$WORKSPACE" --branch "$BRANCH"
 agentdrive dashboard --open
 ```
 
-Creation captures current working content without changing the selection. Switching saves the previous branch, checks native file handles, and updates this location's selection and mount. Agents sharing the directory use the same branch. The selection survives daemon restarts. The dashboard shows branch ancestry, commit messages, authors, timestamps, parent revisions, changed files and text differences. Administrators can use **Settings** to update cache policy, S3 storage and allowed HTTP origins while the daemon is running; see [configuration](docs/configuration.md).
+Creation captures current working content without changing the selection. Switching saves the previous branch, checks native file handles, and updates this location's selection and mount. Agents sharing the directory use the same branch. The selection survives daemon restarts. The dashboard shows workspace statistics, branch origins connected to their exact source revisions, and local mount paths with their branches and access modes. Version dialogs show metadata, changed files and text differences. Administrators can use **Settings** to update cache policy, S3 storage and allowed HTTP origins while the daemon is running; see [configuration](docs/configuration.md).
 
 Existing agents can connect through `agentdrive mcp` and use a mounted directory. `agentdrive integrate` manages the working directory and saves on completion, cancellation, failure, and reconnect. See [agent integrations](docs/integrations.md) for ACP and Codex app-server commands and protocol behavior. File changes trigger automatic saves, and shared mounts remain available after agent disconnection.
 

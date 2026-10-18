@@ -206,3 +206,9 @@ Validation passed: 73 workspace tests, formatting, Clippy with warnings denied, 
 ## Revision dialogs (2026-10-18)
 
 The dashboard history menu opens version information and file changes in separate dialogs. Browser checks against saved daemon data passed for keyboard navigation, focus return, outside-click and Escape dismissal, lazy difference requests, merge-parent selection, 114-entry pagination, UTF-8 text and safe HTML display, empty/binary/oversized files, rename messages, retry and stale-response cancellation, automatic refresh, and a 390-pixel viewport. Workspace verification passed 78 Rust tests, formatting, Clippy and architecture checks on macOS with FUSE-T enabled.
+
+## Branch origins and mount inventory (2026-10-18)
+
+The dashboard workspace response now includes typed counts and branch origins derived through the existing application interfaces. Regression tests cover distinct ready branches across read/write and read-only mounts, preparing/paused/recovery states, released bindings, deleted branches, and preserved creation revisions after the source head advances. The authenticated HTTP test verifies that a second mount of one branch increases only the mount count, and that unmounting removes its inventory entry.
+
+Browser checks against an isolated daemon with two native FUSE-T mounts passed for exact source-version connections, version information dialogs, focus return after automatic refresh, mount-to-branch navigation, unchanged default branch selection, revision differences, settings navigation, logout and a 390-pixel viewport. Additional browser fixtures cover deleted source branches, unavailable revisions, read-only/recovery display, empty mount inventory and safe text rendering. Workspace verification passed 80 Rust tests, formatting, Clippy and architecture checks on macOS with FUSE-T enabled.

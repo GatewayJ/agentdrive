@@ -1,5 +1,6 @@
 import { createSettingsPage } from './settings.js';
 import { createRevisionViewer } from './revisions.js';
+import { createWorkspaceView } from './workspace.js';
 const $ = (id) => document.getElementById(id);
 const fragment = new URLSearchParams(location.hash.slice(1));
 if (fragment.has('token')) {
@@ -36,37 +37,6 @@ async function api(path, options = {}) {
   return response.json();
 }
 function chooseBranch(id) { revisionViewer.clear(); selectedBranch = id; render(); }
-function renderTree(branches, current) {
-  const container = $('branch-tree'); container.replaceChildren();
-  const byId = new Map(branches.map(branch => [branch.id, branch]));
-  const children = new Map();
-  for (const branch of branches) {
-    const parent = byId.has(branch.source_branch) && branch.source_branch !== branch.id ? branch.source_branch : null;
-    if (!children.has(parent)) children.set(parent, []);
-    children.get(parent).push(branch);
-  }
-  const seen = new Set();
-  function group(items, root) {
-    const list = element('ul', `tree-group${root ? ' root' : ''}`); list.setAttribute('role', 'group');
-    for (const branch of items.sort((a,b) => (a.name === 'main' ? -1 : b.name === 'main' ? 1 : a.name.localeCompare(b.name)))) {
-      if (seen.has(branch.id)) continue;
-      seen.add(branch.id);
-      const item = element('li','tree-item'); item.setAttribute('role','none');
-      const button = element('button', `branch-button${branch.id === selectedBranch ? ' selected' : ''}`);
-      button.type = 'button'; button.setAttribute('role','treeitem'); button.setAttribute('aria-selected', String(branch.id === selectedBranch)); button.title = branch.name;
-      button.append(element('span','branch-symbol','⑂'));
-      const copy = element('span','branch-copy'); copy.append(element('span','branch-name',branch.name), element('span','branch-sub',short(branch.id))); button.append(copy);
-      if (branch.id === current) button.append(element('span','current-mark','当前'));
-      button.addEventListener('click', () => chooseBranch(branch.id)); item.append(button);
-      if (children.has(branch.id)) item.append(group(children.get(branch.id), false));
-      list.append(item);
-    }
-    return list;
-  }
-  container.append(group(children.get(null) || [], true));
-  const remaining = branches.filter(branch => !seen.has(branch.id));
-  if (remaining.length) container.append(group(remaining, true));
-}
 function branchHistory(branch, revisions) {
   const byId = new Map(revisions.map(revision => [revision.id, revision]));
   const visited = new Set(); const pending = [branch.formal_head, branch.autosave_head];
@@ -79,18 +49,19 @@ function branchHistory(branch, revisions) {
 }
 function render() {
   if (!snapshot) return;
-  const {status,revisions} = snapshot;
+  const focusId = document.activeElement?.id;
+  const {status,revisions,summary} = snapshot;
   const branches = status.branches.filter(branch => branch.state !== 'deleted');
   if (!branches.some(branch => branch.id === selectedBranch)) selectedBranch = branches.find(branch => branch.id === status.selected_branch)?.id || branches[0]?.id;
   $('workspace-name').textContent = status.workspace.name;
   $('location').textContent = `本地节点 ${short(status.location)}`;
-  $('branch-count').textContent = branches.length;
-  $('revision-count').textContent = revisions.filter(revision => revision.kind !== 'candidate').length;
-  $('commit-count').textContent = `${revisions.filter(revision => revision.kind === 'commit').length} 个 commit`;
-  $('current-branch').textContent = branches.find(branch => branch.id === status.selected_branch)?.name || '尚未选择';
-  $('sync-status').textContent = !status.capabilities.remote_configured ? '本地保存' : status.pending_jobs ? '同步中' : '已同步';
-  $('sync-detail').textContent = !status.capabilities.remote_configured ? '未配置远程存储' : `${status.pending_jobs} 个待处理操作`;
-  renderTree(branches, status.selected_branch);
+  $('branch-count').textContent = summary.branch_count;
+  $('mount-count').textContent = summary.mount_count;
+  $('mount-detail').textContent = `${summary.ready_mount_count} 个就绪 · ${summary.mount_count - summary.ready_mount_count} 个未就绪`;
+  $('mounted-branch-count').textContent = summary.mounted_branch_count;
+  $('sync-status').textContent = !status.capabilities.remote_configured ? '未启用' : status.pending_jobs ? '同步中' : '已同步';
+  $('sync-detail').textContent = !status.capabilities.remote_configured ? '内容保存在本机' : `${status.pending_jobs} 个待处理操作`;
+  workspaceView.render(snapshot, selectedBranch);
   const branch = branches.find(branch => branch.id === selectedBranch);
   if (!branch) {
     revisionViewer.clear();
@@ -100,13 +71,13 @@ function render() {
   }
   $('history-title').textContent = branch.name;
   $('branch-meta').replaceChildren(element('code','',short(branch.id)));
-  const parent = branches.find(value => value.id === branch.source_branch);
-  $('branch-meta').append(element('span','',parent ? `来源 ${parent.name} · ${short(branch.base_revision)}` : '工作区初始分支'));
+  const origin = snapshot.origins.find(value => value.branch === branch.id);
+  const parent = status.branches.find(value => value.id === origin?.source_branch);
+  $('branch-meta').append(element('span','',origin?.workspace_root ? '工作区初始分支' : `来源 ${parent?.name || short(origin?.source_branch)} · ${short(branch.base_revision)}`));
   $('branch-state').textContent = branch.dirty ? '存在工作修改' : branch.state === 'stopped' ? '已停止写入' : '本地已保存';
   $('branch-state').className = `pill${branch.dirty || branch.state === 'stopped' ? ' paused' : ''}`;
   const entries = branchHistory(branch,revisions);
   $('history-count').textContent = entries.length;
-  const focusId = document.activeElement?.classList.contains('revision-more') ? document.activeElement.id : null;
   const list = $('revision-list'); list.replaceChildren();
   if (!entries.length) list.append(element('div','no-revisions','暂无保存的版本。'));
   for (const revision of entries) {
@@ -123,7 +94,7 @@ function render() {
       isHead:revision.id === branch.formal_head}));
     list.append(row);
   }
-  revisionViewer.update(status.workspace.id, entries);
+  revisionViewer.update(status.workspace.id, revisions);
   if (focusId) document.getElementById(focusId)?.focus({preventScroll:true});
 }
 async function refresh(force=false) {
@@ -137,7 +108,7 @@ async function refresh(force=false) {
     for (const workspace of workspaces) { const option = element('option','',workspace.name); option.value = workspace.id; $('workspace').append(option); }
     if (workspaces.some(workspace => workspace.id === selection)) $('workspace').value = selection;
     $('empty').hidden = workspaces.length > 0; $('panels').hidden = !workspaces.length;
-    if (!workspaces.length) { snapshot = null; revisionViewer.clear(); $('workspace-name').textContent='暂无工作区'; ['branch-count','revision-count'].forEach(id => $(id).textContent='0'); }
+    if (!workspaces.length) { snapshot = null; revisionViewer.clear(); $('workspace-name').textContent='暂无工作区'; ['branch-count','mount-count','mounted-branch-count'].forEach(id => $(id).textContent='0'); $('mount-detail').textContent='暂无挂载点'; $('sync-status').textContent='—'; $('sync-detail').textContent='暂无工作区'; }
     else {
       const data = await api(`/api/workspaces/${encodeURIComponent($('workspace').value)}`);
       if (request !== generation) return;
@@ -152,6 +123,13 @@ async function refresh(force=false) {
 }
 const settingsPage = createSettingsPage({api, element, $});
 const revisionViewer = createRevisionViewer({api, element});
+const workspaceView = createWorkspaceView({element, selectBranch:chooseBranch, showRevision:(revision, triggerId) => {
+  const branch = snapshot.status.branches.find(value => value.id === revision.branch);
+  revisionViewer.information({workspace:snapshot.status.workspace.id, revision,
+    message:revision.message || titles[revision.kind] || revision.kind,
+    sourceBranch:branch?.name || short(revision.branch), isHead:revision.id === branch?.formal_head,
+    triggerId});
+}});
 function isSettings() { return location.pathname === '/settings'; }
 async function refreshPage() {
   if (!token) return;

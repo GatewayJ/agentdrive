@@ -96,9 +96,11 @@ agentdrive integrate --protocol codex-app-server --workspace "$WORKSPACE" \
 
 运行 `agentdrive dashboard --open` 打开 daemon 页面。浏览器从 URL fragment 读取令牌，随后移除 fragment，将令牌保存在 session storage 中。也可以直接打开地址并输入 daemon token。页面每 15 秒刷新，展示分支创建关系、版本历史和 commit 信息。点击分支只改变页面展示的历史。
 
-只读 JSON 接口为 `GET /api/workspaces` 和 `GET /api/workspaces/{workspace}`。后者返回 `status` 和 `revisions`，其中 `selected_branch` 是当前 location 的选择。管理员通过 `/settings` 编辑运行配置，详见[配置说明](configuration.zh-CN.md)。
+只读 JSON 接口为 `GET /api/workspaces` 和 `GET /api/workspaces/{workspace}`。后者返回 `status`、`revisions`、`summary` 和 `origins`。`summary` 包含 `branch_count`、`mount_count`、`ready_mount_count`、`mounted_branch_count`；`status.mounts` 仅保留未释放记录，并按路径排序。`origins` 为每个 branch 提供来源 branch、准确的来源 revision、版本是否可读和工作区根分支标识。`selected_branch` 是当前 location 对此工作区的默认选择。管理员通过 `/settings` 编辑运行配置，详见[配置说明](configuration.zh-CN.md)。
 
 协议参考：[ACP 会话](https://agentclientprotocol.com/protocol/v1/session-setup)、[ACP 回合](https://agentclientprotocol.com/protocol/v1/prompt-turn)、[Codex app-server](https://developers.openai.com/codex/app-server/)。
+
+顶部显示当前工作区的工作分支数量、本机挂载点数量、被就绪挂载使用的不同分支数量和远程同步状态。挂载点统计排除已释放记录，准备中、暂停和待恢复记录保留并显示状态。分支图按 `source_branch` 与 `base_revision` 连接到创建来源版本，点击版本可查看信息；来源版本可能是 commit、自动保存或检查点。“默认”表示本机未指定 branch 时的选择，“已挂载”显示就绪目录数量。挂载目录表列出完整路径、对应分支、读写模式和状态，点击分支可查看其历史。
 
 版本历史每行右侧提供 **更多（⋯）** 菜单。**版本信息** 在弹框中显示版本属性；**修改内容** 在弹框中显示分页修改文件列表，默认选中第一项并在右侧展示详情与文本差异。加载更多时保留当前选择。可以通过关闭按钮、Escape 或点击弹框外部关闭。自动与父版本比较；合并版本使用第一父版本，初始版本与空目录比较。“上一版本”按父子关系确定。内容完全相同且来源、目标唯一的移动显示为重命名；存在多个匹配或同时修改内容的移动显示为新增、删除。新增、删除的空文件明确显示为空文件（0 字节）；重命名或属性修改中的相同内容单独说明。二进制和超出预览上限的文件显示元数据。浏览版本保持现有挂载和工作分支。
 

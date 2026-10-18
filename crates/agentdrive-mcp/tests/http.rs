@@ -247,6 +247,14 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
     let view: Value = response.json().await.unwrap();
     assert_eq!(view["status"]["branches"].as_array().unwrap().len(), 1);
     assert!(view["status"]["selected_branch"].is_string());
+    assert_eq!(view["summary"]["branch_count"], 1);
+    assert_eq!(view["summary"]["mount_count"], 0);
+    assert_eq!(view["summary"]["mounted_branch_count"], 0);
+    assert_eq!(view["origins"][0]["workspace_root"], true);
+    assert_eq!(
+        view["origins"][0]["revision"],
+        view["status"]["workspace"]["initial_revision"]
+    );
     assert_eq!(view["revisions"].as_array().unwrap().len(), 1);
     let revision = view["revisions"][0]["id"].as_str().unwrap();
     let changes_url = format!(
@@ -431,6 +439,69 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
         .unwrap();
     assert_eq!(connected["binding"]["id"], first["binding"]["id"]);
     assert_eq!(connected["binding"]["branch"], first["binding"]["branch"]);
+    let dashboard_url = format!("{base}/api/workspaces/{}", workspace.as_str().unwrap());
+    let readonly = owner
+        .call(
+            "mount_prepare".into(),
+            json!({
+                "request_id":"dashboard-readonly",
+                "request":{"workspace":workspace,"branch":first["binding"]["branch"],
+                    "revision":revision,"path":temporary.path().join("readonly"),
+                    "access":"read_only","durability":"local"}
+            }),
+        )
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert!(readonly["error"].is_null(), "{readonly}");
+    let inventory: Value = http
+        .get(&dashboard_url)
+        .bearer_auth(owner_token)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(inventory["summary"]["mount_count"], 2);
+    assert_eq!(inventory["summary"]["ready_mount_count"], 2);
+    assert_eq!(inventory["summary"]["mounted_branch_count"], 1);
+    assert_eq!(inventory["status"]["mounts"].as_array().unwrap().len(), 2);
+    let binding = &readonly["result"]["binding"];
+    let released = owner
+        .call(
+            "mount_unmount".into(),
+            json!({
+                "request_id":"dashboard-release-readonly",
+                "request":{"mount":binding["id"],"generation":binding["generation"]}
+            }),
+        )
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert!(released["error"].is_null(), "{released}");
+    let inventory: Value = http
+        .get(&dashboard_url)
+        .bearer_auth(owner_token)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(inventory["summary"]["mount_count"], 1);
+    assert_eq!(inventory["summary"]["mounted_branch_count"], 1);
+    assert_eq!(inventory["status"]["mounts"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        inventory["status"]["mounts"][0]["path"],
+        first["mount_path"]
+    );
     let page = http.get(&base).send().await.unwrap();
     assert_eq!(page.status(), 200);
     assert!(

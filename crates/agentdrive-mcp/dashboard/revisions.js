@@ -18,7 +18,7 @@ export function createRevisionViewer({api, element}) {
   dialog.append(heading, detail, changes); document.body.append(menu, dialog);
   const revisionChanges = createRevisionChanges({api, element, container:changes});
   let menuContext = null, dialogContext = null;
-  const triggerId = context => `revision-more-${context.revision.id}`;
+  const triggerId = context => context.triggerId || `revision-more-${context.revision.id}`;
   const trigger = context => context && document.getElementById(triggerId(context));
 
   function closeMenu(restoreFocus = false) {
@@ -42,8 +42,8 @@ export function createRevisionViewer({api, element}) {
     const top = rect.bottom + 6;
     menu.style.top = `${Math.max(8, top + menu.offsetHeight <= innerHeight - 8 ? top : rect.top - menu.offsetHeight - 6)}px`;
   }
-  function showDialog(kind) {
-    const context = menuContext; closeMenu();
+  function showDialog(kind, context = menuContext) {
+    closeMenu();
     if (!context) return;
     closeDialog(false); dialogContext = context;
     const {workspace, revision, message, sourceBranch, isHead} = context;
@@ -122,5 +122,5 @@ export function createRevisionViewer({api, element}) {
   };
   dialog.addEventListener('pointerdown', event => { backdropPressed = outsideDialog(event); });
   dialog.addEventListener('click', event => { if (backdropPressed && outsideDialog(event)) closeDialog(); backdropPressed = false; });
-  return {button, update, clear};
+  return {button, update, clear, information:context => showDialog('info', context)};
 }

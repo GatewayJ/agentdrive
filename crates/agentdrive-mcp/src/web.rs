@@ -1,3 +1,4 @@
+use crate::workspace_view::WorkspaceView;
 use agentdrive_config::{ConfigStore, Settings, SettingsUpdate};
 use agentdrive_model::*;
 use agentdrive_ports::*;
@@ -60,6 +61,7 @@ pub(crate) fn assets() -> Router {
         .route("/settings", get(|| async { Html(include_str!("../dashboard/index.html")) }))
         .route("/dashboard", get(|| async { Html(include_str!("../dashboard/index.html")) }))
         .route("/dashboard.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/dashboard.js")) }))
+        .route("/workspace.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/workspace.js")) }))
         .route("/settings.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/settings.js")) }))
         .route("/revisions.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/revisions.js")) }))
         .route("/changes.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/changes.js")) }))
@@ -102,10 +104,10 @@ async fn workspace(
     State(services): State<Services>,
     Extension(actor): Extension<Principal>,
     Path(workspace): Path<WorkspaceId>,
-) -> std::result::Result<Json<Value>, ApiError> {
+) -> std::result::Result<Json<WorkspaceView>, ApiError> {
     let status = services.workspace.status(&actor, workspace).await?;
     let revisions = services.revisions.list(&actor, workspace, None).await?;
-    Ok(Json(json!({"status": status, "revisions": revisions})))
+    Ok(Json(WorkspaceView::new(status, revisions)))
 }
 
 #[derive(Deserialize)]
