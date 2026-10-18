@@ -37,12 +37,13 @@ export function createRevisionViewer({api, element}) {
       ['父版本', revision.parents.length ? revision.parents.join(' / ') : '初始版本'],
       ['内容对象', revision.root.id], ['来源分支', sourceBranch], ['保存状态', '本地已保存'],
     ];
-    if (isHead) fields.push(['分支位置', '当前 commit']);
     for (const [label, value] of fields) {
       const field = element('div', 'detail-field');
       field.append(element('dt', '', label), element('dd', '', value)); grid.append(field);
     }
-    detail.replaceChildren(element('h3', 'revision-section-title', '版本信息'), grid);
+    const heading = element('h3', 'revision-section-title', '版本信息');
+    if (isHead) heading.append(element('span', 'pill', '当前正式提交'));
+    detail.replaceChildren(heading, grid);
   }
   function show(context) {
     closeDialog(false); dialogContext = context; renderDetails(context);

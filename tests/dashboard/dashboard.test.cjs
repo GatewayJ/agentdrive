@@ -149,7 +149,7 @@ test('open revision metadata follows a new commit without reloading the selected
   data.revisions[2].kind = 'commit';
   const {page, requests} = await open(t, data);
   await openRevision(page);
-  assert((await page.locator('.revision-detail').textContent()).includes('当前 commit'));
+  assert((await page.locator('.revision-detail').textContent()).includes('当前正式提交'));
   await page.locator('.changed-file').filter({hasText:'/second.txt'}).click();
   await page.waitForFunction(() => document.querySelector('.diff-path')?.textContent === '/second.txt');
   const count = differenceReads(requests).length;
@@ -157,7 +157,7 @@ test('open revision metadata follows a new commit without reloading the selected
   branch.formal_head = 'next-commit'; branch.working_root = {id:'tree-next-commit'};
   await refresh(page);
   assert.equal(await page.locator('dialog').evaluate(el => el.open), true);
-  assert(!(await page.locator('.revision-detail').textContent()).includes('当前 commit'));
+  assert(!(await page.locator('.revision-detail').textContent()).includes('当前正式提交'));
   assert.equal(await page.locator('.diff-path').textContent(), '/second.txt');
   assert.equal(differenceReads(requests).length, count);
   await page.keyboard.press('Escape');
