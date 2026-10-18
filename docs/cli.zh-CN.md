@@ -4,7 +4,7 @@
 
 ## 启动守护进程
 
-按照 [README](../README.zh-CN.md) 在仓库根目录构建。以下示例使用 POSIX shell 和 `jq` 构造 JSON、读取返回的 ID。请在每个终端中将构建后的程序加入 `PATH`：
+按照 [安装说明](installation.zh-CN.md) 在仓库根目录构建。以下示例使用 POSIX shell 和 `jq` 构造 JSON、读取返回的 ID。请在每个终端中将构建后的程序加入 `PATH`：
 
 ```sh
 export PATH="$PWD/target/debug:$PATH"

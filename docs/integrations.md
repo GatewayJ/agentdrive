@@ -114,6 +114,12 @@ Double-click a branch, or focus it and press Enter or Space, to open **Branch fi
 
 If the branch changes during browsing, refresh the file dialog to read its latest contents. Browsing does not change mounts, create revisions or trigger checkpoints. `GET /api/workspaces/{workspace}/branches/{branch}/files` accepts `path`, optional `after` and `version`, returning `entries`, `next` and `version`. Subsequent directory pages and file reads use the same version; a changed branch returns HTTP 409. `GET /api/workspaces/{workspace}/branches/{branch}/file` accepts `path`, `version`, `offset` and `size`, returning raw bytes with a per-read limit of 1–262144 bytes. Both endpoints enforce bearer authentication, workspace membership and branch read permission, and disable response caching.
 
+## Archive
+
+The default dashboard landing page is `/archive`, above Branches & Versions in the navigation. Select a project and branch to read its current files without changing the mounted branch. The page uses `GET /api/workspaces/{workspace}/archive` for current workspace status without loading revision history, and shares `BranchFilesApi` directory and file reads with the branch dialog. Filtering applies to loaded entries in the current directory; hidden files can be revealed. Markdown uses safe document text with a source toggle. Project, branch and directory are preserved in the URL.
+
+Remote confirmation requires a known remote reference with matching owner, authority epoch, generation, durable sequence and working root, plus locally saved changes. An empty queue alone does not establish remote saving. Status reflects the last known confirmation; pull remote updates through MCP before reviewing newer work from another machine.
+
 ## macOS FUSE-T
 
 Install FUSE-T 1.2.9 and pkg-config, then build with `make -j "$(sysctl -n hw.ncpu)" build FEATURES=macos-fuse-t`. AgentDrive uses the local NFS backend and disables its attribute cache. FUSE-T runs without a kernel extension. Its [license](https://github.com/macos-fuse-t/fuse-t) requires a commercial license for commercial use or distribution with commercial software.

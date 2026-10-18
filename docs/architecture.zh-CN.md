@@ -158,3 +158,5 @@ object ID 使用 SHA-256 对域分隔标记、格式版本、对象类型和内�
 `Dashboard -> BranchFilesApi -> BranchFileService` 提供当前目录和文件读取。服务负责分支读取权限、版本校验和并发读取；`LocalStateStore::children_page` 使用 `(branch, parent, path)` 索引分页查询直接子项，`node_at` 定位单个文件。未保存文件经 `WorkingTreeStore` 读取，已保存对象经 `ContentResolver` 读取，可按需从远端获取。HTTP 层转换参数与字节响应；浏览器负责目录导航、UTF-8 字符边界和二进制展示。
 
 服务使用分支 ID、authority epoch、generation 和 mutation sequence 生成读取版本。在分支锁内验证版本并读取元数据；未保存文件的有界读取保持分支锁，已保存文件读取期间通过对象保护锁保持对象可用，并释放分支锁。此能力不创建文件句柄、挂载绑定、检查点或 revision。
+
+档案室入口只读取 `WorkspaceApi::status`，无需枚举版本历史。`archive.js` 管理分支选择和保存状态展示；`file-browser.js` 管理目录分页、文件读取、请求取消和过期版本；`file-preview.js` 通过 DOM 文本节点展示 Markdown。`branch-files.js` 将同一个文件浏览器用于原有弹框。

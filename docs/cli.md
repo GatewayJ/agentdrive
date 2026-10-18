@@ -4,7 +4,7 @@
 
 ## Start the daemon
 
-Build from the repository root using [README](../README.md). The examples below use POSIX shell and `jq` to construct JSON and read returned IDs. Add the built binaries to `PATH` in each terminal:
+Build from the repository root using [installation guide](installation.md). The examples below use POSIX shell and `jq` to construct JSON and read returned IDs. Add the built binaries to `PATH` in each terminal:
 
 ```sh
 export PATH="$PWD/target/debug:$PATH"

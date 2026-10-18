@@ -17,6 +17,7 @@ pub(crate) fn api(services: Services) -> Router {
     Router::new()
         .route("/api/workspaces", get(workspaces))
         .route("/api/workspaces/{workspace}", get(workspace))
+        .route("/api/workspaces/{workspace}/archive", get(archive))
         .route(
             "/api/workspaces/{workspace}/revisions/{revision}/changes",
             get(revision_changes),
@@ -66,6 +67,7 @@ pub(crate) fn assets() -> Router {
     Router::new()
         .route("/favicon.svg", get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], include_str!("../dashboard/favicon.svg")) }))
         .route("/", get(|| async { Html(include_str!("../dashboard/index.html")) }))
+        .route("/archive", get(|| async { Html(include_str!("../dashboard/index.html")) }))
         .route("/settings", get(|| async { Html(include_str!("../dashboard/index.html")) }))
         .route("/dashboard", get(|| async { Html(include_str!("../dashboard/index.html")) }))
         .route("/dashboard.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/dashboard.js")) }))
@@ -74,6 +76,10 @@ pub(crate) fn assets() -> Router {
         .route("/revisions.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/revisions.js")) }))
         .route("/branch-files.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/branch-files.js")) }))
         .route("/changes.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/changes.js")) }))
+        .route("/archive.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/archive.js")) }))
+        .route("/file-browser.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/file-browser.js")) }))
+        .route("/file-preview.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/file-preview.js")) }))
+        .route("/archive.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], include_str!("../dashboard/archive.css")) }))
         .route("/dashboard.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], include_str!("../dashboard/dashboard.css")) }))
         .layer(axum::middleware::map_response(|mut response: Response| async move {
             response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'".parse().unwrap());
@@ -117,6 +123,15 @@ async fn workspace(
     let status = services.workspace.status(&actor, workspace).await?;
     let revisions = services.revisions.list(&actor, workspace, None).await?;
     Ok(Json(WorkspaceView::new(status, revisions)))
+}
+
+// File browsing only needs current workspace state, independent of history size.
+async fn archive(
+    State(services): State<Services>,
+    Extension(actor): Extension<Principal>,
+    Path(workspace): Path<WorkspaceId>,
+) -> std::result::Result<Json<WorkspaceStatus>, ApiError> {
+    Ok(Json(services.workspace.status(&actor, workspace).await?))
 }
 
 #[derive(Deserialize)]

@@ -2,7 +2,8 @@
   "name": "agentdrive-dashboard-tests",
   "private": true,
   "scripts": {
-    "test": "node --test dashboard.test.cjs"
+    "test": "node --test dashboard.test.cjs",
+    "screenshots": "node screenshots.cjs"
   },
   "devDependencies": {
     "playwright": "1.62.1"

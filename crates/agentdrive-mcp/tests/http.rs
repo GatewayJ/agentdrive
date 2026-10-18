@@ -256,6 +256,39 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
         view["status"]["workspace"]["initial_revision"]
     );
     assert_eq!(view["revisions"].as_array().unwrap().len(), 1);
+    let archive_url = format!(
+        "{base}/api/workspaces/{}/archive",
+        workspace.as_str().unwrap()
+    );
+    assert_eq!(http.get(&archive_url).send().await.unwrap().status(), 401);
+    assert_eq!(
+        http.get(&archive_url)
+            .bearer_auth(visitor_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let archive_response = http
+        .get(&archive_url)
+        .bearer_auth(owner_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(archive_response.headers()["cache-control"], "no-store");
+    let archive: Value = archive_response.json().await.unwrap();
+    assert_eq!(archive["workspace"], view["status"]["workspace"]);
+    assert_eq!(archive["branches"], view["status"]["branches"]);
+    assert!(archive.get("revisions").is_none());
+    assert_eq!(
+        http.get(format!("{base}/archive"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
     let branch = view["status"]["branches"][0]["id"].as_str().unwrap();
     let files_url = format!(
         "{base}/api/workspaces/{}/branches/{branch}/files?path=%2F",

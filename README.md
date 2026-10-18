@@ -2,106 +2,101 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-AgentDrive gives agents durable workspaces, explicit workspace branches, immutable revisions, and native filesystem paths. A long-running Rust daemon owns local state and mounts. Concurrent MCP clients and the CLI share its authenticated API.
+**Share the files. Pick up the work.**
 
-The implementation includes:
+AgentDrive gives people and agents a persistent project space. Agents read source material, write documents and edit code in a local directory. Their work can be saved remotely so an agent on another machine can continue. Branches keep parallel tasks separate, and versions record how the results evolve.
 
-- Portable file names, content-addressed objects, paged directory/inode indexes, and SQLite transactions.
-- Linux FUSE, macOS FUSE-T/macFUSE, and Windows WinFsp adapters; snapshots, branch restore, and revision history.
-- S3/RustFS replication, bounded streaming transfers, offline cache pins, online ownership transfer, and editable three-way merge candidates.
-- ACP and Codex app-server lifecycle bridges, explicit branch commands, and a dashboard for branch history and runtime settings.
-- 31 typed MCP tools over authenticated Streamable HTTP, with a stdio proxy and JSON CLI.
+Keep using your preferred agent, editor and terminal. MCP lets agents manage saving, synchronization, branches and handoffs. People can open the **Archive** to read the latest files in each project branch.
 
-## Build
+> Development preview; the first formal release has not shipped. AgentDrive is the current product name.
 
-Use Rust stable (minimum declared version 1.90), a C compiler for bundled SQLite, and GNU Make. Build jobs use Make's jobserver.
+![Archive: browse a branch and read its handoff document](docs/images/archive.png)
 
-```sh
-make -j "$(getconf _NPROCESSORS_ONLN)" build
-make -j "$(getconf _NPROCESSORS_ONLN)" verify
-```
+*Demo project: market research. The Archive shows current files, local save state and remote confirmation. The current dashboard is in Chinese.*
 
-| Platform | Native filesystem requirements | Build |
-| --- | --- | --- |
-| Linux | FUSE 3 utilities, `/dev/fuse`, permission to mount | Default features |
-| macOS | [FUSE-T](https://github.com/macos-fuse-t/fuse-t) and `pkg-config` | `make -j "$(sysctl -n hw.ncpu)" build FEATURES=macos-fuse-t` |
-| Windows | MSVC, [WinFsp 2.1](https://github.com/winfsp/winfsp/releases/tag/v2.1) including its Developer feature | PowerShell: `make -j $env:NUMBER_OF_PROCESSORS build` |
+## Keep the project moving
 
-The default macOS build provides the daemon, CLI, and storage operations. Enable `macos-fuse-t` for native mounts without a kernel extension. Make selects the FUSE-T library; direct Cargo builds must set `PKG_CONFIG_PATH="$PWD/build/fuse-t"`. Existing macFUSE installations can use `FEATURES=macos-mount`. The Windows build loads WinFsp from its registered installation path. Use a local NTFS volume for Windows state.
+| When you need to… | AgentDrive helps you… |
+| --- | --- |
+| Work locally and save remotely | Use ordinary file tools, keep local work, and synchronize results through configured S3 / RustFS storage. |
+| Hand work to an agent elsewhere | Save the brief, input files, results and next steps together; pull them on the receiving machine. |
+| Try several approaches in parallel | Branch from shared material, complete separate tasks, review changes and merge the results. |
+| Check progress yourself | Browse current files in the Archive, then inspect their origins and changes in Branches & Versions. |
 
-## Run
+## How to use it
 
-```sh
-AGENTDRIVE_DIRECTORY="$HOME/.local/share/agentdrive"
-./target/debug/agentdrived init --directory "$AGENTDRIVE_DIRECTORY"
-./target/debug/agentdrived serve --config "$AGENTDRIVE_DIRECTORY/agentdrive.json"
-```
+### 1. Connect a local project and start working
 
-In another terminal:
+Follow [installation and startup](docs/installation.md), then connect AgentDrive to an MCP-capable agent client. An existing local directory can be imported and mounted back at the same path. Pause writes before converting it, and restart the agent after conversion.
 
-```sh
-export AGENTDRIVE_TOKEN_FILE="$HOME/.local/share/agentdrive/token"
-./target/debug/agentdrive tools
-./target/debug/agentdrive call workspace_create --request-id create-demo --json '{"name":"demo"}'
-./target/debug/agentdrive call workspace_list
-```
+Ask your agent:
 
-`init` creates configuration, a random bearer token, and directories for state, mounts, and file exchange. Existing credentials are preserved by refusing initialization over an existing configuration. The daemon defaults to `127.0.0.1:7421`; its MCP endpoint is `/mcp`. Run one daemon per state directory.
+> Connect this project to AgentDrive. Keep its existing files, create a branch for this task, and tell me the working directory and branch name.
 
-To connect an MCP client through stdio, configure the executable as `agentdrive`, arguments as `["mcp"]`, and set `AGENTDRIVE_TOKEN_FILE`. `AGENTDRIVE_ENDPOINT` selects another daemon endpoint. The stdio process forwards requests to the running daemon.
+The agent creates, mounts or adopts a workspace through MCP, then continues using its normal file tools. Changes are automatically saved. Ask it to save a named version when you reach a meaningful milestone.
 
-Use `agentdrive tools` as the source for JSON input schemas. Command tools accept `{ "request_id": "stable-id", "request": { ... } }` over MCP. The CLI's `--request-id` option builds that envelope. Query tools and `operation_cancel` receive their arguments directly. `--json -` reads JSON from standard input. The CLI exits with 0 for successful tool responses, 2 for a tool error, and 1 for transport or input errors; command-line parsing errors also use 2. See [CLI usage](docs/cli.md) for executable examples and [MCP parameters and capabilities](docs/mcp.md) for the complete tool reference.
+### 2. Synchronize local results to remote storage
 
-## Branches, agents, and dashboard
+Open **Settings** in the dashboard and configure S3 or RustFS with an endpoint, bucket and credentials. Machines collaborating on a project use the same bucket, prefix and authorized project identity, with independent local configuration and state directories. [Connection guide](docs/configuration.md)
 
-A new workspace selects its writable `main` branch. Mounting the same workspace at the same location reuses its selected branch. A new location creates and selects its own branch from the root branch's latest published content. Create and switch branches explicitly through MCP (`branch_create`, `branch_switch`) or the CLI:
+> Save this branch remotely. After remote publication is confirmed, report the workspace ID, branch, version and handoff document path.
 
-```sh
-agentdrive mount --workspace "$WORKSPACE" "$AGENTDRIVE_DIRECTORY/mounts/project"
-agentdrive branch list --workspace "$WORKSPACE"
-agentdrive branch create --workspace "$WORKSPACE" --name feat/task
-agentdrive branch switch --workspace "$WORKSPACE" --branch "$BRANCH"
-agentdrive dashboard --open
-```
+The agent can request remote durability with `mount_save` and inspect `remote_confirmed` in the operation receipt. If waiting times out, keep polling the same operation. **Local saving and remote confirmation are separate states.** The Archive reports the latest known remote confirmation.
 
-Creation captures current working content without changing the selection. Switching saves the previous branch, checks native file handles, and updates this location's selection and mount. Agents sharing the directory use the same branch. The selection survives daemon restarts. The dashboard shows workspace statistics, branch origins connected to their exact source revisions, and local mount paths with their branches and access modes. Version dialogs show metadata, changed files and text differences. Administrators can use **Settings** to update cache policy, S3 storage and allowed HTTP origins while the daemon is running; see [configuration](docs/configuration.md).
+### 3. Let an agent on another machine continue
 
-Existing agents can connect through `agentdrive mcp` and use a mounted directory. `agentdrive integrate` manages the working directory and saves on completion, cancellation, failure, and reconnect. See [agent integrations](docs/integrations.md) for ACP and Codex app-server commands and protocol behavior. File changes trigger automatic saves, and shared mounts remain available after agent disconnection.
+Keep a `HANDOFF.md` in the project with the goal, completed work, important files, validation steps and remaining tasks. Save it remotely with the results.
 
-The branch owner, epoch, generation, and head are checked for guarded changes. Obtain current values from `workspace_status`; do not manufacture them. `branch_switch` attempts the complete switch in one call; on `MOUNT_BUSY`, close processes using the directory or restart the Agent, then retry with the same request ID. Restore and merge operations that need an active mount to stop return `waiting_for_quiesce`. Stop processes using that directory, close their handles and current working directories, then call `mount_release` with the operation ID and expected binding generation. See [operations and recovery](docs/operations.md).
+Give the receiving agent the workspace ID, source branch or revision and handoff path:
 
-## Storage and configuration
+> Pull the latest confirmed remote project data, read HANDOFF.md, create my branch from the specified source, mount it locally and continue the next task.
 
-`agentdrive.json` uses absolute filesystem paths. `mount_roots` permits mount destinations; `directory_roots` permits import and export paths. Imports require a stable source directory and reject symbolic links and incompatible names. Exports create a new directory and preserve file bytes, modification times, and supported permissions.
+The receiving agent uses `sync`, creates a branch from the intended source and mounts it. To continue writing **the same branch**, stop writes and release mounts on the previous machine, transfer write ownership with `ownership_transfer`, then pull and confirm adoption at the destination location. [Handoff and recovery](docs/operations.md)
 
-Enable S3 and save its connection settings and credentials in Dashboard **Settings**, or add `remote` to the generated configuration:
+Handoffs carry files, versions and branch information. Task context can travel as project documents. Running processes, chat history and client credentials are managed by each agent client.
+
+### 4. Read results in the Archive and inspect changes in history
+
+Open the dashboard, select a project and enter **Archive**:
+
+- Select a branch to browse its current directory; a file preview opens automatically.
+- Read Markdown as a document or source. Page through text and inspect binary bytes in hexadecimal.
+- Filter the current directory, reveal hidden files, navigate folders and return to the same project, branch and directory through its URL.
+- See local progress, remote confirmation and directory usage separately. Browsing leaves the agent's mounted branch unchanged.
+- Files reflect locally known current contents, including unsaved or uncommitted edits. Ask the agent to pull remote updates before reviewing new work from another machine.
+
+![Branches and versions: inspect origins and revision history](docs/images/branches.png)
+
+*The same demo project in Branches & Versions. Double-click a revision to inspect its metadata, changed files and text differences.*
+
+## Built for agents to operate
+
+For a client that supports stdio MCP, add this configuration and replace the example paths with local absolute paths:
 
 ```json
 {
-  "remote": {
-    "bucket": "agentdrive",
-    "prefix": "agentdrive/v1",
-    "region": "us-east-1",
-    "endpoint": "https://s3.example.com",
-    "allow_http": false
+  "mcpServers": {
+    "agentdrive": {
+      "command": "/absolute/path/agentdrive/target/debug/agentdrive",
+      "args": ["mcp"],
+      "env": {
+        "AGENTDRIVE_TOKEN_FILE": "/absolute/path/to/agentdrive/token"
+      }
+    }
   }
 }
 ```
 
-Credentials can be saved through Dashboard Settings or supplied through the AWS environment/role providers supported by `object_store`. The bucket must already exist and support conditional object writes, conditional multipart completion, and strongly consistent reads. Restrict credentials to the selected bucket/prefix. Local development endpoints may explicitly enable `allow_http`.
+Keep the AgentDrive service running. Agents can discover tool schemas and manage workspaces, branches, saves, synchronization and handoffs. Streamable HTTP clients can connect to `http://127.0.0.1:7421/mcp` with the local bearer token. CLI commands support terminal workflows and scripts; ACP / Codex app-server integrations connect working directories with end-of-task saving. [Agent integrations](docs/integrations.md) · [MCP tools](docs/mcp.md) · [CLI](docs/cli.md)
 
-Switching between local and S3 storage takes effect without restarting: enabling S3 copies retained history, and returning to local storage downloads missing history. Preparation or configuration-save failures preserve the active connection. `meta.db` is a local SQLite database and is never uploaded as a file. S3 stores file contents, directory/inode indexes, revision history and branch references; pulling imports the published records into each machine's own database. Location identity, branch selection, mounts, cache state and working files stay local.
+A single `branch_switch` call completes a branch change. If a process occupies the directory, follow the response instructions to close it or restart the agent, then retry the same operation.
 
-See [configuration and S3](docs/configuration.md) for every field, AWS S3/RustFS examples, supported credential sources, environment precedence, and multi-machine setup.
+## Get started
 
-S3 mode exposes one **Local cache capacity** setting, default 2 GiB (`cache.max_bytes` in the configuration file, in bytes). Collection runs every 30 seconds and, when capacity is exceeded, targets 75% of that capacity. Low disk space also triggers collection. Current branch roots, pending publications, merge candidates, active readers and explicit pins remain protected; usage can exceed the setting. Only remotely confirmed historical objects are eligible. Local mode retains all history and hides the cache setting. This capacity applies to immutable object files; SQLite metadata and working files occupy additional space. `cache_status.offline_ready` requires a complete pinned selection.
+Build from source on Linux, macOS or Windows. Native mounts require FUSE, FUSE-T / macFUSE or WinFsp respectively. [Installation, dependencies and startup commands](docs/installation.md)
 
-## Validation and scope
+- [Remote storage configuration](docs/configuration.md): local storage, S3, RustFS and multiple machines.
+- [Operations and recovery](docs/operations.md): publication confirmation, handoffs, merging and recovery.
+- [Documentation index](docs/README.md): complete usage references and developer documentation.
 
-CI runs workspace tests on Linux, macOS, and Windows; native mount tests on Linux and Windows; macFUSE callback compilation; CLI/stdio integration; and a real RustFS backend test. The native mount test covers multi-megabyte writes, truncation, append, rename with an open handle, directory enumeration, fsync, historical read-only mounts, and unmount. The same native tests pass on macOS 26.5 with FUSE-T 1.2.9. See [validation](docs/validation.md) for commands and current execution evidence.
-
-File operations cover regular files and directories, atomic branch append, rename, permissions, timestamps, truncate, and fsync. File contents are stored as whole-file immutable objects; edited files are resealed by streaming. Metadata trees are materialized in memory for branch and merge operations. The configurable maximum is one million inodes per workspace; size limits should reflect available memory and disk.
-
-The advertised capability response describes the supported behavior. Symbolic links, hard links, extended attributes, memory-mapped writes, advisory locking, automatic text conflict resolution, and physical remote garbage collection are outside the implemented interface. Unlinking an open file or replacing an open destination returns a busy error. Concurrent changes to the same path become explicit merge conflicts. Mounts are owned by the daemon's OS identity; workspace access grants govern MCP requests.
-
-See the [documentation index](docs/README.md), [architecture](docs/architecture.md), [operations and recovery](docs/operations.md), and [validation](docs/validation.md). AgentDrive is licensed under Apache-2.0; the vendored WinFsp Rust wrapper retains its MIT license.
+AgentDrive is licensed under Apache-2.0. The included WinFsp Rust wrapper retains its MIT license; mount components have their own license terms.

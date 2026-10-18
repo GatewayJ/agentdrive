@@ -4,6 +4,7 @@
 
 | Guide | Contents |
 | --- | --- |
+| [Installation](installation.md) | Platform dependencies, source build and startup |
 | [Configuration and S3](configuration.md) | Dashboard settings, cache capacity, live storage switching, local metadata, S3 credentials, and multi-machine setup |
 | [Command-line usage](cli.md) | Commands, connection options, executable examples, JSON input, and exit codes |
 | [MCP reference](mcp.md) | stdio/HTTP connections, all 31 tools, parameters, receipts, and capabilities |

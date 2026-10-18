@@ -1,0 +1,78 @@
+/* The archive keeps project branches, file navigation and reading in one place. */
+.archive-page {max-width:1800px; padding:32px;}
+.archive-heading {margin-bottom:24px; align-items:flex-end; gap:20px;}
+.archive-heading h1 {font-size:30px; letter-spacing:-.8px;}
+.archive-heading p {font-size:13px; line-height:1.7; color:#748279;}
+.archive-scope {border:1px solid #dce8df; border-radius:20px; padding:7px 11px; font-size:11px; color:#587365; background:#f2f7f3; white-space:nowrap;}
+.archive-workspace {display:grid; grid-template-columns:218px minmax(0,1fr); border:1px solid #dfe6e1; border-radius:12px; background:#fff; min-height:650px; overflow:hidden; box-shadow:0 6px 28px #263b2a04;}
+.archive-branches {background:#f8faf8; border-right:1px solid #e3e9e4; padding:20px 12px; min-width:0;}
+.archive-list-heading {display:flex; align-items:center; justify-content:space-between; padding:0 8px 16px;}
+.archive-list-heading h2 {font-size:13px; margin:0; font-weight:600;}
+.archive-branch-search,.file-filter {width:100%; min-width:0; border:1px solid #e0e6e1; padding:10px; border-radius:6px; background:#fff; color:#42584b; font-size:12px;}
+.archive-branch-search {margin-bottom:16px;}
+.archive-branch-list {max-height:60vh; overflow:auto;}
+.archive-branch {width:100%; border:1px solid transparent; background:none; padding:12px 10px; border-radius:7px; text-align:left; margin-bottom:6px; color:#596b61;}
+.archive-branch:hover {background:#edf3ee;}
+.archive-branch.active {background:#e9f3ed; border-color:#bcd5c5; color:#23674b;}
+.archive-branch-name {display:flex; align-items:flex-start; gap:9px; font-weight:600; font-size:12px; line-height:1.7; overflow-wrap:anywhere;}
+.archive-branch-symbol {font-size:20px; font-weight:400; line-height:22px; color:#759e84;}
+.archive-branch-meta {display:flex; gap:7px; flex-wrap:wrap; font-size:10px; margin:8px 0 0 24px; color:#87938c; line-height:1.6;}
+.archive-warning {color:#ad7832;}
+.archive-mount {color:#478768;}
+.archive-branch-note {font-size:10px; line-height:1.9; color:#8b968f; margin:22px 8px 0;}
+.archive-content {min-width:0;}
+.archive-branch-header {display:flex; gap:18px; justify-content:space-between; align-items:center; padding:23px 25px 20px;}
+.archive-branch-header h2 {margin:0; font-size:20px; font-weight:600; overflow-wrap:anywhere;}
+.archive-branch-header p {margin:8px 0 0; color:#8b978f; font-size:11px;}
+.archive-history-link {color:#52806a; font-size:11px; white-space:nowrap; text-decoration:none;}
+.archive-history-link:hover {text-decoration:underline;}
+.archive-states {display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); margin:0 25px 20px; background:#f7faf8; border:1px solid #e6ede7; border-radius:8px;}
+.archive-state {display:flex; flex-direction:column; gap:7px; padding:14px 16px; min-width:0;}
+.archive-state+.archive-state {border-left:1px solid #e4ece5;}
+.archive-state-label {font-size:10px; color:#8c988f;}
+.archive-state strong {font-size:12px; font-weight:500; color:#477159;}
+.archive-state.attention strong {color:#a77830;}
+.archive-state-description {font-size:10px; color:#909b93; line-height:1.5;}
+.archive-files {border-top:1px solid #e7ece8;}
+.archive-files .branch-files-body {padding:0;}
+.archive-files .branch-files-toolbar {padding:14px 20px; margin:0; border-bottom:1px solid #edf0ed; gap:10px;}
+.archive-files .branch-directory {font-family:inherit; font-size:12px; color:#64786b;}
+.archive-files .branch-files-toolbar .secondary {font-size:11px; padding:7px 10px;}
+.archive-files .branch-files-body>.changes-status {margin:0; padding:10px 20px; color:#8b978e; font-size:10px; background:#fbfcfb; border-bottom:1px solid #edf0ed;}
+.archive-files .changes-layout {display:grid; grid-template-columns:minmax(180px,28%) minmax(0,1fr); gap:0; align-items:stretch; min-height:450px;}
+.archive-files .changed-files {padding:14px 10px; border-right:1px solid #e9ede9; min-width:0;}
+.archive-files .branch-file-preview {padding:20px 24px 28px; min-width:0;}
+.archive-files .branch-file-list {max-height:57vh;}
+.archive-files .changed-file {border-radius:6px; border-bottom:0; margin-bottom:3px; padding:10px 8px; font-size:12px; gap:8px;}
+.archive-files .changed-file.active {background:#edf5ef; color:#2f7150;}
+.file-filter {margin-bottom:9px; padding:9px; font-size:11px;}
+.hidden-files-toggle {display:flex; align-items:center; gap:5px; color:#96a098; font-size:10px; margin:0 0 12px;}
+.hidden-files-toggle input {accent-color:#418269; width:13px; height:13px; margin:0;}
+.file-symbol {width:22px; height:23px; border-radius:4px; display:inline-grid; place-items:center; flex-shrink:0; font:10px/1 ui-monospace,monospace; color:#7a9584; background:#f0f4f1;}
+.file-symbol.folder {color:#b79754; background:#faf5e8; font-size:15px;}
+.archive-files .branch-file-path {font-size:15px; margin:0 0 10px;}
+.archive-files .diff-metadata {font-size:10px; color:#9ba69e;}
+.archive-files .branch-file-preview>.changes-status {font-size:10px; color:#9ba69e;}
+.archive-footer {font-size:11px; color:#97a297; line-height:1.8; margin:18px 0 0;}
+.preview-switcher {display:flex; gap:4px; border-bottom:1px solid #e8ede8; margin:16px 0; padding-bottom:8px;}
+.preview-mode {border:0; background:transparent; color:#8f9b91; padding:5px 13px; border-radius:5px; font-size:11px;}
+.preview-mode.active {background:#eaf3ed; color:#3e7755;}
+.document-preview {font-size:13px; line-height:1.95; color:#4b5b50; overflow-wrap:anywhere; padding:0 4px; max-height:58vh; overflow:auto;}
+.document-preview h1 {font-size:23px; line-height:1.5; margin:16px 0; color:#2f4235; letter-spacing:-.5px;}
+.document-preview h2 {font-size:17px; margin:24px 0 12px; color:#405445;}
+.document-preview h3 {font-size:14px; margin:20px 0 10px;}
+.document-preview p {margin:9px 0;}
+.document-preview ul {padding-left:21px;}
+.document-preview li {padding:3px 0;}
+.document-preview code {font-size:11px; padding:2px 4px; background:#f0f4f1; border-radius:3px;}
+.document-code {white-space:pre-wrap; overflow-wrap:anywhere; padding:14px; border-radius:6px; background:#f5f7f5; font-size:12px;}
+.document-preview blockquote {border-left:3px solid #b8d4c2; padding:8px 14px; margin:14px 0; background:#f7faf7; color:#7b8b7e;}
+.document-table-wrap {overflow:auto; max-width:100%;}
+.document-table {width:100%; border-collapse:collapse; font-size:12px;}
+.document-table th,.document-table td {padding:9px 12px; border:1px solid #e4eae5; text-align:left;}
+.document-table th {background:#f2f7f3; font-weight:500; color:#50715b;}
+.global-error {margin:22px 32px 0;}
+@media(min-width:1700px) {.archive-workspace {grid-template-columns:250px minmax(0,1fr);} .archive-files .changes-layout {grid-template-columns:270px minmax(0,1fr);}}
+@media(max-width:1200px) {.archive-page {padding:24px;} .archive-workspace {grid-template-columns:190px minmax(0,1fr);} .archive-state {padding:12px 10px;} .archive-state-description {font-size:9px;} .archive-files .changes-layout {grid-template-columns:170px minmax(0,1fr);} .archive-files .branch-file-preview {padding:18px;} .archive-scope {display:none;}}
+@media(max-width:1000px) {.archive-workspace {grid-template-columns:1fr;} .archive-branches {border-right:0; border-bottom:1px solid #e3e9e4; padding:16px;} .archive-list-heading {padding-bottom:10px;} .archive-branch-search {max-width:260px; margin-bottom:10px;} .archive-branch-list {display:flex; gap:8px; overflow:auto; max-height:none;} .archive-branch {flex:0 0 180px; margin:0;} .archive-branch-note {margin:10px 0 0;} .archive-states {margin-left:20px; margin-right:20px;}}
+@media(max-width:600px) {.sidebar nav {display:flex; margin-top:14px; gap:4px;} .nav-link {flex:1; justify-content:center; padding:9px 5px; margin:0; font-size:11px; gap:5px;} .nav-link .branch-icon {font-size:16px;} .archive-page {padding:24px 14px;} .archive-heading h1 {font-size:26px;} .archive-heading p {font-size:11px;} .archive-branch-header {padding:18px 15px; flex-wrap:wrap;} .archive-states {margin:0 12px 16px;} .archive-state {padding:10px 8px;} .archive-state strong {font-size:10px;} .archive-state-description {display:none;} .archive-files .changes-layout {grid-template-columns:1fr;} .archive-files .changed-files {border-right:0; border-bottom:1px solid #e9ede9; padding:12px 15px;} .archive-files .branch-file-list {max-height:200px;} .archive-files .branch-files-toolbar {padding:12px;} .archive-files .branch-file-preview {padding:18px 16px;} .document-preview {max-height:none;} .archive-footer {font-size:10px;} .global-error {margin:14px 14px 0;}}

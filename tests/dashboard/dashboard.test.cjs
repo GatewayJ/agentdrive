@@ -9,7 +9,8 @@ let server, browser, endpoint;
 before(async () => {
   const directory = path.resolve(__dirname, '../../crates/agentdrive-mcp/dashboard');
   server = createServer(async (request, response) => {
-    const name = request.url === '/dashboard' ? 'index.html' : request.url.slice(1);
+    const pathname = new URL(request.url, 'http://localhost').pathname;
+    const name = ['/', '/dashboard', '/archive', '/settings'].includes(pathname) ? 'index.html' : pathname.slice(1);
     if (!/^[a-z.-]+$/.test(name)) { response.writeHead(404).end(); return; }
     try {
       const body = await readFile(path.join(directory, name));
@@ -50,7 +51,7 @@ function fixture() {
     summary:{branch_count:3, mount_count:0, ready_mount_count:0, mounted_branch_count:0},
   };
 }
-async function open(t, data = fixture()) {
+async function open(t, data = fixture(), target = '/dashboard') {
   const page = await browser.newPage({viewport:{width:1440, height:1000}});
   const errors = [], requests = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -61,6 +62,8 @@ async function open(t, data = fixture()) {
     requests.push(url);
     if (url.pathname === '/api/workspaces') {
       await route.fulfill({json:[{id:'workspace', name:'Review workspace'}]});
+    } else if (url.pathname === '/api/workspaces/workspace/archive') {
+      await route.fulfill({json:data.status});
     } else if (url.pathname === '/api/workspaces/workspace') {
       await route.fulfill({json:data});
     } else if (url.pathname.endsWith('/files')) {
@@ -82,8 +85,8 @@ async function open(t, data = fixture()) {
         hunks:[[{kind:'added', before_line:null, after_line:1, text:'hello', newline:true}]]}});
     } else await route.fulfill({status:404, json:{error:{message:'Unknown test endpoint'}}});
   });
-  await page.goto(endpoint+'/dashboard');
-  await page.locator('#branch-feature').waitFor();
+  await page.goto(endpoint+target);
+  await page.locator(target.startsWith('/archive') ? '.archive-branch[data-branch="feature"]' : '#branch-feature').waitFor();
   await page.waitForFunction(() => !document.querySelector('#refresh').disabled);
   return {page, data, requests, branch:data.status.branches[1]};
 }
@@ -202,7 +205,7 @@ test('double clicking an unselected branch opens current files and preserves sin
   assert.equal(await page.locator('#history-title').textContent(), 'feature');
   assert.equal(await page.locator('.branch-file-path').textContent(), '/note.txt');
   assert.equal(await page.locator('.branch-file-content').textContent(), 'hello <script>world');
-  assert((await page.locator('.branch-file-preview').textContent()).includes('当前工作内容'));
+  assert((await page.locator('.branch-file-preview:visible').textContent()).includes('当前工作内容'));
   assert.equal(await page.locator('.branch-file-content script').count(), 0);
   await page.locator('.branch-file[data-path="/binary"]').click();
   await page.waitForFunction(() => document.querySelector('.branch-file-content')?.textContent.includes('00 ff 01'));
@@ -268,4 +271,99 @@ test('file pagination keeps UTF-8 character boundaries and directory pagination 
   const url = new URL((await nextPage).url());
   assert.equal(url.searchParams.get('version'),'main:1:1:1');
   await page.locator('.branch-file[data-path="/empty.txt"]').waitFor();
+  await page.getByRole('button',{name:'下一段',exact:true}).click();
+  await page.waitForFunction(() => document.querySelector('.branch-file-content')?.textContent === '中文结束');
+  assert.equal(await page.locator('#branch-files-dialog .branch-file.active').getAttribute('data-path'),'/large.txt');
+});
+
+
+test('archive opens branch contents directly, preserves the mounted selection, and skips revision history requests', async t => {
+  const {page, requests, data} = await open(t, fixture(), '/archive');
+  await page.locator('#archive-page .branch-file-content').waitFor();
+  assert.equal(await page.locator('#archive-nav').getAttribute('aria-current'),'page');
+  assert.equal(await page.locator('#history-page').isVisible(),false);
+  assert.equal(await page.locator('#archive-page .branch-file-path').textContent(),'/note.txt');
+  assert.equal(requests.filter(url => url.pathname === '/api/workspaces/workspace').length,0);
+  await page.locator('.archive-branch[data-branch="main"]').click();
+  await page.locator('#archive-page .branch-file-content').waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('branch'),'main');
+  assert.equal(data.status.selected_branch,'feature');
+  assert(requests.every(url => !url.pathname.includes('/mcp')));
+  assert.equal(await page.locator('.archive-branch-header h2').textContent(),'main');
+  await page.locator('.archive-branch[data-branch="feature"]').click();
+  await page.locator('.archive-history-link').click();
+  await page.locator('#history-title').waitFor();
+  assert.equal(await page.locator('#history-title').textContent(),'feature');
+  await page.locator('#archive-nav').click();
+  await page.locator('#archive-page .branch-file-content').waitFor();
+  assert.equal(await page.locator('.archive-branch-header h2').textContent(),'feature');
+  await page.goBack();
+  await page.locator('#history-title').waitFor();
+  assert.equal(await page.locator('#history-title').textContent(),'feature');
+});
+
+test('archive renders safe Markdown, filters files, exposes hidden files and keeps directory links across reload', async t => {
+  const {page} = await open(t, fixture(), '/archive');
+  await page.route('**/branches/feature/files?**', route => {
+    const url = new URL(route.request().url()), nested = url.searchParams.get('path') === '/nested';
+    const names = nested ? ['/nested/README.md'] : ['/README.md','/.env','/nested'];
+    return route.fulfill({json:{version:'feature:1:1:1',next:null,entries:names.map(path => ({path,inode:{kind:path === '/nested' ? 'directory' : 'file',size:200,mode:420}}))}});
+  });
+  await page.route('**/branches/feature/file?**',route => route.fulfill({body:'# Research handoff\n\n**Ready** for the next Agent.\n\n| Task | Status |\n| --- | --- |\n| Review | Done |\n\n<script>alert(1)</script>\n'}));
+  await page.locator('#archive-page').getByRole('button',{name:'刷新文件',exact:true}).click();
+  await page.locator('.document-preview h1').waitFor();
+  assert.equal(await page.locator('.document-preview h1').textContent(),'Research handoff');
+  assert.equal(await page.locator('.document-preview script').count(),0);
+  assert.equal(await page.locator('.document-table td').count(),2);
+  await page.getByRole('button',{name:'源码',exact:true}).click();
+  assert.equal(await page.locator('#archive-page .branch-file-content').isVisible(),true);
+  assert.equal(await page.locator('.branch-file[data-path="/.env"]').count(),0);
+  await page.locator('#archive-page').getByLabel('显示隐藏文件').check();
+  await page.locator('.branch-file[data-path="/.env"]').waitFor();
+  await page.locator('#archive-page .file-filter').fill('readme');
+  assert.equal(await page.locator('#archive-page .branch-file').count(),1);
+  await page.locator('#archive-page .file-filter').fill('');
+  await page.locator('.branch-file[data-path="/nested"]').click();
+  await page.locator('.branch-file[data-path="/nested/README.md"]').waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('path'),'/nested');
+  await page.reload();
+  await page.locator('.branch-file[data-path="/nested/README.md"]').waitFor();
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.locator('#history-nav').isVisible(),true);
+  const widths = await page.evaluate(() => [document.documentElement.scrollWidth,innerWidth]);
+  assert(widths[0] <= widths[1]);
+});
+
+test('archive remote confirmation requires matching branch state even with an empty publication queue', async t => {
+  const data = fixture(), branch = data.status.branches[1];
+  branch.owner = 'local'; data.status.capabilities.remote_configured = true;
+  data.status.remote_branches = [{branch:branch.id,owner:'local',authority_epoch:1,generation:1,durable_seq:1,working_root:branch.working_root}];
+  const {page} = await open(t,data,'/archive');
+  const remote = page.locator('.archive-state').nth(1).locator('strong');
+  assert.equal(await remote.textContent(),'远端已保存');
+  branch.mutation_seq++;
+  await page.locator('#refresh').click();
+  await page.waitForFunction(()=>!document.querySelector('#refresh').disabled);
+  assert.equal(await remote.textContent(),'等待远端确认');
+  assert.equal(await page.locator('.archive-state').first().locator('strong').textContent(),'有未保存修改');
+  data.status.pending_jobs = 1;
+  await page.locator('#refresh').click();
+  await page.waitForFunction(()=>!document.querySelector('#refresh').disabled);
+  assert.equal(await remote.textContent(),'同步处理中');
+});
+
+test('archive clears stale content when switching projects and shows empty and failed states', async t => {
+  const {page} = await open(t, fixture(), '/archive');
+  await page.locator('#archive-page .branch-file-content').waitFor();
+  await page.route('**/api/workspaces',route => route.fulfill({json:[{id:'workspace',name:'Review workspace'},{id:'second',name:'Second project'}]}));
+  await page.route('**/api/workspaces/second/archive',route => route.fulfill({json:{workspace:{id:'second',name:'Second project'},branches:[],mounts:[],remote_branches:[],capabilities:{remote_configured:false}}}));
+  await page.locator('#refresh').click();
+  await page.waitForFunction(()=>document.querySelector('#workspace').options.length === 2 && !document.querySelector('#refresh').disabled);
+  await page.locator('#workspace').selectOption('second');
+  await page.getByText('还没有可以浏览的项目',{exact:true}).waitFor();
+  assert.equal(await page.locator('#archive-page .branch-file-content').count(),0);
+  await page.route('**/api/workspaces/second/archive',route => route.fulfill({status:503,json:{error:{message:'Storage unavailable'}}}));
+  await page.locator('#refresh').click();
+  await page.locator('#error').filter({hasText:'Storage unavailable'}).waitFor();
+  assert.equal(await page.locator('#error').isVisible(),true);
 });

@@ -6,6 +6,7 @@
   <title>AgentDrive · 分支与版本</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="/dashboard.css">
+  <link rel="stylesheet" href="/archive.css">
   <script src="/dashboard.js" type="module"></script>
 </head>
 <body>
@@ -13,7 +14,7 @@
     <form id="login-form" class="login-card">
       <div class="brand"><span class="brand-mark">A</span> AgentDrive</div>
       <h1>连接你的工作区</h1>
-      <p>查看分支关系、保存的版本与同步状态。</p>
+      <p>浏览项目资料，查看 Agent 的工作成果与保存进度。</p>
       <label for="token">访问令牌</label>
       <input id="token" type="password" autocomplete="off" placeholder="输入 daemon token" required>
       <button type="submit" class="primary">连接工作区 <span>→</span></button>
@@ -23,17 +24,18 @@
   </section>
   <div id="app" class="app" hidden>
     <aside class="sidebar">
-      <a class="brand" href="/dashboard"><span class="brand-mark">A</span> AgentDrive <span class="version">LOCAL</span></a>
+      <a class="brand" href="/archive"><span class="brand-mark">A</span> AgentDrive <span class="version">LOCAL</span></a>
       <div class="workspace-picker"><label for="workspace">工作区</label><select id="workspace" aria-label="选择工作区"></select></div>
-      <nav aria-label="导航"><a id="history-nav" class="nav-link nav-active" href="/dashboard"><span class="branch-icon">⑂</span> 分支与版本</a><a id="settings-nav" class="nav-link" href="/settings"><span class="branch-icon">⚙</span> 设置</a></nav>
-      <div class="sidebar-note"><div class="note-icon">◷</div><strong>每一次修改，都有迹可循</strong><p>从分支关系到版本历史，查看工作内容如何演变。</p></div>
+      <nav aria-label="导航"><a id="archive-nav" class="nav-link" href="/archive"><span class="branch-icon" aria-hidden="true">▤</span> 档案室</a><a id="history-nav" class="nav-link nav-active" href="/dashboard"><span class="branch-icon">⑂</span> 分支与版本</a><a id="settings-nav" class="nav-link" href="/settings"><span class="branch-icon">⚙</span> 设置</a></nav>
+      <div class="sidebar-note"><div class="note-icon">◷</div><strong>共享资料，接力工作</strong><p>把项目资料交给 Agent，让每次工作都有可以继续的起点。</p></div>
       <div class="sidebar-bottom"><span class="connection-dot"></span><span id="connection">已连接本地 daemon</span><button id="logout" title="断开连接" aria-label="断开连接">↪</button></div>
     </aside>
     <main>
       <header class="topbar"><div id="history-breadcrumb" class="breadcrumb">工作区 <span>/</span> <strong id="workspace-name">加载中</strong></div><div id="settings-breadcrumb" class="breadcrumb" hidden>AgentDrive <span>/</span> <strong>设置</strong></div><div class="topbar-right"><span id="view-mode" class="read-only">只读浏览</span><span id="updated">正在连接</span><button id="refresh" class="refresh" aria-label="刷新数据">↻</button></div></header>
+      <div id="error" class="error-banner global-error" role="alert" hidden></div>
+      <div id="archive-page" class="content archive-page" hidden></div>
       <div id="history-page" class="content">
         <div class="page-heading"><div><div class="eyebrow">WORKSPACE HISTORY</div><h1>分支与版本<span class="heading-dot">.</span></h1><p>查看分支从哪个版本创建，以及本机目录正在使用哪个分支。</p></div><div class="location-label"><span class="connection-dot"></span><span id="location">本地存储</span></div></div>
-        <div id="error" class="error-banner" role="alert" hidden></div>
         <section class="stats" aria-label="工作区统计">
           <div class="stat"><div class="stat-label">工作分支 <span>⑂</span></div><strong id="branch-count">—</strong><small>当前工作区的有效分支</small></div>
           <div class="stat"><div class="stat-label">挂载点 <span>▣</span></div><strong id="mount-count">—</strong><small id="mount-detail">等待挂载数据</small></div>

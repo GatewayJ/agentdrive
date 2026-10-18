@@ -114,6 +114,12 @@ agentdrive integrate --protocol codex-app-server --workspace "$WORKSPACE" \
 
 预览期间分支发生变化时，页面提示“刷新文件”，随后读取最新内容。读取功能不会切换挂载、生成版本或触发检查点。目录接口 `GET /api/workspaces/{workspace}/branches/{branch}/files` 接受 `path`、可选 `after` 和 `version`，返回 `entries`、`next`、`version`。后续目录页和文件读取使用同一个 `version`；分支变化返回 HTTP 409。文件接口 `GET /api/workspaces/{workspace}/branches/{branch}/file` 接受 `path`、`version`、`offset` 和 `size`，返回原始字节，每次读取范围为 1–262144 字节。两个接口均验证 Bearer 身份、工作区归属和分支读取权限，并禁止缓存响应。
 
+## 档案室
+
+Dashboard 默认进入 `/archive`，导航位于“分支与版本”上方。选择项目和分支后直接阅读当前文件，保持挂载分支不变。页面通过 `GET /api/workspaces/{workspace}/archive` 获取当前工作区状态，无需加载全部版本历史；与分支弹框共用 `BranchFilesApi` 的目录和文件读取。筛选仅针对当前目录已载入的条目，隐藏文件可以通过开关显示。Markdown 通过安全文本节点渲染，并提供源码视图。项目、分支和目录保存在页面地址中。
+
+远端确认要求已知远端记录的 owner、authority epoch、generation、durable sequence 和 working root 与本机一致，并且本机修改已保存；同步队列为空本身不表示远端已保存。页面展示最近一次确认，查看其他机器的新成果前，通过 MCP 拉取远端更新。
+
 ## macOS FUSE-T
 
 安装 FUSE-T 1.2.9 和 pkg-config，使用 `make -j "$(sysctl -n hw.ncpu)" build FEATURES=macos-fuse-t` 编译。AgentDrive 使用本机 NFS 后端并关闭属性缓存，无需内核扩展。FUSE-T 的[许可条款](https://github.com/macos-fuse-t/fuse-t)要求商业使用或随商业软件分发时取得商业许可。

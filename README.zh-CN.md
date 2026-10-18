@@ -1,111 +1,102 @@
 # AgentDrive
 
-**人与 Agent 的共享工作空间**
+[English](README.md) | [简体中文](README.zh-CN.md)
 
 **共享资料，接力工作。**
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+AgentDrive 给人和 Agent 一个可以持续使用的项目空间。Agent 在本地目录中读取资料、生成文档和修改代码；工作成果可以保存到远端，让另一台机器上的 Agent 接着完成任务。分支保留不同任务的工作内容，版本记录每次成果的变化。
 
-AgentDrive 为 Agent 提供可持久保存的工作区、显式管理的工作分支、不可变的版本记录，以及原生文件系统路径。长期运行的 Rust 守护进程负责管理本地状态和挂载；多个 MCP 客户端和 CLI 可以并发访问同一套经过身份验证的 API。
+你可以继续使用熟悉的 Agent、编辑器和终端，通过 MCP 让 Agent 管理资料的保存、同步、分支与交接。人在浏览器的 **档案室** 中直接查看各个分支的最新文件。
 
-功能包括：
+> 当前为开发预览，尚未发布首个正式版本。产品名称暂为 AgentDrive。
 
-- 跨平台文件名称、按内容寻址的对象、分页的目录和 inode 索引，以及 SQLite 事务。
-- Linux FUSE、macOS FUSE-T/macFUSE 和 Windows WinFsp 适配；快照、分支恢复和版本历史。
-- S3/RustFS 同步、限制内存用量的流式传输、离线缓存保留、在线所有权交接，以及可以编辑文件的三方合并候选结果。
-- ACP 和 Codex app-server 生命周期集成、分支命令，以及提供分支历史与运行配置管理的 Dashboard。
-- 通过需要身份验证的 Streamable HTTP 提供 31 个具有明确类型的 MCP 工具，同时提供 stdio 代理和 JSON CLI。
+![档案室：选择分支，浏览项目资料并阅读交接说明](docs/images/archive.png)
 
-## 构建
+*演示项目：市场调研。档案室展示当前文件、本地保存与远端确认状态。*
 
-需要 Rust stable（声明的最低版本为 1.90）、用于编译内置 SQLite 的 C 编译器，以及 GNU Make。构建任务通过 Make 的 jobserver 管理并行度。
+## 围绕项目持续工作
 
-```sh
-make -j "$(getconf _NPROCESSORS_ONLN)" build
-make -j "$(getconf _NPROCESSORS_ONLN)" verify
-```
+| 使用场景 | AgentDrive 帮你完成的事情 |
+| --- | --- |
+| 本地工作，远程保存 | Agent 像使用普通目录一样工作，成果保存在本机，并通过配置的 S3 / RustFS 同步到远端。 |
+| 异地 Agent 接手 | 把任务说明、输入资料、阶段成果与下一步一起保存；目标机器拉取后继续处理。 |
+| 多个 Agent 并行尝试 | 从同一份资料创建分支，各自完成分析或实现，检查差异后合并成果。 |
+| 人随时检查进展 | 在档案室选择项目和分支，直接阅读文件；进入分支与版本查看来源、历史和修改内容。 |
 
-| 平台 | 原生文件系统要求 | 构建方式 |
-| --- | --- | --- |
-| Linux | FUSE 3 工具、`/dev/fuse` 和挂载权限 | 使用默认 features |
-| macOS | [FUSE-T](https://github.com/macos-fuse-t/fuse-t) 和 `pkg-config` | `make -j "$(sysctl -n hw.ncpu)" build FEATURES=macos-fuse-t` |
-| Windows | MSVC，以及包含 Developer 功能的 [WinFsp 2.1](https://github.com/winfsp/winfsp/releases/tag/v2.1) | PowerShell：`make -j $env:NUMBER_OF_PROCESSORS build` |
+## 使用方式
 
-macOS 默认构建包含守护进程、CLI 和存储操作。原生挂载使用 `macos-fuse-t`，无需内核扩展。Make 会选择 FUSE-T 动态库；直接运行 Cargo 时需要设置 `PKG_CONFIG_PATH="$PWD/build/fuse-t"`。已有 macFUSE 环境可继续使用 `FEATURES=macos-mount`。Windows 构建会从注册的安装路径加载 WinFsp；Windows 状态目录应位于本地 NTFS 卷。
+### 1. 在本地接入项目，让 Agent 开始工作
 
-## 运行
+按照[安装与启动](docs/installation.zh-CN.md)运行 AgentDrive，并将它连接到支持 MCP 的 Agent 客户端。已有本地目录可以导入工作区并继续使用原路径；转换目录前暂停写入，转换完成后重启 Agent。
 
-```sh
-AGENTDRIVE_DIRECTORY="$HOME/.local/share/agentdrive"
-./target/debug/agentdrived init --directory "$AGENTDRIVE_DIRECTORY"
-./target/debug/agentdrived serve --config "$AGENTDRIVE_DIRECTORY/agentdrive.json"
-```
+可以直接告诉 Agent：
 
-在另一个终端执行：
+> 将这个项目接入 AgentDrive。保留原目录中的资料，为本次任务创建一个工作分支，并告诉我工作目录和分支名称。
 
-```sh
-export AGENTDRIVE_TOKEN_FILE="$HOME/.local/share/agentdrive/token"
-./target/debug/agentdrive tools
-./target/debug/agentdrive call workspace_create --request-id create-demo --json '{"name":"demo"}'
-./target/debug/agentdrive call workspace_list
-```
+Agent 通过 MCP 创建、挂载或转换工作区，随后继续使用普通文件工具读写目录。文件修改会自动保存；需要明确记录一个阶段时，让 Agent 保存版本，并填写这次完成了什么。
 
-`init` 会创建配置、随机 bearer token，以及状态、挂载和文件交换所需的目录。如果配置已经存在，初始化会拒绝执行，已有凭据会保留。守护进程默认监听 `127.0.0.1:7421`，MCP endpoint 为 `/mcp`。每个状态目录只能由一个守护进程使用。
+### 2. 将本地成果同步到远端
 
-通过 stdio 连接 MCP 客户端时，将可执行程序设置为 `agentdrive`，参数设置为 `["mcp"]`，并设置 `AGENTDRIVE_TOKEN_FILE`。可以通过 `AGENTDRIVE_ENDPOINT` 指定其他守护进程 endpoint。stdio 进程会将请求转发给正在运行的守护进程。
+在 Dashboard 的 **设置** 中连接 S3 或 RustFS，填写 Endpoint、Bucket 和凭据。多台机器使用相同的 Bucket、Prefix 与项目访问身份，各自保留独立的本地配置和数据目录。[连接说明](docs/configuration.zh-CN.md)
 
-使用 `agentdrive tools` 查看 JSON 输入 schema。通过 MCP 调用命令工具时，请求格式为 `{ "request_id": "stable-id", "request": { ... } }`；CLI 的 `--request-id` 选项会构造该请求结构。查询工具和 `operation_cancel` 直接接收参数。`--json -` 从标准输入读取 JSON。工具响应没有错误时，CLI 返回退出码 0；工具返回错误时返回 2；传输或输入发生错误时返回 1；命令行参数解析错误也使用 2。可执行示例见 [CLI 使用](docs/cli.zh-CN.md)，完整工具参考见 [MCP 参数与能力](docs/mcp.zh-CN.md)。
+> 将当前分支的成果保存到远端。确认远端保存成功后，告诉我 workspace ID、分支、版本以及交接说明的位置。
 
-## 分支、Agent 与 Dashboard
+Agent 可以通过 `mount_save` 请求远端保存，并通过操作结果检查 `remote_confirmed`。等待超时后继续查询同一个操作，直到得到确认。**本机已保存与远端已保存分别展示**；档案室中的远端状态来自最近一次确认。
 
-新工作区默认选择可写的 `main` 分支。同一 location 挂载同一 workspace 时复用本机所选分支；新 location 首次挂载时，从主分支最近发布的内容创建并选择自己的分支。通过 MCP 的 `branch_create`、`branch_switch` 或 CLI 显式创建和切换：
+### 3. 让另一台机器上的 Agent 接着工作
 
-```sh
-agentdrive mount --workspace "$WORKSPACE" "$AGENTDRIVE_DIRECTORY/mounts/project"
-agentdrive branch list --workspace "$WORKSPACE"
-agentdrive branch create --workspace "$WORKSPACE" --name feat/task
-agentdrive branch switch --workspace "$WORKSPACE" --branch "$BRANCH"
-agentdrive dashboard --open
-```
+在项目中保留一份 `HANDOFF.md`，写明任务目标、已完成事项、关键文件、验证方式和下一步。将这份说明与成果一起保存到远端。
 
-创建分支会保存来源分支的当前内容，并保持工作区原有选择。切换会保存原分支，检查文件句柄，再更新本机分支选择和挂载目录。共享目录的多个 Agent 使用同一个分支。重启后仍然保留选择。Dashboard 展示分支关系、commit 说明、创建者、时间、父版本、修改文件和文本差异。管理员可以在“设置”页面修改缓存策略、S3 存储和 HTTP Origin 允许列表，运行中的 daemon 会使用更新后的配置，详见[配置说明](docs/configuration.zh-CN.md)。
+将 workspace ID、源分支或版本、交接说明路径交给目标 Agent：
 
-已有 Agent 可以通过 `agentdrive mcp` 接入并使用挂载目录。`agentdrive integrate` 支持 ACP agent 和 Codex app-server，负责工作目录以及完成、取消和失败时的保存。自动保存由文件修改触发，Agent 断开后保留共享挂载。完整命令和事件行为见[Agent 集成](docs/integrations.zh-CN.md)。
+> 拉取这个项目最新确认的远端资料，读取 HANDOFF.md，从指定分支的成果创建我的工作分支，挂载到本机目录，再继续下一步任务。
 
-需要并发保护的变更会检查分支 owner、epoch、generation 和 head。这些值应从 `workspace_status` 获取，请勿自行编造。`branch_switch` 在一次调用中尝试完成切换；遇到 `MOUNT_BUSY`，关闭占用目录的进程或重启 Agent，再使用相同 request ID 重试。恢复及合并等需要停止当前挂载的操作会返回 `waiting_for_quiesce`。请停止使用该目录的进程，关闭相关文件句柄，并使进程退出该目录，然后携带 operation ID 和预期的 binding generation 调用 `mount_release`。详见[操作与恢复](docs/operations.zh-CN.md)。
+目标 Agent 使用 `sync` 拉取，再从指定来源创建分支并挂载。若要继续写入**同一个分支**，原机器需要停止写入并释放挂载，通过 `ownership_transfer` 将写入权限交给目标 location；目标机器拉取确认后再接手。[交接与恢复步骤](docs/operations.zh-CN.md)
 
-## 存储与配置
+交接材料包括文件、版本和分支信息。Agent 的任务说明可以作为文件一起传递；运行中的进程、聊天记录和客户端凭据由各自的 Agent 客户端管理。
 
-`agentdrive.json` 使用绝对文件系统路径。`mount_roots` 指定允许的挂载目标；`directory_roots` 指定允许的导入和导出路径。导入期间源目录需要保持稳定，导入操作会拒绝 symbolic link 和不兼容的文件名称。导出操作会创建新目录，并保留文件内容、修改时间和支持的权限。
+### 4. 在档案室查看成果，在版本历史中检查变化
 
-在 Dashboard“设置”中启用 S3，填写并保存连接和凭据，也可以在生成的配置中添加 `remote`：
+打开 Dashboard，选择项目，进入 **档案室**：
+
+- 单击分支即可查看当前目录，右侧自动展示文件内容。
+- Markdown 支持阅读和源码两种视图；文本可以分段阅读，二进制内容显示十六进制。
+- 可以筛选当前目录、显示隐藏文件、进入子目录，复制地址后回到相同的项目、分支和目录。
+- 本地进度、远端确认与目录使用情况分别展示。浏览分支时，Agent 使用的挂载目录保持原来的分支。
+- 文件范围是本机已知的当前内容，包含未保存或未提交修改；查看其他机器的新成果前，让 Agent 拉取远端更新。
+
+![分支与版本：检查成果来源和版本历史](docs/images/branches.png)
+
+*同一个演示项目的分支与版本页面。双击版本可以查看说明、修改文件和文本差异。*
+
+## 方便 Agent 操控
+
+在支持 stdio MCP 的客户端中添加下面的配置，将示例路径替换为本机绝对路径：
 
 ```json
 {
-  "remote": {
-    "bucket": "agentdrive",
-    "prefix": "agentdrive/v1",
-    "region": "us-east-1",
-    "endpoint": "https://s3.example.com",
-    "allow_http": false
+  "mcpServers": {
+    "agentdrive": {
+      "command": "/absolute/path/agentdrive/target/debug/agentdrive",
+      "args": ["mcp"],
+      "env": {
+        "AGENTDRIVE_TOKEN_FILE": "/absolute/path/to/agentdrive/token"
+      }
+    }
   }
 }
 ```
 
-凭据可以通过 Dashboard 保存，也可以通过 `object_store` 支持的 AWS 环境变量或角色凭据提供程序配置。bucket 必须已经存在，并支持条件对象写入、带条件的分段上传完成操作，以及强一致读取。凭据权限应限制在选定的 bucket/prefix 内。本地开发 endpoint 可以明确启用 `allow_http`。
+保持 AgentDrive 服务运行。Agent 可以查询工具说明，再完成创建工作区、分支、保存、同步与交接。支持 Streamable HTTP 的客户端也可以连接 `http://127.0.0.1:7421/mcp`，使用本机 token 认证；CLI 适合终端操作和脚本，ACP / Codex app-server 可连接工作目录与任务结束保存。[Agent 集成](docs/integrations.zh-CN.md) · [MCP 工具](docs/mcp.zh-CN.md) · [CLI](docs/cli.zh-CN.md)
 
-本地与 S3 存储可以在运行期间切换：启用 S3 时复制已保留的历史，返回本地模式时下载缺少的历史内容。准备或保存配置失败时，当前连接继续有效。`meta.db` 是本地 SQLite 数据库，不会作为文件上传。S3 保存文件内容、目录和 inode 索引、版本历史及分支引用；拉取时将已发布的记录导入每台机器自己的数据库。location 身份、分支选择、挂载、缓存状态和工作文件保存在本地。
+切换分支可以通过一次 `branch_switch` 调用完成。目录被进程占用时，按照返回提示关闭相关进程或重启 Agent，再重试同一个操作。
 
-全部配置字段、AWS S3/RustFS 示例、支持的凭据来源、环境变量优先级和多台机器配置见[配置与 S3](docs/configuration.zh-CN.md)。
+## 开始使用
 
-S3 模式只需设置“本地缓存容量”，默认为 2 GiB，配置文件使用以字节为单位的 `cache.max_bytes`。后台每 30 秒检查一次，超过容量时自动清理到设置值的 75%；磁盘剩余空间不足时也会清理。当前分支、等待发布的数据、合并候选内容、活动读取者和固定缓存受到保护，实际占用可能超过设置容量。清理只处理已获得远端确认的历史对象。本地模式完整保留历史，页面隐藏缓存设置。容量统计针对不可变对象文件，SQLite 元数据和工作文件另外占用空间。`cache_status.offline_ready` 要求指定保留的数据范围已完整缓存在本地。
+目前从源码构建，支持 Linux、macOS 和 Windows。原生目录挂载分别需要 FUSE、FUSE-T / macFUSE 或 WinFsp。[安装、平台依赖与启动命令](docs/installation.zh-CN.md)
 
-## 验证与功能范围
+- [配置远程存储](docs/configuration.zh-CN.md)：本地模式、S3、RustFS 与多台机器配置。
+- [操作与恢复](docs/operations.zh-CN.md)：远端确认、交接、分支合并及异常恢复。
+- [文档目录](docs/README.zh-CN.md)：完整使用参考与开发文档。
 
-CI 会在 Linux、macOS 和 Windows 上运行 workspace 测试，并执行 Linux/Windows 原生挂载测试、macFUSE 回调编译检查、CLI/stdio 集成测试，以及连接实际 RustFS 服务的后端测试。原生挂载测试覆盖数 MiB 的文件写入、截断、追加、持有打开句柄时重命名、目录枚举、fsync、历史版本只读挂载和卸载。macOS 使用 FUSE-T 运行原生挂载验证。测试命令和当前验证记录见[验证文档](docs/validation.zh-CN.md)。
-
-文件操作支持普通文件和目录、分支内原子追加、重命名、权限、时间戳、截断和 fsync。文件内容以整个文件为单位保存为不可变对象；编辑后的文件通过流式处理重新生成对象。分支和合并操作会在内存中构建元数据树。每个工作区可配置的 inode 数量上限为一百万；容量限制应根据可用内存和磁盘空间设置。
-
-能力查询响应会说明支持的行为。当前接口不支持 symbolic link、hard link、扩展属性、内存映射写入、advisory locking、自动文本冲突解决和远端对象物理回收。删除已打开的文件，或替换已打开的目标文件，会返回 busy 错误。同一路径的并发变更会产生明确的合并冲突。挂载使用守护进程的操作系统身份，工作区访问授权控制 MCP 请求。
-
-更多说明见[文档目录](docs/README.zh-CN.md)、[架构](docs/architecture.zh-CN.md)、[操作与恢复](docs/operations.zh-CN.md)和[验证](docs/validation.zh-CN.md)。AgentDrive 使用 Apache-2.0 许可证；仓库内附带的 WinFsp Rust wrapper 保留其 MIT 许可证。
+AgentDrive 使用 Apache-2.0 许可证。包含的 WinFsp Rust wrapper 保留 MIT 许可证；挂载组件遵循各自的许可条款。
