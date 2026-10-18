@@ -12,7 +12,7 @@ Keep using your preferred agent, editor and terminal. MCP lets agents manage sav
 
 ![Archive: browse a branch and read its handoff document](docs/images/archive.png)
 
-*Demo project: market research. The Archive shows current files, local save state and remote confirmation. The current dashboard is in Chinese.*
+*Demo project: market research. Read the agent handoff in `/reports/交接` alongside local save state and remote confirmation. The current dashboard is in Chinese.*
 
 ## Keep the project moving
 
@@ -61,7 +61,7 @@ Open the dashboard, select a project and enter **Archive**:
 
 - Select a branch to browse its current directory; a file preview opens automatically.
 - Read Markdown as a document or source. Page through text and inspect binary bytes in hexadecimal.
-- Filter the current directory, reveal hidden files, navigate folders and return to the same project, branch and directory through its URL.
+- Click any segment of the `/a/b/c` directory path to navigate. Filter the current directory, reveal hidden files and return to the same project, branch and directory through its URL.
 - See local progress, remote confirmation and directory usage separately. Browsing leaves the agent's mounted branch unchanged.
 - Files reflect locally known current contents, including unsaved or uncommitted edits. Ask the agent to pull remote updates before reviewing new work from another machine.
 

@@ -239,3 +239,9 @@ The local FUSE-T service was restarted from the consolidated `agentdrive` checko
 ## Archive and product documentation (2026-10-18)
 
 The archive uses a current-state endpoint independent of revision history. Workspace verification passed 82 Rust tests (5 environment-dependent tests ignored), formatting, Clippy and architecture checks. The 12 browser tests cover existing branch history and dialogs, archive navigation without mount changes, safe Markdown, hidden files, directory filters, persistent URLs, project changes, stale requests, empty/error states, mobile layout and remote-confirmation accuracy. README screenshots use the shipped UI with labeled market-research demo data; regenerate them with `npm run screenshots --prefix tests/dashboard`.
+
+## Archive interaction review (2026-10-18)
+
+Browser regressions reproduced and fixed lost file selection after refresh, Markdown source paging reverting to reading mode, and ordered steps losing their numbering. Refresh restores selection within the previously loaded directory pages and retains the preview mode. Deleted files or paths replaced by directories fall back to an available file, with a bounded number of directory requests.
+
+The 16 browser checks cover ancestor navigation, Unicode and reserved characters, keyboard access, URL restoration, cancellation of directory and file requests during branch changes, paged selection restoration, file type changes, ordered Markdown and source mode, plus existing history, error recovery, save state and narrow layouts. Archive and branch dialogs share `createFileBrowser`; `BranchFilesApi` retains authorization, version validation and content reads. README screenshots were regenerated to show nested directory navigation and the handoff document.

@@ -26,8 +26,11 @@ const content = {
  '/data/市场数据.csv':'category,count\nteam,42\nindividual,68\n',
  '/.metadata':'demo',
 };
+content['/reports/交接/HANDOFF.md'] = content['/HANDOFF.md'];
+content['/reports/交接/tasks.md'] = content['/tasks.md'];
+content['/reports/交接/验证记录.txt'] = '已检查分析报告引用、数据来源和远端保存状态。\n';
 function nodes(directory) {
- const all = [...Object.keys(content),'/reports','/data'];
+ const all = [...Object.keys(content),'/reports','/reports/交接','/data'];
  return all.filter(name=>(name.slice(0,name.lastIndexOf('/')) || '/')===directory).map(name=>({path:name,dirty:false,inode:{kind:content[name]===undefined ? 'directory' : 'file',mode:420,size:Buffer.byteLength(content[name] || '')}}));
 }
 (async()=>{
@@ -51,10 +54,13 @@ function nodes(directory) {
   await page.addInitScript(()=>sessionStorage.setItem('agentdrive-token','demo-token'));
   const endpoint=`http://127.0.0.1:${server.address().port}`;
   await page.goto(endpoint+'/archive?'+new URLSearchParams({workspace,branch:ids[0]}));
-  await page.locator('#archive-page .branch-file[data-path="/HANDOFF.md"]').click();
+  await page.locator('#archive-page .branch-file[data-path="/reports"]').click();
+  await page.locator('#archive-page .branch-file[data-path="/reports/交接"]').click();
+  await page.locator('#archive-page .branch-file[data-path="/reports/交接/HANDOFF.md"]').click();
   await page.getByRole('heading',{name:'下一位 Agent，从这里继续'}).waitFor();
   await fs.mkdir(path.join(root,'docs/images'),{recursive:true});
-  assert.equal(await page.locator('#archive-page .branch-file.active').getAttribute('data-path'),'/HANDOFF.md');
+  assert.equal(await page.locator('#archive-page .branch-file.active').getAttribute('data-path'),'/reports/交接/HANDOFF.md');
+  assert.equal(await page.locator('#archive-page .branch-directory').textContent(),'/reports/交接');
   await page.mouse.move(10,10);
   await page.screenshot({path:path.join(root,'docs/images/archive.png')});
   await page.goto(endpoint+'/dashboard?'+new URLSearchParams({workspace,branch:ids[0]}));

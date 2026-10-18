@@ -18,8 +18,10 @@ export function createFileBrowser({api, element, container, onNavigate}) {
   const preview = element('div', 'diff-preview branch-file-preview'); preview.setAttribute('aria-live', 'polite');
   layout.append(sidebar, preview); body.append(toolbar, status, layout); container.append(body);
   let context = null, path = '/', version = null, cursor = null, request = null, fileRequest = null, selected = null, changed = false, entries = [];
+  let previewPath = null, previewMode = 'reading', loadedPages = 0, restoreSelection = null;
   function clear() {
     context = null; entries = []; selected = null; request?.abort(); fileRequest?.abort();
+    previewPath = null; previewMode = 'reading'; loadedPages = 0; restoreSelection = null;
     list.replaceChildren(); preview.replaceChildren(); status.replaceChildren(); directory.replaceChildren();
     more.hidden = true;
   }
@@ -40,6 +42,8 @@ export function createFileBrowser({api, element, container, onNavigate}) {
     return lines.join('\n');
   }
   async function view(entry, button, offsets = [0]) {
+    if (previewPath !== entry.path) previewMode = 'reading';
+    previewPath = entry.path;
     button = [...list.children].find(node => node.dataset.path === entry.path) || button;
     selected?.classList.remove('active'); selected?.setAttribute('aria-pressed', 'false');
     selected = button; button.classList.add('active'); button.setAttribute('aria-pressed', 'true');
@@ -69,9 +73,9 @@ export function createFileBrowser({api, element, container, onNavigate}) {
         const switcher = element('div', 'preview-switcher');
         const reading = element('button', 'preview-mode active', '阅读'); reading.type = 'button'; reading.setAttribute('aria-pressed','true');
         const raw = element('button', 'preview-mode', '源码'); raw.type = 'button'; raw.setAttribute('aria-pressed','false');
-        const toggle = value => { document.hidden = !value; source.hidden = value; reading.classList.toggle('active',value); raw.classList.toggle('active',!value); reading.setAttribute('aria-pressed',String(value)); raw.setAttribute('aria-pressed',String(!value)); };
+        const toggle = value => { previewMode = value ? 'reading' : 'source'; document.hidden = !value; source.hidden = value; reading.classList.toggle('active',value); raw.classList.toggle('active',!value); reading.setAttribute('aria-pressed',String(value)); raw.setAttribute('aria-pressed',String(!value)); };
         reading.onclick = () => toggle(true); raw.onclick = () => toggle(false); switcher.append(reading, raw);
-        source.hidden = true; preview.append(switcher, document);
+        toggle(previewMode === 'reading'); preview.append(switcher, document);
       }
       preview.append(source);
       const navigation = element('div', 'branch-file-navigation');
@@ -85,7 +89,7 @@ export function createFileBrowser({api, element, container, onNavigate}) {
     } catch (error) { if (!current.signal.aborted) failure(preview, error, () => view(entry, button, offsets)); }
   }
   function renderEntries() {
-    const previousPath = selected?.dataset.path;
+    const previousPath = selected?.dataset.path || restoreSelection?.path;
     const filterText = filter.value.toLocaleLowerCase();
     const visible = entries.filter(entry => (hiddenFiles.checked || !entry.path.split('/').at(-1).startsWith('.')) && entry.path.split('/').at(-1).toLocaleLowerCase().includes(filterText))
       .sort((a,b) => Number(b.inode.kind === 'directory') - Number(a.inode.kind === 'directory') || a.path.localeCompare(b.path));
@@ -100,10 +104,12 @@ export function createFileBrowser({api, element, container, onNavigate}) {
       button.onclick = isDirectory ? () => navigate(entry.path) : () => view(entry, button);
       list.append(button);
       if (!isDirectory) files.push({entry,button});
-      if (entry.path === previousPath) { selected = button; button.classList.add('active'); button.setAttribute('aria-pressed','true'); }
+      if (!isDirectory && entry.path === previousPath) { selected = button; button.classList.add('active'); button.setAttribute('aria-pressed','true'); }
     }
     status.textContent = changed ? '分支内容已更新，可点击“刷新文件”读取最新内容。' : `已载入 ${entries.length} 项 · 显示 ${visible.length} 项${cursor ? ' · 还有更多文件' : ''}`;
-    if (!selected && files.length) { const first = files.find(({entry}) => /\/readme\.md$/i.test(entry.path)) || files.find(({entry}) => /\.(md|txt|json|csv|py)$/i.test(entry.path)) || files[0]; view(first.entry, first.button); }
+    if (restoreSelection && cursor && loadedPages < restoreSelection.pages && !selected) return;
+    if (selected && restoreSelection) view(files.find(({entry}) => entry.path === previousPath).entry, selected);
+    else if (!selected && files.length) { const first = files.find(({entry}) => /\/readme\.md$/i.test(entry.path)) || files.find(({entry}) => /\.(md|txt|json|csv|py)$/i.test(entry.path)) || files[0]; view(first.entry, first.button); }
     else if (!selected) {
       fileRequest?.abort();
       preview.replaceChildren(element('p', 'changes-status', entries.length ? visible.length ? '选择目录浏览其中的文件。' : '没有符合筛选条件的文件，可调整筛选或显示隐藏文件。' : '此目录为空。'));
@@ -113,11 +119,16 @@ export function createFileBrowser({api, element, container, onNavigate}) {
     request?.abort(); request = new AbortController(); const current = request;
     more.disabled = true;
     try {
-      const query = new URLSearchParams({path}); if (version) query.set('version', version); if (append && cursor) query.set('after', cursor);
-      const data = await api(`${base()}/files?${query}`, {signal:current.signal});
-      if (current.signal.aborted) return;
-      version = data.version; cursor = data.next; more.hidden = !cursor;
-      entries.push(...data.entries); renderEntries();
+      for (;;) {
+        const query = new URLSearchParams({path}); if (version) query.set('version', version); if (append && cursor) query.set('after', cursor);
+        const data = await api(`${base()}/files?${query}`, {signal:current.signal});
+        if (current.signal.aborted) return;
+        version = data.version; cursor = data.next; more.hidden = !cursor;
+        entries.push(...data.entries); loadedPages++;
+        // Restore only previously loaded pages, keeping refresh work bounded.
+        if (restoreSelection && cursor && loadedPages < restoreSelection.pages && !entries.some(entry => entry.path === restoreSelection.path)) { append = true; continue; }
+        renderEntries(); restoreSelection = null; break;
+      }
     } catch (error) { if (!current.signal.aborted) failure(status, error, () => page(append)); }
     finally { if (!current.signal.aborted) more.disabled = false; }
   }
@@ -141,7 +152,9 @@ export function createFileBrowser({api, element, container, onNavigate}) {
     });
   }
   function navigate(destination, latest = false) {
-    request?.abort(); fileRequest?.abort(); path = destination; cursor = null; selected = null; entries = []; filter.value = '';
+    restoreSelection = latest && destination === path && previewPath ? restoreSelection || {path:previewPath, pages:loadedPages} : null;
+    if (!restoreSelection) { previewPath = null; previewMode = 'reading'; filter.value = ''; }
+    request?.abort(); fileRequest?.abort(); path = destination; cursor = null; selected = null; entries = []; loadedPages = 0;
     if (latest) { version = null; changed = false; }
     renderDirectory(); onNavigate?.(path);
     list.replaceChildren(); preview.replaceChildren(); more.hidden = true; status.textContent = '正在读取目录…'; page();

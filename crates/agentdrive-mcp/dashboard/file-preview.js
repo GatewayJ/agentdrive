@@ -28,8 +28,13 @@ export function renderDocument(text, element) {
     }
     const heading = /^(#{1,6})\s+(.+)$/.exec(line);
     if (heading) { const node = element(`h${heading[1].length}`); inline(node, heading[2]); document.append(node); list = null; continue; }
-    const item = /^(?:[-*]|\d+\.)\s+(.+)$/.exec(line);
-    if (item) { if (!list) { list = element('ul'); document.append(list); } const node = element('li'); inline(node, item[1].replace(/^\[x\]\s*/i,'✓ ').replace(/^\[ \]\s*/,'□ ')); list.append(node); continue; }
+    const item = /^([-*]|\d+\.)\s+(.+)$/.exec(line);
+    if (item) {
+      const ordered = /^\d/.test(item[1]), tag = ordered ? 'ol' : 'ul';
+      if (!list || list.localName !== tag) { list = element(tag); if (ordered) list.start = Number.parseInt(item[1],10); document.append(list); }
+      const node = element('li');
+      inline(node, item[2].replace(/^\[x\]\s*/i,'✓ ').replace(/^\[ \]\s*/,'□ ')); list.append(node); continue;
+    }
     list = null;
     const paragraph = element(line.startsWith('> ') ? 'blockquote' : 'p'); inline(paragraph, line.replace(/^> /,'')); document.append(paragraph);
   }

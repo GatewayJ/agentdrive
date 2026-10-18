@@ -368,3 +368,122 @@ test('archive clears stale content when switching projects and shows empty and f
   await page.locator('#error').filter({hasText:'Storage unavailable'}).waitFor();
   assert.equal(await page.locator('#error').isVisible(),true);
 });
+
+test('refresh keeps a selected file from a later directory page and its source view', async t => {
+  const {page} = await open(t, fixture(), '/archive');
+  let reportDirectory = false, reads = 0;
+  await page.route('**/branches/feature/files?**', route => {
+    reads++;
+    const after = new URL(route.request().url()).searchParams.get('after');
+    const path = after === '/report.md' ? '/tail.txt' : after ? '/report.md' : '/README.md';
+    return route.fulfill({json:{version:'feature:1:1:1',next:!after ? '/README.md' : reportDirectory && after === '/README.md' ? '/report.md' : null,entries:[
+      {path,inode:{kind:reportDirectory && path === '/report.md' ? 'directory' : 'file',size:6}}
+    ]}});
+  });
+  await page.route('**/branches/feature/file?**',route=>route.fulfill({body:'# Data'}));
+  const archive = page.locator('#archive-page');
+  await archive.getByRole('button',{name:'刷新文件',exact:true}).click();
+  await archive.getByRole('button',{name:'加载更多文件',exact:true}).click();
+  await archive.locator('.branch-file[data-path="/report.md"]').click();
+  await archive.getByRole('button',{name:'源码',exact:true}).click();
+  await archive.getByRole('button',{name:'刷新文件',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#archive-page .branch-file-path')?.textContent==='/report.md');
+  assert.equal(await archive.locator('.branch-file-content').isVisible(),true);
+  assert.equal(await archive.locator('.branch-file.active').getAttribute('data-path'),'/report.md');
+  reportDirectory = true;
+  const before = reads;
+  await archive.getByRole('button',{name:'刷新文件',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#archive-page .branch-file-path')?.textContent==='/README.md');
+  assert.equal(reads-before,2);
+  assert.equal(await archive.getByRole('button',{name:'加载更多文件',exact:true}).isVisible(),true);
+});
+
+test('Markdown source mode survives file paging and reading mode preserves ordered steps', async t => {
+  const {page} = await open(t, fixture(), '/archive');
+  const content = Buffer.from('3. Prepare\n4. Publish\n\n- Notes\n\n'+'x'.repeat(66000));
+  await page.route('**/branches/feature/files?**',route=>route.fulfill({json:{version:'feature:1:1:1',next:null,entries:[{path:'/README.md',inode:{kind:'file',size:content.length}}]}}));
+  await page.route('**/branches/feature/file?**',route=>{
+    const query = new URL(route.request().url()).searchParams;
+    const offset = Number(query.get('offset')), size = Number(query.get('size'));
+    return route.fulfill({body:content.subarray(offset,offset+size)});
+  });
+  const archive = page.locator('#archive-page');
+  await archive.getByRole('button',{name:'刷新文件',exact:true}).click();
+  await archive.getByRole('button',{name:'源码',exact:true}).click();
+  await archive.getByRole('button',{name:'下一段',exact:true}).click();
+  await archive.getByRole('button',{name:'上一段',exact:true}).waitFor();
+  assert.equal(await archive.locator('.branch-file-content').isVisible(),true);
+  await archive.getByRole('button',{name:'上一段',exact:true}).click();
+  await archive.getByRole('button',{name:'阅读',exact:true}).click();
+  assert.equal(await archive.locator('.document-preview ol').getAttribute('start'),'3');
+  assert.deepEqual(await archive.locator('.document-preview ol li').allTextContents(),['Prepare','Publish']);
+  assert.equal(await archive.locator('.document-preview ul li').textContent(),'Notes');
+});
+
+test('breadcrumbs navigate ancestor paths with Unicode and reserved characters and survive reload', async t => {
+  const {page, requests} = await open(t, fixture(), '/archive');
+  const paths = ['/', '/资料 #1', '/资料 #1/a & b', '/资料 #1/a & b/100%'];
+  await page.route('**/branches/feature/files?**',route=>{
+    const path = new URL(route.request().url()).searchParams.get('path');
+    const index = paths.indexOf(path);
+    return route.fulfill({json:{version:'feature:1:1:1',next:null,entries:index < paths.length-1 ? [{path:paths[index+1],inode:{kind:'directory',size:0}}] : []}});
+  });
+  const archive = page.locator('#archive-page');
+  await archive.getByRole('button',{name:'刷新文件',exact:true}).click();
+  for (const path of paths.slice(1)) await archive.locator('.branch-file').filter({hasText:path.split('/').at(-1)}).click();
+  await archive.getByText('此目录为空。',{exact:true}).waitFor();
+  const breadcrumbs = archive.getByRole('navigation',{name:'目录路径'});
+  assert.equal(await breadcrumbs.textContent(),paths.at(-1));
+  assert.equal(await breadcrumbs.locator('[aria-current]').textContent(),'100%');
+  await breadcrumbs.getByRole('button',{name:'a & b',exact:true}).click();
+  await archive.locator('.branch-file').waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('path'),paths[2]);
+  await page.reload();
+  await archive.locator('.branch-file').waitFor();
+  assert.equal(await breadcrumbs.textContent(),paths[2]);
+  await breadcrumbs.getByRole('button',{name:'资料 #1',exact:true}).press('Enter');
+  await archive.locator('.branch-file').waitFor();
+  assert.equal(await page.evaluate(()=>document.activeElement.dataset.path),paths[1]);
+  await breadcrumbs.getByRole('button',{name:'根目录',exact:true}).click();
+  await archive.locator('.branch-file').waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('path'),'/');
+  assert(requests.every(url=>url.pathname.startsWith('/api/workspaces')));
+  await page.setViewportSize({width:390,height:844});
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+});
+
+test('switching archive branches discards delayed directory and file responses', async t => {
+  const {page, data, requests} = await open(t, fixture(), '/archive');
+  const archive = page.locator('#archive-page');
+  await page.route('**/branches/main/file?**',route=>route.fulfill({body:'current main bytes'}));
+  const main = page.locator('.archive-branch[data-branch="main"]');
+  const feature = page.locator('.archive-branch[data-branch="feature"]');
+  async function checkMain() {
+    await page.waitForFunction(()=>document.querySelector('#archive-page .branch-file-content')?.textContent==='current main bytes');
+    assert.equal(await page.locator('.archive-branch-header h2').textContent(),'main');
+    assert.equal(new URL(page.url()).searchParams.get('branch'),'main');
+  }
+  for (const kind of ['files','file']) {
+    await main.click(); await checkMain();
+    let release, started, completed;
+    const blocked = new Promise(resolve=>{release=resolve;});
+    const pending = new Promise(resolve=>{started=resolve;});
+    const done = new Promise(resolve=>{completed=resolve;});
+    const pattern = `**/branches/feature/${kind}?**`;
+    await page.route(pattern,async route=>{
+      started(); await blocked;
+      await route.fulfill(kind === 'file' ? {body:'stale feature body'} : {json:{version:'feature:1:1:1',next:null,entries:[{path:'/stale.txt',inode:{kind:'file',size:18}}]}}).catch(()=>{});
+      completed();
+    });
+    t.after(()=>release());
+    await feature.click(); await pending;
+    await main.click(); await checkMain();
+    release(); await done;
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    await checkMain();
+    assert.equal(await archive.locator('.branch-file[data-path="/stale.txt"]').count(),0);
+    await page.unroute(pattern);
+  }
+  assert.equal(data.status.selected_branch,'feature');
+  assert(requests.every(url=>!url.pathname.includes('/mcp')));
+});
