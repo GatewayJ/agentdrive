@@ -95,7 +95,7 @@ The stdio MCP test verifies one `branch_switch` call per attempt, a process hold
 
 ## Metadata and publication performance
 
-Migration tests cover legacy Node data, incremental usage, rollback and reopen. Workflow tests cover directory moves, Unicode/case preservation, unchanged siblings, quota rejection, truncation and deletion. Upload tests cover the shared four-transfer limit, failure cleanup and permit recovery after failure.
+Local query tests cover current schema initialization, incremental usage, rollback and reopen. Workflow tests cover directory moves, Unicode/case preservation, unchanged siblings, quota rejection, truncation and deletion. Upload tests cover the shared four-transfer limit, failure cleanup and permit recovery after failure.
 
 Run the repeatable engine benchmark:
 
@@ -136,7 +136,7 @@ The native run imported an existing directory into a new workspace at the same p
 
 The earlier 1507-second save waited behind hundreds of fsync-created revision jobs. The new run allowed autosave/background publication while creating files, and the final save transferred 12 changed objects. These are workload observations, not a fixed speedup ratio. OS caches affect native write/readdir/STATFS timings; SQL measurements isolate database query costs. Whole-file sealing and durable object flushes remain measurable costs, and 543 native creates still take about 82 seconds.
 
-New regression tests cover checkpoint/revision separation, checkpoint recovery and forks, remote checkpoint mounting, incremental index growth/deletion and old-root preservation, unconfirmed-object reclamation, object-counter migration, bounded save polling and old request fingerprint compatibility. Merged publication tests inject remote outages and a lost branch CAS response. A FUSE-T mirror probe checked cache/xattr feasibility; see [integration observations](integrations.md#macos-fuse-t). Cache options and xattr behavior remain unchanged. Linux and Windows execution was not repeated in this local run.
+New regression tests cover checkpoint/revision separation, checkpoint recovery and forks, remote checkpoint mounting, incremental index growth/deletion and old-root preservation, unconfirmed-object reclamation, persistent object counters and bounded save polling. Merged publication tests inject remote outages and a lost branch CAS response. A FUSE-T mirror probe checked cache/xattr feasibility; see [integration observations](integrations.md#macos-fuse-t). Cache options and xattr behavior remain unchanged. Linux and Windows execution was not repeated in this local run.
 
 ## Follow-up review validation (2026-10-18)
 
@@ -172,3 +172,11 @@ The final tree has 1399 directory entries and 1400 inodes. Directory leaf pages 
 The complete native workflow preserved the original directory path and MCP branch isolation. Independent RustFS downloads matched every path, size and SHA-256 for main (1093 files) and feature (1138 files). Restart and outage recovery passed. A separate outage queued 554 explicit saves; after the daemon restarted against the restored endpoint, all were remotely confirmed in 11.223 seconds, transferring 3612 objects / 34,354,999 bytes. All original results were retained and a fresh location restored 1093 matching files. The previous 554-explicit-save run included two additional autosaves and confirmed in 13.592 seconds. Both measurements include daemon startup and 0.5-second polling. Final queues were empty.
 
 These measurements preserve SQLite WAL/FULL and complete-file objects. Native creates still include FUSE-T/macOS metadata traffic and per-object file synchronization. No internal exclusive-time profile was repeated in this run. The local measurements cover macOS; Linux and Windows are checked by CI after publication.
+
+## Batch optimization review (2026-10-18)
+
+Regression tests reproduce two defects in the batch changes: a leased oldest object could stop collection before later objects were considered, and 16,385 index entries could leave a one-entry page. Collection now continues using actual reclaimed bytes while preserving the 32-object batch limit and retention checks. Index creation and editing share the same balanced page distribution; tests verify every entry and non-root page occupancy across multiple levels.
+
+Before the first release, the model contains current revision and operation records. Database creation installs the complete current schema atomically; reopening preserves its counters. Historical session/turn variants and schema migration paths have been removed.
+
+Validation passed: 73 workspace tests, formatting, Clippy with warnings denied, architecture checks, three native FUSE-T tests, the real RustFS backend test, and all six Python smoke suites. The native end-to-end run preserved the adopted path and branch isolation, confirmed all 21 saves queued during an outage, and restored 1138 files after restart. Independent RustFS downloads matched every path, size and SHA-256 for main (1093 files) and feature (1138 files); the final synchronization queue was empty. Creating 543 files took 34.739 seconds, 50 renames took 339.562 milliseconds, and the final remote save was confirmed in 177.651 milliseconds after background publication during file creation. This run did not repeat the separate 554-save backlog benchmark.

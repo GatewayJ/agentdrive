@@ -6,6 +6,7 @@ CREATE INDEX IF NOT EXISTS branches_workspace ON branches(workspace);
 CREATE TABLE IF NOT EXISTS nodes (
     branch TEXT NOT NULL,
     path TEXT NOT NULL,
+    parent TEXT,
     inode INTEGER NOT NULL,
     data BLOB NOT NULL,
     PRIMARY KEY(branch, path),

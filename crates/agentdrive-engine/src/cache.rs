@@ -266,21 +266,51 @@ impl CacheApi for CacheService {
         let roots = RetentionRoots::from_state(self.runtime.state.retention_state().await?);
         let candidates = self.collection_candidates(&roots).await?;
         let mut reclaimed = 0;
-        for batch in candidates.chunks(32) {
-            // Do not queue an exclusive lock ahead of active checkpoints.
-            let Ok(exclusive) = self.runtime.objects.try_write() else {
-                break;
+        for batch in candidates.unreachable.chunks(32) {
+            let Some(removed) = self.reclaim_batch(&roots, batch.to_vec()).await? else {
+                return Ok(reclaimed);
             };
-            let current = RetentionRoots::from_state(self.runtime.state.retention_state().await?);
-            if current != roots
-                || (batch.iter().any(|entry| entry.remote_confirmed)
-                    && !self.content.remote_available())
-            {
+            reclaimed += removed;
+        }
+        if !self.content.remote_available() {
+            return Ok(reclaimed);
+        }
+        let stats = self.objects.stats().await?;
+        let limit = self.config.load().values.cache.max_bytes;
+        let mut total = stats
+            .cached_bytes
+            .checked_add(stats.protected_bytes)
+            .ok_or_else(|| Error::integrity("cache size overflow"))?;
+        let mut free = stats.available_bytes;
+        if total <= limit && free >= MIN_FREE_BYTES {
+            return Ok(reclaimed);
+        }
+        let target = limit - limit.div_ceil(4);
+        let mut evictable = candidates.evictable.into_iter();
+        while total > target || free < MIN_FREE_BYTES {
+            let needed = total
+                .saturating_sub(target)
+                .max(MIN_FREE_BYTES.saturating_sub(free));
+            let mut batch = Vec::new();
+            let mut planned = 0u64;
+            for entry in evictable.by_ref().take(32) {
+                planned = planned.saturating_add(entry.reference.size);
+                batch.push(entry);
+                if planned >= needed {
+                    break;
+                }
+            }
+            if batch.is_empty() {
                 break;
             }
-            reclaimed += self.objects.remove_batch(batch.to_vec()).await?;
-            drop(exclusive);
-            tokio::task::yield_now().await;
+            let Some(removed) = self.reclaim_batch(&roots, batch).await? else {
+                break;
+            };
+            // Leased objects can be skipped by storage. Continue from the actual
+            // reclaimed bytes so they cannot hide later eligible candidates.
+            reclaimed += removed;
+            total = total.saturating_sub(removed);
+            free = free.saturating_add(removed);
         }
         Ok(reclaimed)
     }
@@ -303,6 +333,12 @@ struct WorkspaceRoots {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct RetentionRoots(BTreeMap<WorkspaceId, WorkspaceRoots>);
+
+#[derive(Default)]
+struct CollectionCandidates {
+    unreachable: Vec<CachedObject>,
+    evictable: Vec<CachedObject>,
+}
 
 impl RetentionRoots {
     fn from_state(state: RetentionState) -> Self {
@@ -360,10 +396,30 @@ impl RetentionRoots {
 }
 
 impl CacheService {
-    async fn collection_candidates(&self, roots: &RetentionRoots) -> Result<Vec<CachedObject>> {
-        let mut unreachable = Vec::new();
-        let mut evictable = Vec::new();
-        let mut total = 0u64;
+    async fn reclaim_batch(
+        &self,
+        roots: &RetentionRoots,
+        batch: Vec<CachedObject>,
+    ) -> Result<Option<u64>> {
+        // Do not queue an exclusive lock ahead of active checkpoints.
+        let Ok(exclusive) = self.runtime.objects.try_write() else {
+            return Ok(None);
+        };
+        let current = RetentionRoots::from_state(self.runtime.state.retention_state().await?);
+        if current != *roots
+            || (batch.iter().any(|entry| entry.remote_confirmed)
+                && !self.content.remote_available())
+        {
+            return Ok(None);
+        }
+        let removed = self.objects.remove_batch(batch).await?;
+        drop(exclusive);
+        tokio::task::yield_now().await;
+        Ok(Some(removed))
+    }
+
+    async fn collection_candidates(&self, roots: &RetentionRoots) -> Result<CollectionCandidates> {
+        let mut candidates = CollectionCandidates::default();
         for (workspace, roots) in &roots.0 {
             let mut protected = roots.pins.clone();
             let mut current = roots.current.clone();
@@ -400,38 +456,16 @@ impl CacheService {
             }
             for entry in cached {
                 if !entry.remote_confirmed && !retained.contains(&entry.reference.id) {
-                    unreachable.push(entry);
-                } else {
-                    total = total
-                        .checked_add(entry.reference.size)
-                        .ok_or_else(|| Error::integrity("cache size overflow"))?;
-                    if entry.remote_confirmed && !protected.contains(&entry.reference.id) {
-                        evictable.push(entry);
-                    }
+                    candidates.unreachable.push(entry);
+                } else if entry.remote_confirmed && !protected.contains(&entry.reference.id) {
+                    candidates.evictable.push(entry);
                 }
             }
         }
-        if !self.content.remote_available() {
-            return Ok(unreachable);
-        }
-        let stats = self.objects.stats().await?;
-        let config = self.config.load();
-        let limit = config.values.cache.max_bytes;
-        if total <= limit && stats.available_bytes >= MIN_FREE_BYTES {
-            return Ok(unreachable);
-        }
-        let target = limit - limit.div_ceil(4);
-        let mut free = stats.available_bytes;
-        evictable.sort_by_key(|entry| entry.last_access_ns);
-        for entry in evictable {
-            if total <= target && free >= MIN_FREE_BYTES {
-                break;
-            }
-            total = total.saturating_sub(entry.reference.size);
-            free = free.saturating_add(entry.reference.size);
-            unreachable.push(entry);
-        }
-        Ok(unreachable)
+        candidates
+            .evictable
+            .sort_by_key(|entry| entry.last_access_ns);
+        Ok(candidates)
     }
 }
 

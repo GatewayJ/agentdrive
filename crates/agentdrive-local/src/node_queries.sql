@@ -4,10 +4,6 @@ CREATE TABLE IF NOT EXISTS node_usage (
     inodes INTEGER NOT NULL CHECK(inodes >= 0),
     bytes INTEGER NOT NULL CHECK(typeof(bytes) = 'integer' AND bytes >= 0)
 );
-INSERT INTO node_usage(branch,inodes,bytes)
-SELECT branch,COUNT(*),SUM(json_extract(CAST(data AS TEXT),'$.inode.size'))
-FROM nodes WHERE branch NOT IN (SELECT branch FROM node_usage) GROUP BY branch;
-
 CREATE TRIGGER IF NOT EXISTS nodes_usage_insert AFTER INSERT ON nodes BEGIN
     INSERT INTO node_usage(branch,inodes,bytes)
     VALUES(NEW.branch,1,json_extract(CAST(NEW.data AS TEXT),'$.inode.size'))

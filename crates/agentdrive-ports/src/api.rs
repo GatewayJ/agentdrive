@@ -438,30 +438,3 @@ impl std::fmt::Debug for Services {
         f.debug_struct("Services").finish_non_exhaustive()
     }
 }
-
-#[cfg(test)]
-mod compatibility_tests {
-    use super::*;
-
-    #[test]
-    fn omitted_save_wait_preserves_existing_request_fingerprints() {
-        #[derive(Serialize)]
-        struct LegacySaveMount {
-            mount: MountId,
-            expected_binding_generation: u64,
-            durability: Durability,
-        }
-        let old = LegacySaveMount {
-            mount: MountId::new(),
-            expected_binding_generation: 1,
-            durability: Durability::Remote,
-        };
-        let current = SaveMount {
-            mount: old.mount,
-            expected_binding_generation: old.expected_binding_generation,
-            durability: old.durability,
-            wait_for_remote_ms: None,
-        };
-        assert_eq!(encode(&old).unwrap(), encode(&current).unwrap());
-    }
-}

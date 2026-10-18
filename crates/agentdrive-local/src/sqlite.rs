@@ -21,87 +21,48 @@ pub(crate) fn sql_error(error: rusqlite::Error) -> Error {
 }
 
 pub(crate) fn initialize(connection: &mut Connection, version: u32) -> Result<LocationId> {
-    validate_format(connection, version)?;
+    let initialized: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    if initialized {
+        let location: String = connection
+            .query_row(
+                "SELECT value FROM metadata WHERE key='location_id'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        return location.parse();
+    }
     let transaction = connection.transaction().map_err(sql_error)?;
     transaction
         .execute_batch(include_str!("schema.sql"))
         .map_err(sql_error)?;
     transaction
-        .execute(
-            "INSERT OR IGNORE INTO metadata(key,value) VALUES('format_version',?1)",
-            [version],
-        )
+        .execute_batch(include_str!("node_queries.sql"))
         .map_err(sql_error)?;
-    let location: Option<String> = transaction
-        .query_row(
-            "SELECT value FROM metadata WHERE key='location_id'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(sql_error)?;
-    let location = match location {
-        Some(value) => value.parse()?,
-        None => {
-            let id = LocationId::new();
-            transaction
-                .execute(
-                    "INSERT INTO metadata(key,value) VALUES('location_id',?1)",
-                    [id.to_string()],
-                )
-                .map_err(sql_error)?;
-            id
-        }
-    };
-    initialize_node_queries(&transaction)?;
     transaction
         .execute_batch(include_str!("object_usage.sql"))
         .map_err(sql_error)?;
-    transaction.commit().map_err(sql_error)?;
-    Ok(location)
-}
-
-// 查询投影仅影响本地 SQLite，远端对象格式保持不变。
-fn initialize_node_queries(transaction: &Transaction<'_>) -> Result<()> {
-    let has_parent: bool = transaction
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('nodes') WHERE name='parent')",
-            [],
-            |row| row.get(0),
+    let location = LocationId::new();
+    transaction
+        .execute(
+            "INSERT INTO metadata(key,value) VALUES('format_version',?1)",
+            [version],
         )
         .map_err(sql_error)?;
-    if !has_parent {
-        transaction
-            .execute_batch("ALTER TABLE nodes ADD COLUMN parent TEXT;")
-            .map_err(sql_error)?;
-        let entries: Vec<(String, Vec<u8>)> = {
-            let mut statement = transaction
-                .prepare("SELECT branch,data FROM nodes")
-                .map_err(sql_error)?;
-            statement
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-                .map_err(sql_error)?
-                .collect::<std::result::Result<_, _>>()
-                .map_err(sql_error)?
-        };
-        for (branch, data) in entries {
-            let node: Node = decode(&data)?;
-            transaction
-                .execute(
-                    "UPDATE nodes SET parent=?3 WHERE branch=?1 AND path=?2",
-                    params![
-                        branch,
-                        node.path.lookup_key(),
-                        node.path.parent().map(|p| p.lookup_key())
-                    ],
-                )
-                .map_err(sql_error)?;
-        }
-    }
     transaction
-        .execute_batch(include_str!("node_queries.sql"))
+        .execute(
+            "INSERT INTO metadata(key,value) VALUES('location_id',?1)",
+            [location.to_string()],
+        )
         .map_err(sql_error)?;
-    Ok(())
+    transaction.commit().map_err(sql_error)?;
+    Ok(location)
 }
 
 pub(crate) fn validate_format(connection: &Connection, version: u32) -> Result<()> {
@@ -666,17 +627,9 @@ mod query_tests {
     }
 
     #[test]
-    fn legacy_nodes_migrate_and_usage_tracks_atomic_updates() {
+    fn node_usage_tracks_atomic_updates_and_reopen() {
         let mut connection = Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch(include_str!("schema.sql"))
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO metadata(key,value) VALUES('format_version',?1)",
-                [FORMAT_VERSION],
-            )
-            .unwrap();
+        initialize(&mut connection, FORMAT_VERSION).unwrap();
         let branch = BranchId::new();
         connection
             .execute(
@@ -689,18 +642,9 @@ mod query_tests {
             )
             .unwrap();
         let first = node("/Src/CAFÉ", 2, 5);
-        connection
-            .execute(
-                "INSERT INTO nodes(branch,path,inode,data) VALUES(?1,?2,?3,?4)",
-                params![
-                    branch.to_string(),
-                    first.path.lookup_key(),
-                    2,
-                    encode(&first).unwrap()
-                ],
-            )
-            .unwrap();
-        initialize(&mut connection, FORMAT_VERSION).unwrap();
+        let transaction = connection.transaction().unwrap();
+        put_node(&transaction, branch, &first).unwrap();
+        transaction.commit().unwrap();
         let parent: String = connection
             .query_row("SELECT parent FROM nodes", [], |row| row.get(0))
             .unwrap();

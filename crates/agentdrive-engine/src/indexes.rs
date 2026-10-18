@@ -19,13 +19,22 @@ fn page_len<T>(page: &IndexPage<T>) -> usize {
     }
 }
 
-fn balanced<T: Clone>(values: &[T]) -> Vec<Vec<T>> {
+pub(super) fn balanced<T: Clone>(values: &[T]) -> Vec<Vec<T>> {
     if values.is_empty() {
         return Vec::new();
     }
     let pages = values.len().div_ceil(INDEX_PAGE_ENTRIES);
-    let width = values.len().div_ceil(pages);
-    values.chunks(width).map(<[T]>::to_vec).collect()
+    let width = values.len() / pages;
+    let extra = values.len() % pages;
+    let mut offset = 0;
+    (0..pages)
+        .map(|index| {
+            let end = offset + width + usize::from(index < extra);
+            let page = values[offset..end].to_vec();
+            offset = end;
+            page
+        })
+        .collect()
 }
 
 pub(crate) struct IndexEditor<'a, T> {

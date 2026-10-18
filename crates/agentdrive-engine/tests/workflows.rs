@@ -1871,6 +1871,75 @@ async fn cache_uses_reloaded_capacity_and_collects_to_three_quarters() {
 }
 
 #[tokio::test]
+async fn leased_old_objects_do_not_block_reclaiming_other_cache_entries() {
+    let directory = tempfile::tempdir().unwrap();
+    let remote = Arc::new(MemoryRemote::default());
+    let limit = 90 * 1024;
+    let config = LiveConfig::new(RuntimeConfig {
+        cache: CacheConfig { max_bytes: limit },
+        ..Default::default()
+    })
+    .unwrap();
+    let (local, engine, clock, driver) =
+        open_with_config(directory.path(), Some(remote.clone()), config).await;
+    let harness = Harness {
+        directory,
+        local,
+        engine,
+        clock,
+        driver,
+    };
+    let workspace = harness.workspace().await;
+    harness.sync(workspace.id, SyncDirection::Push).await;
+    let leased = harness
+        .local
+        .put(workspace.id, ObjectKind::File, vec![1; 50 * 1024].into())
+        .await
+        .unwrap();
+    remote
+        .upload(
+            workspace.id,
+            harness.local.open(workspace.id, &leased).await.unwrap(),
+        )
+        .await
+        .unwrap();
+    harness
+        .local
+        .confirm_remote(workspace.id, &leased)
+        .await
+        .unwrap();
+    let mut reader = harness.local.open(workspace.id, &leased).await.unwrap();
+    for byte in [2, 3] {
+        let object = harness
+            .local
+            .put(workspace.id, ObjectKind::File, vec![byte; 25 * 1024].into())
+            .await
+            .unwrap();
+        remote
+            .upload(
+                workspace.id,
+                harness.local.open(workspace.id, &object).await.unwrap(),
+            )
+            .await
+            .unwrap();
+        harness
+            .local
+            .confirm_remote(workspace.id, &object)
+            .await
+            .unwrap();
+    }
+    assert!(harness.engine.services.cache.collect().await.unwrap() >= 50 * 1024);
+    let stats = harness.local.stats().await.unwrap();
+    assert!(stats.cached_bytes + stats.protected_bytes <= limit - limit.div_ceil(4));
+    assert!(harness.local.contains(workspace.id, &leased).await.unwrap());
+    let mut bytes = Vec::new();
+    tokio::io::AsyncReadExt::read_to_end(&mut reader.reader, &mut bytes)
+        .await
+        .unwrap();
+    assert_eq!(bytes, vec![1; 50 * 1024]);
+}
+
+#[tokio::test]
 async fn storage_switch_preserves_history_mounts_and_pending_publications() {
     let remote = Arc::new(MemoryRemote::default());
     let harness = Harness::new(None).await;

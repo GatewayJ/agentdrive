@@ -329,15 +329,6 @@ pub enum CommandResult {
         revision: RevisionId,
         branch: BranchId,
     },
-    // 保留旧版操作结果的读取能力。
-    #[serde(rename = "session")]
-    LegacySession {
-        binding: serde_json::Value,
-    },
-    #[serde(rename = "turn")]
-    LegacyTurn {
-        record: serde_json::Value,
-    },
     Mount {
         binding: MountBinding,
     },
@@ -432,8 +423,6 @@ pub enum PendingAction {
 #[serde(tag = "kind", content = "record", rename_all = "snake_case")]
 pub enum HistoryRecord {
     Revision(Revision),
-    #[serde(rename = "turn")]
-    LegacyTurn(serde_json::Value),
     Operation(Box<OperationRecord>),
 }
 

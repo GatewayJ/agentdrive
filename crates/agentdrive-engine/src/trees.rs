@@ -116,43 +116,33 @@ impl TreeService {
                 .await;
         }
         let mut pages = Vec::new();
-        for chunk in entries.chunks(INDEX_PAGE_ENTRIES) {
+        for entries in crate::indexes::balanced(&entries) {
+            let first_key = entries[0].key.clone();
             let object = self
                 .content
                 .local
                 .put(
                     workspace,
                     kind,
-                    encode(&IndexPage::Leaf {
-                        entries: chunk.to_vec(),
-                    })?
-                    .into(),
+                    encode(&IndexPage::Leaf { entries })?.into(),
                 )
                 .await?;
-            pages.push(IndexChild {
-                first_key: chunk[0].key.clone(),
-                object,
-            });
+            pages.push(IndexChild { first_key, object });
         }
         while pages.len() > 1 {
             let mut parents = Vec::new();
-            for chunk in pages.chunks(INDEX_PAGE_ENTRIES) {
+            for children in crate::indexes::balanced(&pages) {
+                let first_key = children[0].first_key.clone();
                 let object = self
                     .content
                     .local
                     .put(
                         workspace,
                         kind,
-                        encode(&IndexPage::<T>::Branch {
-                            children: chunk.to_vec(),
-                        })?
-                        .into(),
+                        encode(&IndexPage::<T>::Branch { children })?.into(),
                     )
                     .await?;
-                parents.push(IndexChild {
-                    first_key: chunk[0].first_key.clone(),
-                    object,
-                });
+                parents.push(IndexChild { first_key, object });
             }
             pages = parents;
         }
@@ -626,6 +616,79 @@ mod incremental_tests {
     use super::*;
     use agentdrive_local::LocalBackend;
     use agentdrive_test_support::ManualClock;
+
+    #[tokio::test]
+    async fn bulk_index_edits_balance_every_non_root_page() {
+        let directory = tempfile::tempdir().unwrap();
+        let local = Arc::new(LocalBackend::open(directory.path()).unwrap());
+        let runtime = Runtime::new(local.clone(), Arc::new(ManualClock::default()))
+            .await
+            .unwrap();
+        let trees = TreeService::new(runtime, ContentService::new(local, None, None));
+        let workspace = WorkspaceId::new();
+        let empty = trees
+            .save_index::<u64>(workspace, ObjectKind::DirectoryIndex, vec![])
+            .await
+            .unwrap();
+        let count = INDEX_PAGE_ENTRIES * INDEX_PAGE_ENTRIES + 1;
+        let root = trees
+            .update_index(
+                workspace,
+                &empty,
+                (0..count)
+                    .map(|i| (format!("{i:08}"), Some(i as u64)))
+                    .collect(),
+            )
+            .await
+            .unwrap();
+        let created = trees
+            .save_index(
+                workspace,
+                ObjectKind::DirectoryIndex,
+                (0..count)
+                    .map(|i| IndexEntry {
+                        key: format!("{i:08}"),
+                        value: i as u64,
+                    })
+                    .collect(),
+            )
+            .await
+            .unwrap();
+        for root in [root, created] {
+            for page in trees.index_pages(workspace, root.clone()).await.unwrap() {
+                let length = match decode::<IndexPage<u64>>(
+                    &trees.content.metadata(workspace, &page).await.unwrap(),
+                )
+                .unwrap()
+                {
+                    IndexPage::Leaf { entries } => entries.len(),
+                    IndexPage::Branch { children } => children.len(),
+                };
+                if page != root {
+                    assert!(
+                        (INDEX_PAGE_ENTRIES / 2..=INDEX_PAGE_ENTRIES).contains(&length),
+                        "page entries: {length}"
+                    );
+                }
+            }
+            let entries = trees
+                .load_index::<u64>(workspace, &root, count)
+                .await
+                .unwrap();
+            assert_eq!(entries.len(), count);
+            for (index, entry) in entries.into_iter().enumerate() {
+                assert_eq!(entry.key, format!("{index:08}"));
+                assert_eq!(entry.value, index as u64);
+            }
+        }
+        assert!(
+            trees
+                .load_index::<u64>(workspace, &empty, count)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[tokio::test]
     async fn interleaved_entries_keep_pages_balanced_and_deletion_collapses_the_root() {

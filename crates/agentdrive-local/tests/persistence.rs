@@ -160,7 +160,7 @@ fn unknown_database_format_is_unchanged() {
 }
 
 #[tokio::test]
-async fn object_usage_survives_duplicates_migration_and_removal() {
+async fn object_usage_survives_duplicates_reopen_and_removal() {
     let dir = tempfile::tempdir().unwrap();
     let backend = LocalBackend::open(dir.path()).unwrap();
     let workspace = WorkspaceId::new();
@@ -182,9 +182,6 @@ async fn object_usage_survives_duplicates_migration_and_removal() {
         (object.size, 0)
     );
     drop(backend);
-    let db = rusqlite::Connection::open(dir.path().join("meta.db")).unwrap();
-    db.execute_batch("DROP TRIGGER objects_usage_insert; DROP TRIGGER objects_usage_update; DROP TRIGGER objects_usage_delete; DROP TABLE object_usage;").unwrap();
-    drop(db);
     let backend = LocalBackend::open(dir.path()).unwrap();
     assert_eq!(backend.stats().await.unwrap().cached_bytes, object.size);
     assert!(

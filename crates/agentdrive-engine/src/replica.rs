@@ -417,7 +417,6 @@ impl ReplicaService {
                         .await?;
                     commit.revisions.push(revision);
                 }
-                HistoryRecord::LegacyTurn(_) => {}
                 HistoryRecord::Operation(operation) => {
                     if operation.workspace != Some(reference.workspace) {
                         return Err(Error::integrity("operation belongs to another workspace"));

@@ -3,9 +3,7 @@ CREATE TABLE IF NOT EXISTS object_usage (
     cached_bytes INTEGER NOT NULL CHECK(typeof(cached_bytes)='integer' AND cached_bytes>=0),
     protected_bytes INTEGER NOT NULL CHECK(typeof(protected_bytes)='integer' AND protected_bytes>=0)
 );
-INSERT OR IGNORE INTO object_usage(id,cached_bytes,protected_bytes)
-SELECT 1,COALESCE(SUM(CASE WHEN remote_confirmed=1 THEN size ELSE 0 END),0),
-    COALESCE(SUM(CASE WHEN remote_confirmed=0 THEN size ELSE 0 END),0) FROM objects;
+INSERT INTO object_usage(id,cached_bytes,protected_bytes) VALUES(1,0,0);
 
 CREATE TRIGGER IF NOT EXISTS objects_usage_insert AFTER INSERT ON objects BEGIN
     UPDATE object_usage SET
