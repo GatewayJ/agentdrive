@@ -97,6 +97,8 @@ agentdrive dashboard --open
 
 `dashboard` prints the browser URL without reading credentials or connecting to the daemon. `dashboard --open` requires credentials and opens the URL with the selected token in a URL fragment; the page removes the fragment immediately and keeps the token in session storage. Data requests use bearer authentication. The dashboard provides branch trees and revision details, with refresh every 15 seconds. Administrators can open **Settings** at `/settings` to edit runtime configuration and inspect startup settings; see [configuration](configuration.md).
 
+Selecting a saved revision displays a paginated changed-file list and on-demand text differences. The default base is its first parent; merge revisions offer a parent selector, and initial revisions compare against an empty tree. Exact-content moves with a unique source and destination are marked as renames. Ambiguous moves and moves with edited content appear as additions/deletions. Binary and oversized files show metadata. Browsing does not change mounts or the selected working branch.
+
 ## Read a saved request from a file
 
 JSON files contain the tool request fields. For example, `create-request.json` can contain `{ "name": "another-workspace" }`:

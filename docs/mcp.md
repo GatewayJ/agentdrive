@@ -25,7 +25,7 @@ Replace both paths with actual absolute paths; use `agentdrive.exe` on Windows. 
 
 For direct Streamable HTTP, use `http://127.0.0.1:7421/mcp` and `Authorization: Bearer <token-file-contents>`. Use an MCP client that performs initialization and preserves the returned session information. The accepted Host values are the bound address and `localhost:<port>`. A supplied Origin must match the request's own HTTP origin or `allowed_origins`; native CLI/stdio connections omit Origin. The daemon binds only to loopback; access from other machines requires an authenticated TLS proxy preserving an accepted Host value.
 
-The server advertises the MCP `tools` capability. It provides 30 tools, including their input JSON schemas and annotations. Read the connected server's catalog with `tools/list` or:
+The server advertises the MCP `tools` capability. It provides 31 tools, including their input JSON schemas and annotations. Read the connected server's catalog with `tools/list` or:
 
 ```sh
 agentdrive tools > tools.json
@@ -104,7 +104,8 @@ Fields below are inside `request`. A suffix `?` means the field may be omitted. 
 | `workspace_list` | `{}` | Visible workspace array. |
 | `workspace_status` | `workspace` | Workspace, local location, `selected_branch`, branches, remote references, mounts, pending jobs, capabilities, and storage statistics. |
 | `revision_list` | `workspace`, `branch?` | Retained revision array; optional branch filter. |
-| `revision_diff` | `workspace`, `before`, `after` | File differences between two revision IDs. |
+| `revision_diff` | `workspace`, `after`; optional `before`, `cursor`, `limit` | `{entries, next, total}`. Omitted `before` means an empty tree. Default page size 100, maximum 200; pass `next` as `cursor`. Entries contain `path`, `previous_path`, `kind`, `before`, `after`. |
+| `revision_text_diff` | `workspace`, `after`, `path`; optional `before`, `previous_path` | File attributes and UTF-8 line hunks with three context lines, old/new line numbers and final-newline information. Status is `text`, `unchanged`, `binary`, `too_large` or `directory`. Maximum 256 KiB and 10,000 lines per side. |
 | `revision_files` | `workspace`, `revision`, `path?`, `after?` | Up to 200 paths and attributes per page from a branch head or candidate revision. Pass returned `next` as `after`; `path` restricts the subtree. |
 | `revision_read` | `workspace`, `revision`, `path`, `offset`, `size` | `{bytes, length}`; offset and size are bytes, size at most 4,194,304. |
 | `cache_status` | `workspace`, `revision`, `paths?` | `complete`, `offline_ready`, `completed_bytes`, and missing object IDs for the range. `offline_ready` additionally requires pin protection. |

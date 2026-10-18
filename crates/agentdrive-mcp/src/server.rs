@@ -79,15 +79,18 @@ impl McpServer {
                         .await?,
                 )
             }
-            "revision_diff" => {
-                let input: DiffQuery = parse(arguments)?;
-                encode(
-                    self.services
-                        .revisions
-                        .diff(&self.principal, input.workspace, input.before, input.after)
-                        .await?,
-                )
-            }
+            "revision_diff" => encode(
+                self.services
+                    .revisions
+                    .diff(&self.principal, parse(arguments)?)
+                    .await?,
+            ),
+            "revision_text_diff" => encode(
+                self.services
+                    .revisions
+                    .text_diff(&self.principal, parse(arguments)?)
+                    .await?,
+            ),
             "revision_files" => encode(
                 self.services
                     .revisions
@@ -239,11 +242,6 @@ query!(WorkspaceQuery {
     workspace: WorkspaceId
 });
 query!(RevisionList { workspace: WorkspaceId, branch: Option<BranchId> });
-query!(DiffQuery {
-    workspace: WorkspaceId,
-    before: RevisionId,
-    after: RevisionId
-});
 query!(ReadQuery {
     workspace: WorkspaceId,
     revision: RevisionId,
@@ -318,9 +316,14 @@ pub fn tool_catalog() -> Vec<Tool> {
             "List retained revisions, optionally filtered by branch.",
             true,
         ),
-        tool::<DiffQuery>(
+        tool::<CompareRevisions>(
             "revision_diff",
-            "Compare file contents and supported attributes between revisions.",
+            "List changed files between revisions with pagination (default 100, maximum 200). Omit before for an empty base. Follow next using cursor. Unique exact-content moves are marked renamed.",
+            true,
+        ),
+        tool::<CompareRevisionFile>(
+            "revision_text_diff",
+            "Compare one file as UTF-8 text with three context lines. Accepts previous_path for a rename. Binary files and files exceeding 256 KiB or 10000 lines return a status without a patch.",
             true,
         ),
         tool::<ListRevisionFiles>(

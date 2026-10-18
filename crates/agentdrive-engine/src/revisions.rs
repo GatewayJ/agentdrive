@@ -6,7 +6,7 @@ use crate::{
 use agentdrive_model::*;
 use agentdrive_ports::*;
 use async_trait::async_trait;
-use std::{collections::BTreeSet, sync::Arc};
+use std::sync::Arc;
 
 pub(crate) struct ForkSource {
     pub revision: RevisionId,
@@ -599,6 +599,7 @@ impl DurabilityService for RevisionService {
 pub struct VersionService {
     revisions: Arc<RevisionService>,
     transitions: Arc<dyn RevisionTransition>,
+    queries: Arc<dyn TreeQuery>,
 }
 
 impl std::fmt::Debug for VersionService {
@@ -611,10 +612,12 @@ impl VersionService {
     pub fn new(
         revisions: Arc<RevisionService>,
         transitions: Arc<dyn RevisionTransition>,
+        queries: Arc<dyn TreeQuery>,
     ) -> Arc<Self> {
         Arc::new(Self {
             revisions,
             transitions,
+            queries,
         })
     }
 }
@@ -839,31 +842,149 @@ impl RevisionApi for VersionService {
     async fn diff(
         &self,
         actor: &Principal,
-        workspace: WorkspaceId,
-        before: RevisionId,
-        after: RevisionId,
-    ) -> Result<Vec<FileDifference>> {
+        request: CompareRevisions,
+    ) -> Result<RevisionDifferences> {
+        let workspace = request.workspace;
         self.revisions
             .runtime
             .authorize(actor, workspace, None, Permission::Read)
             .await?;
-        let before = self.revisions.trees.revision(workspace, before).await?;
-        let after = self.revisions.trees.revision(workspace, after).await?;
-        let before = self.revisions.trees.tree(workspace, &before.root).await?;
-        let after = self.revisions.trees.tree(workspace, &after.root).await?;
-        let paths: BTreeSet<_> = before.keys().chain(after.keys()).cloned().collect();
-        Ok(paths
-            .into_iter()
-            .filter_map(|path| {
-                let left = before.get(&path);
-                let right = after.get(&path);
-                (!same_entry(left, right)).then(|| FileDifference {
-                    path,
-                    before: left.cloned(),
-                    after: right.cloned(),
-                })
-            })
-            .collect())
+        let limit = request.limit.unwrap_or(100);
+        if !(1..=200).contains(&limit) {
+            return Err(Error::invalid("diff page size must be between 1 and 200"));
+        }
+        let _protection = self.revisions.runtime.objects.read().await;
+        let before = match request.before {
+            Some(id) => Some(self.revisions.trees.revision(workspace, id).await?),
+            None => None,
+        };
+        let after = self
+            .revisions
+            .trees
+            .revision(workspace, request.after)
+            .await?;
+        let changes = self
+            .queries
+            .differences(workspace, before.as_ref().map(|r| &r.root), &after.root)
+            .await?;
+        let total = changes.len();
+        let mut changes = changes.into_iter().filter(|change| {
+            request
+                .cursor
+                .as_ref()
+                .is_none_or(|cursor| &change.path > cursor)
+        });
+        let entries: Vec<_> = changes.by_ref().take(limit).collect();
+        let next = if changes.next().is_some() {
+            entries.last().map(|entry| entry.path.clone())
+        } else {
+            None
+        };
+        Ok(RevisionDifferences {
+            entries,
+            next,
+            total,
+        })
+    }
+
+    async fn text_diff(
+        &self,
+        actor: &Principal,
+        request: CompareRevisionFile,
+    ) -> Result<RevisionTextDiff> {
+        self.revisions
+            .runtime
+            .authorize(actor, request.workspace, None, Permission::Read)
+            .await?;
+        let protection = self.revisions.runtime.objects.read().await;
+        let before = match request.before {
+            Some(id) => {
+                let revision = self.revisions.trees.revision(request.workspace, id).await?;
+                self.queries
+                    .lookup(
+                        request.workspace,
+                        &revision.root,
+                        request.previous_path.as_ref().unwrap_or(&request.path),
+                    )
+                    .await?
+            }
+            None => None,
+        };
+        let revision = self
+            .revisions
+            .trees
+            .revision(request.workspace, request.after)
+            .await?;
+        let after = self
+            .queries
+            .lookup(request.workspace, &revision.root, &request.path)
+            .await?;
+        if before.is_none() && after.is_none() {
+            return Err(Error::new(
+                ErrorCode::NotFound,
+                "file is absent from both revisions",
+            ));
+        }
+        let mut response = RevisionTextDiff {
+            status: TextDiffStatus::Text,
+            before,
+            after,
+            hunks: Vec::new(),
+        };
+        if let (Some(before), Some(after)) = (&response.before, &response.after)
+            && before.kind == FileKind::File
+            && after.kind == FileKind::File
+            && before.content == after.content
+        {
+            response.status = TextDiffStatus::Unchanged;
+            return Ok(response);
+        }
+        if response
+            .before
+            .iter()
+            .chain(&response.after)
+            .all(|i| i.kind == FileKind::Directory)
+        {
+            response.status = TextDiffStatus::Directory;
+            return Ok(response);
+        }
+        if response
+            .before
+            .iter()
+            .chain(&response.after)
+            .any(|i| i.size > crate::text_diff::MAX_BYTES as u64)
+        {
+            response.status = TextDiffStatus::TooLarge;
+            return Ok(response);
+        }
+        let mut contents = Vec::new();
+        for inode in [&response.before, &response.after] {
+            let bytes = match inode.as_ref().filter(|i| i.kind == FileKind::File) {
+                Some(inode) => {
+                    let object = inode
+                        .content
+                        .as_ref()
+                        .ok_or_else(|| Error::integrity("file content is missing"))?;
+                    read_content(
+                        self.revisions.trees.content.as_ref(),
+                        request.workspace,
+                        object,
+                        0,
+                        crate::text_diff::MAX_BYTES as u32,
+                    )
+                    .await?
+                    .to_vec()
+                }
+                None => Vec::new(),
+            };
+            contents.push(bytes);
+        }
+        drop(protection);
+        let after = contents.pop().expect("after content");
+        let before = contents.pop().expect("before content");
+        tokio::task::spawn_blocking(move || crate::text_diff::compare(response, &before, &after))
+            .await
+            .map_err(|error| Error::new(ErrorCode::Io, format!("text diff failed: {error}")))
     }
 
     async fn files(&self, actor: &Principal, request: ListRevisionFiles) -> Result<RevisionFiles> {
@@ -916,12 +1037,12 @@ impl RevisionApi for VersionService {
             .runtime
             .authorize(actor, workspace, None, Permission::Read)
             .await?;
+        let _protection = self.revisions.runtime.objects.read().await;
         let revision = self.revisions.trees.revision(workspace, revision).await?;
-        let tree = self.revisions.trees.tree(workspace, &revision.root).await?;
-        let inode = tree
-            .iter()
-            .find(|(entry, _)| entry.lookup_key() == path.lookup_key())
-            .map(|(_, inode)| inode)
+        let inode = self
+            .queries
+            .lookup(workspace, &revision.root, &path)
+            .await?
             .ok_or_else(|| Error::new(ErrorCode::NotFound, "file does not exist in revision"))?;
         if inode.kind != FileKind::File {
             return Err(Error::new(

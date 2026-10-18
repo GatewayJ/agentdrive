@@ -94,7 +94,7 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
         .await
         .unwrap();
     let tools = owner.tools().await.unwrap().tools;
-    assert_eq!(tools.len(), 30);
+    assert_eq!(tools.len(), 31);
     let adoption = tools
         .iter()
         .find(|tool| tool.name == "workspace_adopt_directory")
@@ -248,6 +248,94 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
     assert_eq!(view["status"]["branches"].as_array().unwrap().len(), 1);
     assert!(view["status"]["selected_branch"].is_string());
     assert_eq!(view["revisions"].as_array().unwrap().len(), 1);
+    let revision = view["revisions"][0]["id"].as_str().unwrap();
+    let changes_url = format!(
+        "{base}/api/workspaces/{}/revisions/{revision}/changes",
+        workspace.as_str().unwrap()
+    );
+    assert_eq!(http.get(&changes_url).send().await.unwrap().status(), 401);
+    assert_eq!(
+        http.get(&changes_url)
+            .bearer_auth(visitor_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let changes: Value = http
+        .get(&changes_url)
+        .bearer_auth(owner_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(changes["entries"][0]["kind"], "added");
+    assert_eq!(changes["entries"][0]["path"], "/");
+    assert_eq!(
+        http.get(format!("{changes_url}?limit=0"))
+            .bearer_auth(owner_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    let unchanged: Value = http
+        .get(format!("{changes_url}?before={revision}"))
+        .bearer_auth(owner_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(unchanged["total"], 0);
+    let diff_url = format!(
+        "{base}/api/workspaces/{}/revisions/{revision}/diff?path=%2F",
+        workspace.as_str().unwrap()
+    );
+    let directory: Value = http
+        .get(&diff_url)
+        .bearer_auth(owner_token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(directory["status"], "directory");
+    assert_eq!(
+        http.get(&diff_url)
+            .bearer_auth(visitor_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let mcp_diff = owner
+        .call(
+            "revision_diff".into(),
+            json!({"workspace": workspace, "after":revision}),
+        )
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_eq!(mcp_diff, changes);
+    let mcp_text = owner
+        .call(
+            "revision_text_diff".into(),
+            json!({"workspace":workspace,"after":revision,"path":"/"}),
+        )
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_eq!(mcp_text, directory);
     let lifecycle = format!("{base}/api/lifecycle");
     let attachment = json!({"request_id":"attach", "event":"attach", "workspace":workspace, "mount_path":temporary.path().join("mount")});
     let first: Value = http

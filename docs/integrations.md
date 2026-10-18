@@ -100,6 +100,10 @@ Read-only endpoints are `GET /api/workspaces` and `GET /api/workspaces/{workspac
 
 Protocol references: [ACP sessions](https://agentclientprotocol.com/protocol/v1/session-setup), [ACP turns](https://agentclientprotocol.com/protocol/v1/prompt-turn), and [Codex app-server](https://developers.openai.com/codex/app-server/).
 
+Selecting a saved revision displays a paginated changed-file list and on-demand text differences. The default base is its first parent; merge revisions offer a parent selector, and initial revisions compare against an empty tree. Exact-content moves with a unique source and destination are marked as renames. Ambiguous moves and moves with edited content appear as additions/deletions. Binary and oversized files show metadata. Browsing does not change mounts or the selected working branch.
+
+Revision endpoints are `GET /api/workspaces/{workspace}/revisions/{revision}/changes` and `GET /api/workspaces/{workspace}/revisions/{revision}/diff`; both require bearer authentication and workspace read access. `changes` accepts `before`, `cursor`, `limit`; `diff` accepts `before`, `path`, `previous_path`. Omitted `before` selects an empty base. See [MCP parameters](mcp.md) for response fields.
+
 ## macOS FUSE-T
 
 Install FUSE-T 1.2.9 and pkg-config, then build with `make -j "$(sysctl -n hw.ncpu)" build FEATURES=macos-fuse-t`. AgentDrive uses the local NFS backend and disables its attribute cache. FUSE-T runs without a kernel extension. Its [license](https://github.com/macos-fuse-t/fuse-t) requires a commercial license for commercial use or distribution with commercial software.

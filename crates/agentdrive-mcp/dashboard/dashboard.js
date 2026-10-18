@@ -1,4 +1,5 @@
 import { createSettingsPage } from './settings.js';
+import { createRevisionChanges } from './changes.js';
 const $ = (id) => document.getElementById(id);
 const fragment = new URLSearchParams(location.hash.slice(1));
 if (fragment.has('token')) {
@@ -26,7 +27,7 @@ function showLogin() { $('login').hidden = false; $('app').hidden = true; }
 async function api(path, options = {}) {
   const response = await fetch(path, {...options, headers:{...options.headers, Authorization:`Bearer ${token}`}, cache:'no-store'});
   if (response.status === 401) {
-    sessionStorage.removeItem('agentdrive-token'); token = ''; showLogin();
+    sessionStorage.removeItem('agentdrive-token'); token = ''; revisionChanges.clear(); showLogin();
     throw new Error('访问令牌无效，请重新连接。');
   }
   if (!response.ok) {
@@ -78,6 +79,7 @@ function branchHistory(branch, revisions) {
   return revisions.filter(revision => visited.has(revision.id)).sort((a,b) => b.created_ns - a.created_ns || a.id.localeCompare(b.id));
 }
 function detail(revision, branch) {
+  revisionChanges.show(snapshot.status.workspace.id, revision);
   const panel = $('revision-detail'); panel.replaceChildren(); panel.hidden = !revision;
   if (!revision) return;
   const heading = element('div','detail-heading','版本信息'); heading.append(element('span','',short(revision.id))); panel.append(heading);
@@ -108,7 +110,12 @@ function render() {
   $('sync-detail').textContent = !status.capabilities.remote_configured ? '未配置远程存储' : `${status.pending_jobs} 个待处理操作`;
   renderTree(branches, status.selected_branch);
   const branch = branches.find(branch => branch.id === selectedBranch);
-  if (!branch) return;
+  if (!branch) {
+    revisionChanges.clear(); $('revision-detail').hidden = true;
+    $('revision-list').replaceChildren(element('div', 'no-revisions', '暂无保存的版本。'));
+    $('history-count').textContent = '0';
+    return;
+  }
   $('history-title').textContent = branch.name;
   $('branch-meta').replaceChildren(element('code','',short(branch.id)));
   const parent = branches.find(value => value.id === branch.source_branch);
@@ -144,7 +151,7 @@ async function refresh(force=false) {
     for (const workspace of workspaces) { const option = element('option','',workspace.name); option.value = workspace.id; $('workspace').append(option); }
     if (workspaces.some(workspace => workspace.id === selection)) $('workspace').value = selection;
     $('empty').hidden = workspaces.length > 0; $('panels').hidden = !workspaces.length;
-    if (!workspaces.length) { snapshot = null; $('workspace-name').textContent='暂无工作区'; ['branch-count','revision-count'].forEach(id => $(id).textContent='0'); }
+    if (!workspaces.length) { snapshot = null; revisionChanges.clear(); $('workspace-name').textContent='暂无工作区'; ['branch-count','revision-count'].forEach(id => $(id).textContent='0'); }
     else {
       const data = await api(`/api/workspaces/${encodeURIComponent($('workspace').value)}`);
       if (request !== generation) return;
@@ -158,6 +165,9 @@ async function refresh(force=false) {
   } finally { if (request === generation) { loading = false; $('refresh').disabled = false; } }
 }
 const settingsPage = createSettingsPage({api, element, $});
+const changesContainer = element('section', 'revision-changes');
+$('revision-detail').after(changesContainer);
+const revisionChanges = createRevisionChanges({api, element, container:changesContainer});
 function isSettings() { return location.pathname === '/settings'; }
 async function refreshPage() {
   if (!token) return;
@@ -187,8 +197,8 @@ for (const id of ['history-nav', 'settings-nav']) $(id).addEventListener('click'
 });
 window.addEventListener('popstate', showPage);
 $('login-form').addEventListener('submit', event => { event.preventDefault(); token=$('token').value.trim(); sessionStorage.setItem('agentdrive-token',token); $('token').value=''; settingsPage.clear(); $('login').hidden=true; $('app').hidden=false; showPage(); });
-$('logout').addEventListener('click', () => { generation++; token=''; loading=false; sessionStorage.removeItem('agentdrive-token'); snapshot=null; settingsPage.clear(); showLogin(); });
-$('workspace').addEventListener('change', () => { selectedBranch=null; selectedRevision=null; refresh(true); });
+$('logout').addEventListener('click', () => { generation++; token=''; loading=false; sessionStorage.removeItem('agentdrive-token'); snapshot=null; settingsPage.clear(); revisionChanges.clear(); showLogin(); });
+$('workspace').addEventListener('change', () => { selectedBranch=null; selectedRevision=null; revisionChanges.clear(); refresh(true); });
 $('refresh').addEventListener('click', refreshPage);
 showPage();
 if (token) { $('login').hidden=true; $('app').hidden=false; } else showLogin();

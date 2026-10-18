@@ -90,7 +90,9 @@ impl Engine {
             adapters.mounts.clone(),
             config.identity,
         );
-        let versions = VersionService::new(revisions.clone(), mounts.clone());
+        let queries =
+            crate::tree_queries::IndexedTreeQuery::new(content.clone(), runtime.state.clone());
+        let versions = VersionService::new(revisions.clone(), mounts.clone(), queries);
         let cache = CacheService::new(
             runtime.clone(),
             trees.clone(),

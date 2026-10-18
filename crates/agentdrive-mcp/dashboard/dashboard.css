@@ -984,3 +984,12 @@ h1 {
 
 .settings-content .storage-check { display:flex; }
 .settings-content .storage-check input { width:auto; margin:0; }
+
+.revision-changes{border-top:1px solid var(--border,#e5e7eb);padding:22px;min-width:0}
+.changes-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.changes-heading h3{margin:0;font-size:15px}.compare-label{font-size:12px;color:#64748b}.compare-parent{max-width:100%;padding:7px;border:1px solid #cbd5e1;border-radius:6px;background:white;color:#334155}
+.changes-status{font-size:12px;color:#64748b;line-height:1.6}.changes-error{font-size:12px;color:#b91c1c;overflow-wrap:anywhere}
+.changes-layout{display:grid;grid-template-columns:minmax(180px,30%) minmax(0,1fr);gap:16px;align-items:start}.changed-files{min-width:0}.changed-file-list{max-height:480px;overflow:auto;margin-bottom:10px}
+.changed-file{width:100%;border:0;border-bottom:1px solid #eef2f6;background:transparent;display:flex;gap:8px;text-align:left;padding:10px 6px;cursor:pointer;font-size:12px;align-items:flex-start}.changed-file:hover,.changed-file.active{background:#eff6ff}.changed-file:focus-visible{outline:2px solid #2563eb;outline-offset:-2px}.changed-path{overflow-wrap:anywhere}.change-kind{flex-shrink:0;color:#64748b}.change-kind.added{color:#15803d}.change-kind.deleted{color:#b91c1c}.change-kind.modified,.change-kind.renamed{color:#1d4ed8}
+.diff-preview{min-width:0}.diff-path{font:600 13px ui-monospace,monospace;overflow-wrap:anywhere;margin:8px 0}.diff-metadata{display:grid;grid-template-columns:auto 1fr;gap:6px 10px;font-size:11px;color:#64748b}.diff-metadata dd{margin:0;overflow-wrap:anywhere}.diff-lines{overflow:auto;max-height:560px;border:1px solid #e2e8f0;border-radius:6px;font:12px/1.7 ui-monospace,monospace}.diff-line{display:flex;min-width:max-content}.diff-line.added{background:#e6ffed}.diff-line.removed{background:#ffeef0}.line-number{display:inline-block;width:4em;flex-shrink:0;text-align:right;padding-right:10px;color:#64748b;user-select:none}.line-sign{width:1.5em;flex-shrink:0}.line-text{white-space:pre;padding-right:12px;font:inherit}.diff-hunk{background:#eff6ff;padding:6px 10px;color:#475569;white-space:nowrap}.missing-newline{color:#64748b;padding-left:9em;font-size:11px}
+@media(max-width:900px){.changes-layout{grid-template-columns:1fr}.changed-file-list{max-height:240px}.revision-changes{padding:16px}}

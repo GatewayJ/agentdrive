@@ -492,8 +492,62 @@ pub struct MergeCandidate {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct FileDifference {
     pub path: WorkspacePath,
+    pub previous_path: Option<WorkspacePath>,
+    pub kind: FileChangeKind,
     pub before: Option<Inode>,
     pub after: Option<Inode>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FileChangeKind {
+    Added,
+    Deleted,
+    Modified,
+    Metadata,
+    Renamed,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RevisionDifferences {
+    pub entries: Vec<FileDifference>,
+    pub next: Option<WorkspacePath>,
+    pub total: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TextDiffStatus {
+    Text,
+    Unchanged,
+    Binary,
+    TooLarge,
+    Directory,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffLineKind {
+    Context,
+    Added,
+    Removed,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DiffLine {
+    pub kind: DiffLineKind,
+    pub before_line: Option<usize>,
+    pub after_line: Option<usize>,
+    pub text: String,
+    pub newline: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RevisionTextDiff {
+    pub status: TextDiffStatus,
+    pub before: Option<Inode>,
+    pub after: Option<Inode>,
+    pub hunks: Vec<Vec<DiffLine>>,
 }
 
 pub type FileTree = BTreeMap<WorkspacePath, Inode>;

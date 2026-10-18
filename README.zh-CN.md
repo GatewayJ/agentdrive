@@ -14,7 +14,7 @@ AgentDrive 为 Agent 提供可持久保存的工作区、显式管理的工作�
 - Linux FUSE、macOS FUSE-T/macFUSE 和 Windows WinFsp 适配；快照、分支恢复和版本历史。
 - S3/RustFS 同步、限制内存用量的流式传输、离线缓存保留、在线所有权交接，以及可以编辑文件的三方合并候选结果。
 - ACP 和 Codex app-server 生命周期集成、分支命令，以及提供分支历史与运行配置管理的 Dashboard。
-- 通过需要身份验证的 Streamable HTTP 提供 30 个具有明确类型的 MCP 工具，同时提供 stdio 代理和 JSON CLI。
+- 通过需要身份验证的 Streamable HTTP 提供 31 个具有明确类型的 MCP 工具，同时提供 stdio 代理和 JSON CLI。
 
 ## 构建
 
@@ -68,7 +68,7 @@ agentdrive branch switch --workspace "$WORKSPACE" --branch "$BRANCH"
 agentdrive dashboard --open
 ```
 
-创建分支会保存来源分支的当前内容，并保持工作区原有选择。切换会保存原分支，检查文件句柄，再更新本机分支选择和挂载目录。共享目录的多个 Agent 使用同一个分支。重启后仍然保留选择。Dashboard 展示分支关系、commit 说明、创建者、时间和父版本。管理员可以在“设置”页面修改缓存策略、S3 存储和 HTTP Origin 允许列表，运行中的 daemon 会使用更新后的配置，详见[配置说明](docs/configuration.zh-CN.md)。
+创建分支会保存来源分支的当前内容，并保持工作区原有选择。切换会保存原分支，检查文件句柄，再更新本机分支选择和挂载目录。共享目录的多个 Agent 使用同一个分支。重启后仍然保留选择。Dashboard 展示分支关系、commit 说明、创建者、时间、父版本、修改文件和文本差异。管理员可以在“设置”页面修改缓存策略、S3 存储和 HTTP Origin 允许列表，运行中的 daemon 会使用更新后的配置，详见[配置说明](docs/configuration.zh-CN.md)。
 
 已有 Agent 可以通过 `agentdrive mcp` 接入并使用挂载目录。`agentdrive integrate` 支持 ACP agent 和 Codex app-server，负责工作目录以及完成、取消和失败时的保存。自动保存由文件修改触发，Agent 断开后保留共享挂载。完整命令和事件行为见[Agent 集成](docs/integrations.zh-CN.md)。
 

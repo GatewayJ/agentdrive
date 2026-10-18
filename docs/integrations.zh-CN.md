@@ -100,6 +100,10 @@ agentdrive integrate --protocol codex-app-server --workspace "$WORKSPACE" \
 
 协议参考：[ACP 会话](https://agentclientprotocol.com/protocol/v1/session-setup)、[ACP 回合](https://agentclientprotocol.com/protocol/v1/prompt-turn)、[Codex app-server](https://developers.openai.com/codex/app-server/)。
 
+选择保存版本后，页面显示分页修改文件列表，点击文件读取文本差异。默认比较第一个父版本；合并版本可以选择父版本，初始版本与空目录比较。内容完全相同且来源、目标唯一的移动显示为重命名；存在多个匹配或同时修改内容的移动显示为新增、删除。二进制和超出预览上限的文件显示元数据。浏览版本保持现有挂载和工作分支。
+
+版本查询接口为 `GET /api/workspaces/{workspace}/revisions/{revision}/changes` 和 `GET /api/workspaces/{workspace}/revisions/{revision}/diff`，均要求 bearer 认证与工作区读取权限。`changes` 接受 `before`、`cursor`、`limit`；`diff` 接受 `before`、`path`、`previous_path`。省略 `before` 表示与空目录比较。参数及返回字段见 [MCP 文档](mcp.zh-CN.md)。
+
 ## macOS FUSE-T
 
 安装 FUSE-T 1.2.9 和 pkg-config，使用 `make -j "$(sysctl -n hw.ncpu)" build FEATURES=macos-fuse-t` 编译。AgentDrive 使用本机 NFS 后端并关闭属性缓存，无需内核扩展。FUSE-T 的[许可条款](https://github.com/macos-fuse-t/fuse-t)要求商业使用或随商业软件分发时取得商业许可。

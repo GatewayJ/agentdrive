@@ -3053,11 +3053,21 @@ async fn incremental_checkpoints_preserve_directory_moves_deletions_and_history(
         .engine
         .services
         .revisions
-        .diff(&actor(), workspace.id, first, last)
+        .diff(
+            &actor(),
+            CompareRevisions {
+                workspace: workspace.id,
+                before: Some(first),
+                after: last,
+                cursor: None,
+                limit: Some(200),
+            },
+        )
         .await
         .unwrap();
     assert!(
         changes
+            .entries
             .iter()
             .any(|diff| diff.path.as_str() == "/Moved/FILE-0259")
     );
@@ -3744,5 +3754,139 @@ async fn combined_file_queries_observe_permission_and_binding_changes() {
             .unwrap_err()
             .code,
         ErrorCode::StaleBinding
+    );
+}
+
+#[tokio::test]
+async fn revision_comparison_pages_text_renames_and_permissions() {
+    let h = Harness::new(None).await;
+    let workspace = h.workspace().await;
+    let (binding, fs) = h.branch_mount(workspace.id, "comparison", None).await;
+    h.write_new(&fs, "note.txt", b"same\nold\nlast").await;
+    h.write_new(&fs, "move.txt", b"unique moved content\n")
+        .await;
+    h.write_new(&fs, "delete.txt", b"removed content\n").await;
+    let first = h.commit(binding.branch).await;
+    let files = &h.engine.services.files;
+    files
+        .unlink(&fs, InodeId::ROOT, "note.txt", false)
+        .await
+        .unwrap();
+    h.write_new(&fs, "note.txt", "same\n中文\nlast\n".as_bytes())
+        .await;
+    files
+        .rename(
+            &fs,
+            InodeId::ROOT,
+            "move.txt",
+            InodeId::ROOT,
+            "moved.txt",
+            false,
+        )
+        .await
+        .unwrap();
+    files
+        .unlink(&fs, InodeId::ROOT, "delete.txt", false)
+        .await
+        .unwrap();
+    h.write_new(&fs, "binary", &[0, 255, 3]).await;
+    h.write_new(&fs, "large", &vec![b'a'; 256 * 1024 + 1]).await;
+    h.write_new(&fs, "empty", b"").await;
+    let last = h.commit(binding.branch).await;
+    let api = &h.engine.services.revisions;
+    let mut request = CompareRevisions {
+        workspace: workspace.id,
+        before: Some(first),
+        after: last,
+        cursor: None,
+        limit: Some(2),
+    };
+    let mut entries = Vec::new();
+    loop {
+        let result = api.diff(&actor(), request.clone()).await.unwrap();
+        assert_eq!(result.total, 6);
+        assert!(result.entries.len() <= 2);
+        entries.extend(result.entries);
+        if result.next.is_none() {
+            break;
+        }
+        request.cursor = result.next;
+    }
+    assert_eq!(entries.len(), 6);
+    assert!(entries.windows(2).all(|pair| pair[0].path < pair[1].path));
+    let renamed = entries
+        .iter()
+        .find(|e| e.path == path("/moved.txt"))
+        .unwrap();
+    assert_eq!(renamed.kind, FileChangeKind::Renamed);
+    assert_eq!(renamed.previous_path, Some(path("/move.txt")));
+    for (name, status) in [
+        ("note.txt", TextDiffStatus::Text),
+        ("delete.txt", TextDiffStatus::Text),
+        ("binary", TextDiffStatus::Binary),
+        ("large", TextDiffStatus::TooLarge),
+        ("empty", TextDiffStatus::Unchanged),
+    ] {
+        let result = api
+            .text_diff(
+                &actor(),
+                CompareRevisionFile {
+                    workspace: workspace.id,
+                    before: Some(first),
+                    after: last,
+                    path: path(&format!("/{name}")),
+                    previous_path: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.status, status, "{name}");
+        if name == "note.txt" {
+            let lines: Vec<_> = result.hunks.iter().flatten().collect();
+            assert!(lines.iter().any(|l| l.kind == DiffLineKind::Removed
+                && l.text == "old"
+                && l.before_line == Some(2)));
+            assert!(lines.iter().any(|l| l.kind == DiffLineKind::Added
+                && l.text == "中文"
+                && l.after_line == Some(2)));
+            assert!(lines.iter().any(|l| !l.newline && l.text == "last"));
+        }
+    }
+    assert_eq!(
+        api.read_file(&actor(), workspace.id, first, path("/NOTE.txt"), 0, 100)
+            .await
+            .unwrap(),
+        Bytes::from_static(b"same\nold\nlast")
+    );
+    let stranger: Principal = "stranger".to_owned().try_into().unwrap();
+    assert_eq!(
+        api.diff(&stranger, request.clone()).await.unwrap_err().code,
+        ErrorCode::PermissionDenied
+    );
+    let other = h.workspace().await;
+    request.before = Some(other.initial_revision);
+    assert_eq!(
+        api.diff(&actor(), request).await.unwrap_err().code,
+        ErrorCode::PermissionDenied
+    );
+    let initial = api
+        .diff(
+            &actor(),
+            CompareRevisions {
+                workspace: workspace.id,
+                before: None,
+                after: first,
+                cursor: None,
+                limit: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(initial.total, 4);
+    assert!(
+        initial
+            .entries
+            .iter()
+            .all(|entry| entry.kind == FileChangeKind::Added)
     );
 }

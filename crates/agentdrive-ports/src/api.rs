@@ -166,6 +166,27 @@ pub struct RevisionFiles {
 
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct CompareRevisions {
+    pub workspace: WorkspaceId,
+    /// None compares against an empty tree, including initial revisions.
+    pub before: Option<RevisionId>,
+    pub after: RevisionId,
+    pub cursor: Option<WorkspacePath>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CompareRevisionFile {
+    pub workspace: WorkspaceId,
+    pub before: Option<RevisionId>,
+    pub after: RevisionId,
+    pub path: WorkspacePath,
+    pub previous_path: Option<WorkspacePath>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PinRequest {
     pub range: RevisionRange,
     pub enabled: bool,
@@ -329,10 +350,13 @@ pub trait RevisionApi: Send + Sync {
     async fn diff(
         &self,
         actor: &Principal,
-        workspace: WorkspaceId,
-        before: RevisionId,
-        after: RevisionId,
-    ) -> Result<Vec<FileDifference>>;
+        request: CompareRevisions,
+    ) -> Result<RevisionDifferences>;
+    async fn text_diff(
+        &self,
+        actor: &Principal,
+        request: CompareRevisionFile,
+    ) -> Result<RevisionTextDiff>;
     async fn files(&self, actor: &Principal, request: ListRevisionFiles) -> Result<RevisionFiles>;
     async fn read_file(
         &self,

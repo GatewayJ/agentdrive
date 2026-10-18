@@ -35,6 +35,7 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = { version = "1", features = ["uuid1"] }
+similar = "2.7"
 rmcp = { version = "3.5.1", features = ["server", "client", "transport-io", "transport-streamable-http-server", "transport-streamable-http-client-reqwest", "reqwest"] }
 axum = "0.8"
 sha2 = "0.10"

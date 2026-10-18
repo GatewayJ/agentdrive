@@ -97,6 +97,8 @@ agentdrive dashboard --open
 
 `dashboard` 打印浏览器地址，无需读取凭据或连接 daemon。`dashboard --open` 需要凭据，通过 URL fragment 传递访问令牌；页面读取后立即移除 fragment，并将令牌保存在 session storage 中。数据请求使用 Bearer 身份验证。页面提供分支树和版本信息，每 15 秒刷新。 管理员可以通过左侧“设置”进入 `/settings`，修改运行配置并查看需要重启的启动配置，详见[配置说明](configuration.zh-CN.md)。
 
+选择保存版本后，页面显示分页修改文件列表，点击文件读取文本差异。默认比较第一个父版本；合并版本可以选择父版本，初始版本与空目录比较。内容完全相同且来源、目标唯一的移动显示为重命名；存在多个匹配或同时修改内容的移动显示为新增、删除。二进制和超出预览上限的文件显示元数据。浏览版本保持现有挂载和工作分支。
+
 ## 从文件读取请求
 
 JSON 文件保存工具的请求字段。例如，`create-request.json` 可以包含 `{ "name": "another-workspace" }`：

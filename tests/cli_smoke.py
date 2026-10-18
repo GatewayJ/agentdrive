@@ -74,7 +74,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-cli-') as temporary:
     try:
         daemon = start()
         tools = json.loads(subprocess.check_output(client + ['tools'], text=True, encoding='utf-8', timeout=30))
-        assert len(tools['tools']) == 30
+        assert len(tools['tools']) == 31
         names = {tool['name'] for tool in tools['tools']}
         assert 'revision_files' in names and 'merge_validate' not in names
         commit_schema = next(tool['inputSchema'] for tool in tools['tools'] if tool['name'] == 'revision_commit')
@@ -104,7 +104,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-cli-') as temporary:
             assert responses.get(timeout=15)['id'] == 1
             send({'method': 'notifications/initialized'})
             send({'id': 2, 'method': 'tools/list', 'params': {}})
-            assert len(responses.get(timeout=15)['result']['tools']) == 30
+            assert len(responses.get(timeout=15)['result']['tools']) == 31
             send({'id': 3, 'method': 'tools/call', 'params': {'name': 'workspace_status', 'arguments': {'workspace': workspace}}})
             assert responses.get(timeout=15)['result']['structuredContent']['workspace']['id'] == workspace
             send({'id': 4, 'method': 'tools/call', 'params': {'name': 'revision_files', 'arguments': {'workspace': workspace, 'revision': branch['formal_head']}}})

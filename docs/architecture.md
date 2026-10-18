@@ -25,6 +25,8 @@
 | `engine/files` | File operations, open handles, permission and generation checks |
 | `engine/content` | Verified content reads and coordinated downloads through `ContentResolver` |
 | `engine/trees`, `engine/indexes` | Tree interpretation and copy-on-write page editing through `RevisionReader`, `ObjectGraph` and `TreeEditor` |
+| `engine/tree_queries`, `engine/index_reader` | Immutable file lookup and changed-file queries through `TreeQuery`; validated index traversal and shared-page skipping |
+| `engine/text_diff` | Bounded UTF-8 line comparison and context grouping; independent of HTTP and storage |
 | `local/batch`, `local/queries` | Durable object publication batches and consistent SQLite read views |
 | `engine/snapshots`, `engine/revisions` | Capture working changes, save revisions, create branches and restore content |
 | `engine/workspaces` | Workspace creation, status and host-directory import/export |
@@ -38,13 +40,19 @@
 | `config/file` | File schema, defaults, token-file loading and initial directory creation |
 | `config/store` | Validate candidate settings, serialize writers, save configuration and publish `ArcSwap` snapshots |
 | `mcp/gateway`, `mcp/server` | Authenticate HTTP requests and dispatch typed application tools |
-| `mcp/web`, `mcp/dashboard` | Workspace/lifecycle/settings HTTP endpoints and browser views |
+| `mcp/web`, `mcp/dashboard` | Workspace, revision differences, lifecycle and settings HTTP endpoints and browser views |
 | `apps/agentdrive/integration` | ACP and Codex app-server event forwarding and persistence lifecycle |
 | `apps/agentdrived/main` | Construct adapters, start HTTP and background workers, shut down cleanly |
 
 `agentdrive-ports` describes the interfaces used by the engine. Storage and platform adapters implement those interfaces. The configuration crate depends on model types and does not construct database, mount, S3 or HTTP services. The daemon supplies one `LiveConfig` handle to the engine and HTTP gateway. Only `ConfigStore` publishes replacement snapshots; consumers obtain a consistent snapshot for each operation.
 
 ## File interfaces and transaction boundaries
+
+Revision browsing follows `dashboard / MCP -> RevisionApi -> TreeQuery -> ContentResolver / LocalStateStore`. The engine checks workspace access and revision membership before reading either side, and retains the object barrier while resolving metadata and content. The HTTP adapter translates requests and responses; the browser selects a parent, requests pages, and renders text using text nodes. Stale browser requests are cancelled when the version or parent changes.
+
+Single-file reads follow each normalized path component through the directory index and then look up its inode. Comparison traverses ordered inode indexes, skips identical page references, and resolves changed inode IDs through immutable directory projections. A new directory root needs a full directory-index read to build its path projection; later comparisons reuse it. The cache holds at most four projections with a combined estimated allocation of 16 MiB. Each index reader reuses decoded pages, holding at most 128 pages with at most 4 MiB of encoded input. Directory projections are freed outside the shared cache lock. Directory moves and cold projections remain proportional to the directory metadata involved. Difference responses contain at most 200 entries; comparison and ordering happen before response pagination. These derived results do not change the SQLite schema or immutable object format.
+
+Unique exact-content added/deleted file pairs are reported as renames. Ambiguous pairs and edited moves remain additions/deletions. Comparison reports content, kind, size, mode, uid and gid changes; timestamps alone do not create a change entry. Text comparison reads at most 256 KiB per side, accepts UTF-8 without NUL, limits each side to 10,000 lines, and runs on a blocking worker with a 200 ms algorithm deadline. The deadline allows a valid approximate diff with fewer common lines. Binary, oversized and directory results carry an explicit status. Complete file objects and SQLite WAL/FULL remain unchanged.
 
 | Interface or module | Responsibility | Caller boundary |
 | --- | --- | --- |

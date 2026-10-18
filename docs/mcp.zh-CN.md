@@ -25,7 +25,7 @@
 
 直接连接 Streamable HTTP 时，使用 `http://127.0.0.1:7421/mcp`，并提供 `Authorization: Bearer <token-file-contents>`。MCP 客户端需要完成初始化并保留返回的会话信息。允许的 Host 为监听地址和 `localhost:<port>`。请求携带 Origin 时，需要与请求地址同源，或匹配 `allowed_origins`；原生 CLI/stdio 连接省略 Origin。守护进程仅监听本机回环地址；其他机器访问时，需要使用经过身份验证的 TLS 代理，并保留允许的 Host 值。
 
-服务声明支持 MCP `tools` 能力，提供 30 个工具及其输入 JSON schema 和 annotations。可以通过 `tools/list` 读取已连接服务的工具目录，或者运行：
+服务声明支持 MCP `tools` 能力，提供 31 个工具及其输入 JSON schema 和 annotations。可以通过 `tools/list` 读取已连接服务的工具目录，或者运行：
 
 ```sh
 agentdrive tools > tools.json
@@ -104,7 +104,8 @@ jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 | `workspace_list` | `{}` | 当前身份可见的工作区数组。 |
 | `workspace_status` | `workspace` | 工作区、本地 location、`selected_branch`、分支、远端引用、挂载、待处理任务、能力和存储统计。 |
 | `revision_list` | `workspace`, `branch?` | 已保留的版本数组，可以按分支过滤。 |
-| `revision_diff` | `workspace`, `before`, `after` | 两个 revision ID 之间的文件差异。 |
+| `revision_diff` | `workspace`, `after`；可选 `before`, `cursor`, `limit` | 返回 `{entries, next, total}`。省略 `before` 表示空目录。默认每页 100 项，最多 200 项；将 `next` 作为下一页的 `cursor`。每项包含 `path`、`previous_path`、`kind`、`before`、`after`。 |
+| `revision_text_diff` | `workspace`, `after`, `path`；可选 `before`, `previous_path` | 返回文件属性与 UTF-8 文本差异，包含三行上下文、前后行号、末尾换行信息。状态为 `text`、`unchanged`、`binary`、`too_large` 或 `directory`。每侧最多 256 KiB、10,000 行。 |
 | `revision_files` | `workspace`, `revision`, `path?`, `after?` | 每页最多 200 个路径及文件属性；可以选择分支 head 或候选版本。将返回的 `next` 作为 `after` 继续查询，`path` 限制目录范围。 |
 | `revision_read` | `workspace`, `revision`, `path`, `offset`, `size` | `{bytes, length}`；offset 和 size 以字节计，size 最多为 4,194,304。 |
 | `cache_status` | `workspace`, `revision`, `paths?` | 指定范围的 `complete`、`offline_ready`、`completed_bytes` 和缺失的 object ID。`offline_ready` 还要求缓存受到保留设置保护。 |

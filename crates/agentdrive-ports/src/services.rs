@@ -83,6 +83,23 @@ pub trait RevisionReader: Send + Sync {
     async fn tree(&self, workspace: WorkspaceId, root: &ObjectRef) -> Result<FileTree>;
 }
 
+/// Indexed, immutable tree queries. Implementations own traversal and derived caches.
+#[async_trait]
+pub trait TreeQuery: Send + Sync {
+    async fn lookup(
+        &self,
+        workspace: WorkspaceId,
+        root: &ObjectRef,
+        path: &WorkspacePath,
+    ) -> Result<Option<Inode>>;
+    async fn differences(
+        &self,
+        workspace: WorkspaceId,
+        before: Option<&ObjectRef>,
+        after: &ObjectRef,
+    ) -> Result<Vec<FileDifference>>;
+}
+
 #[derive(Clone, Debug)]
 pub struct CapturedTree {
     pub branch: Branch,

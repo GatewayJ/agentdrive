@@ -3,16 +3,21 @@ mod cache;
 mod content;
 mod engine;
 mod files;
+mod index_reader;
 mod indexes;
 mod merge;
 mod mounts;
 mod operations;
 mod ownership;
+#[cfg(test)]
+mod query_tests;
 mod replica;
 mod revisions;
 mod runtime;
 mod snapshots;
 mod storage;
+mod text_diff;
+mod tree_queries;
 mod trees;
 mod workspaces;
 

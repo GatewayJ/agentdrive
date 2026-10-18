@@ -3,7 +3,7 @@ use agentdrive_model::*;
 use agentdrive_ports::*;
 use axum::{
     Json, Router,
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     http::{StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
@@ -16,6 +16,14 @@ pub(crate) fn api(services: Services) -> Router {
     Router::new()
         .route("/api/workspaces", get(workspaces))
         .route("/api/workspaces/{workspace}", get(workspace))
+        .route(
+            "/api/workspaces/{workspace}/revisions/{revision}/changes",
+            get(revision_changes),
+        )
+        .route(
+            "/api/workspaces/{workspace}/revisions/{revision}/diff",
+            get(revision_diff),
+        )
         .route("/api/lifecycle", post(lifecycle))
         .with_state(services)
 }
@@ -53,6 +61,7 @@ pub(crate) fn assets() -> Router {
         .route("/dashboard", get(|| async { Html(include_str!("../dashboard/index.html")) }))
         .route("/dashboard.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/dashboard.js")) }))
         .route("/settings.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/settings.js")) }))
+        .route("/changes.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/changes.js")) }))
         .route("/dashboard.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], include_str!("../dashboard/dashboard.css")) }))
         .layer(axum::middleware::map_response(|mut response: Response| async move {
             response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'".parse().unwrap());
@@ -96,6 +105,68 @@ async fn workspace(
     let status = services.workspace.status(&actor, workspace).await?;
     let revisions = services.revisions.list(&actor, workspace, None).await?;
     Ok(Json(json!({"status": status, "revisions": revisions})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChangesQuery {
+    before: Option<RevisionId>,
+    cursor: Option<WorkspacePath>,
+    limit: Option<usize>,
+}
+
+async fn revision_changes(
+    State(services): State<Services>,
+    Extension(actor): Extension<Principal>,
+    Path((workspace, revision)): Path<(WorkspaceId, RevisionId)>,
+    Query(query): Query<ChangesQuery>,
+) -> std::result::Result<Json<RevisionDifferences>, ApiError> {
+    Ok(Json(
+        services
+            .revisions
+            .diff(
+                &actor,
+                CompareRevisions {
+                    workspace,
+                    before: query.before,
+                    after: revision,
+                    cursor: query.cursor,
+                    limit: query.limit,
+                },
+            )
+            .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileDiffQuery {
+    before: Option<RevisionId>,
+    path: WorkspacePath,
+    previous_path: Option<WorkspacePath>,
+}
+
+async fn revision_diff(
+    State(services): State<Services>,
+    Extension(actor): Extension<Principal>,
+    Path((workspace, revision)): Path<(WorkspaceId, RevisionId)>,
+    Query(query): Query<FileDiffQuery>,
+) -> std::result::Result<Json<RevisionTextDiff>, ApiError> {
+    Ok(Json(
+        services
+            .revisions
+            .text_diff(
+                &actor,
+                CompareRevisionFile {
+                    workspace,
+                    before: query.before,
+                    after: revision,
+                    path: query.path,
+                    previous_path: query.previous_path,
+                },
+            )
+            .await?,
+    ))
 }
 
 #[derive(Debug, Deserialize)]

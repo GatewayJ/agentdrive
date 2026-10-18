@@ -25,6 +25,8 @@
 | `engine/files` | 文件操作、打开的句柄、权限与 generation 检查 |
 | `engine/content` | 通过 `ContentResolver` 验证内容与协调下载 |
 | `engine/trees`、`engine/indexes` | 通过 `RevisionReader`、`ObjectGraph`、`TreeEditor` 解释目录树、遍历对象及修改不可变页面 |
+| `engine/tree_queries`、`engine/index_reader` | 通过 `TreeQuery` 定位版本文件及查询变化，验证索引范围并跳过相同页面 |
+| `engine/text_diff` | 限制输入规模的 UTF-8 行差异计算与上下文分组，独立于 HTTP 和存储 |
 | `local/batch`、`local/queries` | 批量持久化对象，以及读取一致的 SQLite 数据 |
 | `engine/snapshots`、`engine/revisions` | 捕获工作内容、保存版本、创建分支与恢复内容 |
 | `engine/workspaces` | 创建工作区、查询状态，以及主机目录的导入导出 |
@@ -38,13 +40,19 @@
 | `config/file` | 配置文件结构、默认值、token 文件读取与初始化目录 |
 | `config/store` | 校验候选配置、控制写入顺序、保存文件与发布 `ArcSwap` 快照 |
 | `mcp/gateway`、`mcp/server` | 验证 HTTP 请求身份并调用应用接口 |
-| `mcp/web`、`mcp/dashboard` | 工作区、生命周期、设置的 HTTP 接口与浏览器页面 |
+| `mcp/web`、`mcp/dashboard` | 工作区、版本差异、生命周期、设置的 HTTP 接口与浏览器页面 |
 | `apps/agentdrive/integration` | ACP、Codex app-server 事件转发与持久化生命周期 |
 | `apps/agentdrived/main` | 创建适配器、运行 HTTP 服务和后台任务、正常关闭服务 |
 
 `agentdrive-ports` 定义 engine 使用的接口，存储和平台适配器负责实现接口。配置模块依赖 model 中的数据类型，数据库、挂载、S3 和 HTTP 服务由 daemon 创建。daemon 将同一个 `LiveConfig` 传给 engine 和 HTTP 入口；`ConfigStore` 统一发布配置，使用配置的模块为每次操作取得完整快照。
 
 ## 文件操作接口与事务边界
+
+版本浏览按照 `dashboard / MCP -> RevisionApi -> TreeQuery -> ContentResolver / LocalStateStore` 调用。engine 验证工作区读取权限与两个版本所属工作区，读取元数据和内容期间持有对象保护锁。HTTP 入口转换参数和结果；浏览器选择父版本、请求分页结果，通过文本节点显示内容。切换版本或父版本时取消过期请求。
+
+单文件读取逐级查询目录索引，再定位 inode。版本比较遍历有序 inode 索引，跳过对象引用相同的页面，通过不可变目录的路径映射找到变化文件。新的目录根对象首次需要读取全部目录索引以建立映射，后续比较复用映射。缓存最多保存四份映射，估算总内存上限为 16 MiB。每次索引查询复用已解析的页面，最多保存 128 页，按编码大小计不超过 4 MiB。目录映射释放内存时已经解除共享缓存锁。目录移动和首次建立映射的成本仍随相关目录元数据数量增长。差异响应每页最多 200 项，比较和排序在响应分页之前完成。派生结果保持现有 SQLite 结构和不可变对象格式。
+
+新增、删除文件中内容完全相同且来源、目标唯一的配对显示为重命名。存在多个匹配或移动时修改内容的文件保留新增、删除记录。比较包含内容、类型、大小、权限、uid 和 gid；仅时间戳变化不会新增修改项。文本比较每侧最多读取 256 KiB，接受不含 NUL 的 UTF-8，每侧最多 10,000 行，在 blocking worker 中运行，算法截止时间为 200 毫秒。到达截止时间后允许生成共同内容更少但有效的差异结果。二进制、超过上限及目录均返回明确状态。完整文件对象和 SQLite WAL/FULL 保持不变。
 
 ```mermaid
 flowchart TD

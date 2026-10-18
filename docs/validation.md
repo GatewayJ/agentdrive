@@ -18,6 +18,28 @@ Directory conversion tests cover initial `main` contents in a new workspace, imp
 
 CLI and MCP smoke tests decode process output and daemon files explicitly as UTF-8, including on Windows hosts with a different system code page. The upload concurrency test uses a four-request barrier and verifies that failed transfers release every permit.
 
+## Revision changes and indexed reads (2026-10-18)
+
+On macOS with FUSE-T 1.2.9, `make -j8 verify build FEATURES=macos-fuse-t` passed: formatting, Clippy, architecture checks and 78 Rust tests. Three native mount tests, the real RustFS test and all six CLI/config/replica/storage/lifecycle/branch-switch smoke suites also passed. The daemon advertises 31 MCP tools.
+
+New regressions cover paginated comparisons, original revision preservation, inode-index rebalancing and height changes, decoding each cached page once, whole-directory and nested moves, ambiguous renames, uid/gid changes, timestamp-only changes, case-insensitive lookup, Unicode text, binary/size/line limits, missing final newlines, authorization and cross-workspace rejection. HTTP and MCP return matching results. Engine services retain access checks and object protection; `TreeQuery` owns immutable lookup, comparison and derived caching.
+
+Chromium checks against a real daemon covered a 114-entry initial revision, pagination, both parents of a real merge, added/deleted/renamed files, Chinese text and line numbers, binary/large-file statuses, failed-request retry, refresh preserving the selected file, stale-request cancellation, logout and 390-pixel layout. Text containing HTML tags remained literal text. No browser script errors occurred. Desktop and mobile screenshots were inspected.
+
+The following medians are from three runs of the 10,000-file query test in a debug build with local objects. One file changed, with unchanged directory paths. The baseline invokes the retained full-tree reader used by the earlier query path; it does not run an older binary. File-content transfer and network latency are excluded.
+
+| Query | Full-tree baseline | Indexed query | Metadata reads in indexed query |
+| --- | ---: | ---: | ---: |
+| Locate one file | 404.29 ms | 11.36 ms | 6 |
+| Compare revisions, new path projection | 859.26 ms | 206.78 ms | 87 |
+| Compare revisions, cached path projection | 859.26 ms | 9.41 ms | 7 |
+
+A separate whole-directory rename with 1,000 files took a median 82.89 ms for indexed comparison versus 98.22 ms for full-tree reads.
+
+Reproduce with `make -j8 test CARGO_FLAGS='--locked -p agentdrive-engine --lib query_tests::indexed_queries_skip_shared_pages_and_preserve_old_roots -- --nocapture --test-threads=1'`. The test asserts read-count bounds and result correctness; timing has no pass/fail threshold. Cold directory projections and response pagination costs are described in [architecture](architecture.md).
+
+The isolated FUSE-T/RustFS run preserved the adoption path, switched branches through MCP, recovered after daemon restart and verified downloads by SHA-256: 1,093 main files and 1,138 feature files, including AppleDouble files. Creating 543 files with explicit fsync took 37.35 seconds; 50 renames took 340 ms. The subsequent remote save confirmed in 211 ms; 21 queued saves recovered after a remote outage in 1.37 seconds. This change targets historical queries; the mounted-write measurements provide regression evidence.
+
 ## Native filesystems
 
 Install and enable the platform driver, then run:
