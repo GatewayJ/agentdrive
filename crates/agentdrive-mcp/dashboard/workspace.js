@@ -1,4 +1,4 @@
-export function createWorkspaceView({element, selectBranch, showRevision}) {
+export function createWorkspaceView({element, selectBranch, showRevision, showBranchFiles}) {
   const short = id => id?.slice(0, 8) || '—';
   const kinds = {commit:'Commit', autosave:'自动保存', checkpoint:'检查点', candidate:'合并候选'};
   const states = {ready:'已挂载', preparing:'准备中', paused:'已暂停', recovery_required:'待恢复'};
@@ -53,7 +53,8 @@ export function createWorkspaceView({element, selectBranch, showRevision}) {
         }
         const button = element('button', `branch-button${branch.id === selectedBranch ? ' selected' : ''}`);
         button.id = `branch-${branch.id}`; button.type = 'button'; button.setAttribute('aria-pressed', String(branch.id === selectedBranch));
-        button.disabled = branch.state === 'deleted'; button.title = branch.name;
+        button.disabled = branch.state === 'deleted'; button.title = `${branch.name} · 双击预览当前文件`;
+        button.setAttribute('aria-haspopup', 'dialog'); button.setAttribute('aria-controls', 'branch-files-dialog');
         const symbol = element('span', 'branch-symbol', '⑂'); symbol.setAttribute('aria-hidden', 'true');
         const copy = element('span', 'branch-copy');
         copy.append(element('span', 'branch-name', branch.name));
@@ -63,7 +64,8 @@ export function createWorkspaceView({element, selectBranch, showRevision}) {
         }
         if (mounted.has(branch.id)) badges.append(element('span', 'mount-mark', `已挂载 ${mounted.get(branch.id)}`));
         if (branch.state === 'deleted') badges.append(element('span', 'branch-unavailable', '已删除'));
-        button.append(symbol, copy, badges); button.onclick = () => selectBranch(branch.id); item.append(button);
+        button.append(symbol, copy, badges); button.onclick = event => { selectBranch(branch.id); if (event.detail === 0) showBranchFiles(branch); };
+        button.ondblclick = () => showBranchFiles(branch); item.append(button);
         const forks = new Map();
         for (const child of children.get(branch.id) || []) {
           const base = originById.get(child.id).revision;
@@ -110,5 +112,11 @@ export function createWorkspaceView({element, selectBranch, showRevision}) {
       row.append(directory, target, access, state); table.append(row);
     }
   }
-  return {render};
+  function select(id) {
+    for (const button of document.querySelectorAll('.branch-button')) {
+      const active = button.id === `branch-${id}`;
+      button.classList.toggle('selected', active); button.setAttribute('aria-pressed', String(active));
+    }
+  }
+  return {render, select};
 }

@@ -256,6 +256,83 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
         view["status"]["workspace"]["initial_revision"]
     );
     assert_eq!(view["revisions"].as_array().unwrap().len(), 1);
+    let branch = view["status"]["branches"][0]["id"].as_str().unwrap();
+    let files_url = format!(
+        "{base}/api/workspaces/{}/branches/{branch}/files?path=%2F",
+        workspace.as_str().unwrap()
+    );
+    assert_eq!(http.get(&files_url).send().await.unwrap().status(), 401);
+    assert_eq!(
+        http.get(&files_url)
+            .bearer_auth(visitor_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let listing = http
+        .get(&files_url)
+        .bearer_auth(owner_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(listing.headers()["cache-control"], "no-store");
+    let listing: Value = listing.json().await.unwrap();
+    assert_eq!(listing["entries"], json!([]));
+    assert!(listing["version"].is_string());
+    let file_url = format!(
+        "{base}/api/workspaces/{}/branches/{branch}/file",
+        workspace.as_str().unwrap()
+    );
+    let query = [
+        ("path", "/"),
+        ("version", listing["version"].as_str().unwrap()),
+        ("offset", "0"),
+        ("size", "16"),
+    ];
+    let mut file_url = reqwest::Url::parse(&file_url).unwrap();
+    file_url.query_pairs_mut().extend_pairs(query);
+    assert_eq!(
+        http.get(file_url.clone()).send().await.unwrap().status(),
+        401
+    );
+    assert_eq!(
+        http.get(file_url.clone())
+            .bearer_auth(visitor_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    assert_eq!(
+        http.get(file_url.clone())
+            .bearer_auth(owner_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    assert_eq!(
+        http.get(format!("{files_url}&version=stale"))
+            .bearer_auth(owner_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        409
+    );
+    assert_eq!(
+        http.get(files_url.replace("path=%2F", "path=%2F..%2Fsecret"))
+            .bearer_auth(owner_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
     let revision = view["revisions"][0]["id"].as_str().unwrap();
     let changes_url = format!(
         "{base}/api/workspaces/{}/revisions/{revision}/changes",

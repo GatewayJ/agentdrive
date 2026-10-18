@@ -110,6 +110,10 @@ Double-click a history entry, or focus it and press Enter or Space, to open **Ve
 
 Revision endpoints are `GET /api/workspaces/{workspace}/revisions/{revision}/changes` and `GET /api/workspaces/{workspace}/revisions/{revision}/diff`; both require bearer authentication and workspace read access. `changes` accepts `before`, `cursor`, `limit`; `diff` accepts `before`, `path`, `previous_path`. Omitted `before` selects an empty base. See [MCP parameters](mcp.md) for response fields.
 
+Double-click a branch, or focus it and press Enter or Space, to open **Branch files**. Browse directories on the left, including hidden files; the first ordinary file is previewed automatically on the right. Reads include current unsaved and uncommitted changes and also work for unmounted local branches. Text is displayed in 64 KiB chunks with previous/next controls. Binary and non-UTF-8 bytes use hexadecimal previews. Directories contain up to 200 entries per page, with a load-more control and parent/root navigation.
+
+If the branch changes during browsing, refresh the file dialog to read its latest contents. Browsing does not change mounts, create revisions or trigger checkpoints. `GET /api/workspaces/{workspace}/branches/{branch}/files` accepts `path`, optional `after` and `version`, returning `entries`, `next` and `version`. Subsequent directory pages and file reads use the same version; a changed branch returns HTTP 409. `GET /api/workspaces/{workspace}/branches/{branch}/file` accepts `path`, `version`, `offset` and `size`, returning raw bytes with a per-read limit of 1–262144 bytes. Both endpoints enforce bearer authentication, workspace membership and branch read permission, and disable response caching.
+
 ## macOS FUSE-T
 
 Install FUSE-T 1.2.9 and pkg-config, then build with `make -j "$(sysctl -n hw.ncpu)" build FEATURES=macos-fuse-t`. AgentDrive uses the local NFS backend and disables its attribute cache. FUSE-T runs without a kernel extension. Its [license](https://github.com/macos-fuse-t/fuse-t) requires a commercial license for commercial use or distribution with commercial software.

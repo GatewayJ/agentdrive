@@ -152,3 +152,9 @@ object ID 使用 SHA-256 对域分隔标记、格式版本、对象类型和内�
 工作区授权控制应用操作。原生文件系统访问使用守护进程的操作系统身份。配置、凭据、状态、挂载根目录和交换根目录应限制为该身份访问；Windows 需要相应配置 NTFS 权限。S3 凭据持有者和管理员被视为可信的存储写入者。
 
 参见[配置与 S3](configuration.zh-CN.md)、[CLI 使用](cli.zh-CN.md)和 [MCP 参数与能力](mcp.zh-CN.md)。
+
+## 当前分支文件读取
+
+`Dashboard -> BranchFilesApi -> BranchFileService` 提供当前目录和文件读取。服务负责分支读取权限、版本校验和并发读取；`LocalStateStore::children_page` 使用 `(branch, parent, path)` 索引分页查询直接子项，`node_at` 定位单个文件。未保存文件经 `WorkingTreeStore` 读取，已保存对象经 `ContentResolver` 读取，可按需从远端获取。HTTP 层转换参数与字节响应；浏览器负责目录导航、UTF-8 字符边界和二进制展示。
+
+服务使用分支 ID、authority epoch、generation 和 mutation sequence 生成读取版本。在分支锁内验证版本并读取元数据；未保存文件的有界读取保持分支锁，已保存文件读取期间通过对象保护锁保持对象可用，并释放分支锁。此能力不创建文件句柄、挂载绑定、检查点或 revision。

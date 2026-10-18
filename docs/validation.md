@@ -229,3 +229,9 @@ npm --prefix tests/dashboard ci
 ```
 
 These browser checks cover presentation and interaction. The Rust workspace tests cover checkpoint persistence, revision creation and the HTTP API; native mounts and RustFS remain separate integration checks.
+
+## Current branch file preview (2026-10-18)
+
+`make -j8 verify FEATURES=macos-fuse-t` passed 82 Rust tests (5 environment-dependent tests ignored), formatting, Clippy and architecture checks. Read regressions cover unsaved bytes, immutable range reads, EOF and size limits, unmounted branches, branch-scoped access, workspace isolation, direct-child pagination and stale versions. Authenticated HTTP checks cover access denial, path validation and cache headers. The 8 Playwright tests include existing history/save-state/revision-dialog behavior plus branch double-click, automatic preview, directories, hexadecimal bytes, HTML-safe text, UTF-8 chunk boundaries, pagination, stale content, cancellation and narrow layouts.
+
+The local FUSE-T service was restarted from the consolidated `agentdrive` checkout with its existing RustFS configuration and three mount paths. All 36 files across four branches matched SHA-256 baselines through the new preview API, including the unmounted main branch. MCP switching from the feature branch to main and back preserved paths and file contents; RustFS synchronization completed with zero pending jobs. Live Chromium checks passed for branch previews, mounted file content, revision details and a 390-pixel viewport.

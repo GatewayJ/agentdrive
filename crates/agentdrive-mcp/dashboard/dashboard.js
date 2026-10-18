@@ -1,3 +1,4 @@
+import { createBranchFileViewer } from './branch-files.js';
 import { createSettingsPage } from './settings.js';
 import { createRevisionViewer } from './revisions.js';
 import { createWorkspaceView } from './workspace.js';
@@ -25,18 +26,19 @@ function date(ns) { return new Date(ns / 1e6); }
 function clock(ns) { return date(ns).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}); }
 function showLogin() { $('login').hidden = false; $('app').hidden = true; }
 async function api(path, options = {}) {
-  const response = await fetch(path, {...options, headers:{...options.headers, Authorization:`Bearer ${token}`}, cache:'no-store'});
+  const {binary = false, ...fetchOptions} = options;
+  const response = await fetch(path, {...fetchOptions, headers:{...options.headers, Authorization:`Bearer ${token}`}, cache:'no-store'});
   if (response.status === 401) {
-    sessionStorage.removeItem('agentdrive-token'); token = ''; revisionViewer.clear(); showLogin();
+    sessionStorage.removeItem('agentdrive-token'); token = ''; revisionViewer.clear(); branchFileViewer.clear(); showLogin();
     throw new Error('访问令牌无效，请重新连接。');
   }
   if (!response.ok) {
     const result = await response.json().catch(() => null);
     throw Object.assign(new Error(result?.error?.message || `请求失败：${response.status}`), {status:response.status});
   }
-  return response.json();
+  return binary ? response.arrayBuffer() : response.json();
 }
-function chooseBranch(id) { revisionViewer.clear(); selectedBranch = id; render(); }
+function chooseBranch(id) { revisionViewer.clear(); selectedBranch = id; render(false); }
 function branchHistory(branch, revisions) {
   return revisions.filter(revision => revision.branch === branch.id).sort((a,b) => b.created_ns - a.created_ns || a.id.localeCompare(b.id));
 }
@@ -53,7 +55,7 @@ function branchSaveStatus(branch, revisions) {
     : '内容已保存到本机，正在等待生成自动保存版本。';
   return {text:'已自动保存 · 有未提交修改', className:'pill autosaved', title};
 }
-function render() {
+function render(updateTree = true) {
   if (!snapshot) return;
   const focusId = document.activeElement?.id;
   const {status,revisions,summary} = snapshot;
@@ -67,7 +69,9 @@ function render() {
   $('mounted-branch-count').textContent = summary.mounted_branch_count;
   $('sync-status').textContent = !status.capabilities.remote_configured ? '未启用' : status.pending_jobs ? '同步中' : '已同步';
   $('sync-detail').textContent = !status.capabilities.remote_configured ? '内容保存在本机' : `${status.pending_jobs} 个待处理操作`;
-  workspaceView.render(snapshot, selectedBranch);
+  if (updateTree) workspaceView.render(snapshot, selectedBranch);
+  else workspaceView.select(selectedBranch);
+  branchFileViewer.update(status.workspace.id, status.branches);
   const branch = branches.find(branch => branch.id === selectedBranch);
   if (!branch) {
     revisionViewer.clear();
@@ -117,7 +121,7 @@ async function refresh(force=false) {
     for (const workspace of workspaces) { const option = element('option','',workspace.name); option.value = workspace.id; $('workspace').append(option); }
     if (workspaces.some(workspace => workspace.id === selection)) $('workspace').value = selection;
     $('empty').hidden = workspaces.length > 0; $('panels').hidden = !workspaces.length;
-    if (!workspaces.length) { snapshot = null; revisionViewer.clear(); $('workspace-name').textContent='暂无工作区'; ['branch-count','mount-count','mounted-branch-count'].forEach(id => $(id).textContent='0'); $('mount-detail').textContent='暂无挂载点'; $('sync-status').textContent='—'; $('sync-detail').textContent='暂无工作区'; }
+    if (!workspaces.length) { snapshot = null; revisionViewer.clear(); branchFileViewer.clear(); $('workspace-name').textContent='暂无工作区'; ['branch-count','mount-count','mounted-branch-count'].forEach(id => $(id).textContent='0'); $('mount-detail').textContent='暂无挂载点'; $('sync-status').textContent='—'; $('sync-detail').textContent='暂无工作区'; }
     else {
       const data = await api(`/api/workspaces/${encodeURIComponent($('workspace').value)}`);
       if (request !== generation) return;
@@ -132,7 +136,8 @@ async function refresh(force=false) {
 }
 const settingsPage = createSettingsPage({api, element, $});
 const revisionViewer = createRevisionViewer({api, element});
-const workspaceView = createWorkspaceView({element, selectBranch:chooseBranch, showRevision:(revision, triggerId) => {
+const branchFileViewer = createBranchFileViewer({api, element});
+const workspaceView = createWorkspaceView({element, selectBranch:chooseBranch, showBranchFiles:branch => branchFileViewer.show(snapshot.status.workspace.id, branch), showRevision:(revision, triggerId) => {
   const branch = snapshot.status.branches.find(value => value.id === revision.branch);
   revisionViewer.show({workspace:snapshot.status.workspace.id, revision,
     message:revision.message || titles[revision.kind] || revision.kind,
@@ -146,7 +151,7 @@ async function refreshPage() {
   else await refresh();
 }
 function showPage() {
-  revisionViewer.clear();
+  revisionViewer.clear(); branchFileViewer.clear();
   const settings = isSettings();
   $('history-page').hidden = settings;
   $('settings-page').hidden = !settings;
@@ -169,8 +174,8 @@ for (const id of ['history-nav', 'settings-nav']) $(id).addEventListener('click'
 });
 window.addEventListener('popstate', showPage);
 $('login-form').addEventListener('submit', event => { event.preventDefault(); token=$('token').value.trim(); sessionStorage.setItem('agentdrive-token',token); $('token').value=''; settingsPage.clear(); $('login').hidden=true; $('app').hidden=false; showPage(); });
-$('logout').addEventListener('click', () => { generation++; token=''; loading=false; sessionStorage.removeItem('agentdrive-token'); snapshot=null; settingsPage.clear(); revisionViewer.clear(); showLogin(); });
-$('workspace').addEventListener('change', () => { selectedBranch=null; revisionViewer.clear(); refresh(true); });
+$('logout').addEventListener('click', () => { generation++; token=''; loading=false; sessionStorage.removeItem('agentdrive-token'); snapshot=null; settingsPage.clear(); revisionViewer.clear(); branchFileViewer.clear(); showLogin(); });
+$('workspace').addEventListener('change', () => { selectedBranch=null; revisionViewer.clear(); branchFileViewer.clear(); refresh(true); });
 $('refresh').addEventListener('click', refreshPage);
 showPage();
 if (token) { $('login').hidden=true; $('app').hidden=false; } else showLogin();

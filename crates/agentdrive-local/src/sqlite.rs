@@ -319,6 +319,19 @@ impl LocalStateStore for LocalBackend {
         .await
     }
 
+    async fn children_page(
+        &self,
+        branch: BranchId,
+        parent: &WorkspacePath,
+        after: Option<&WorkspacePath>,
+        limit: usize,
+    ) -> Result<Vec<Node>> {
+        self.many(
+            "SELECT data FROM nodes WHERE branch=?1 AND parent=?2 AND path>?3 ORDER BY path LIMIT ?4",
+            vec![branch.to_string(), parent.lookup_key(), after.map(WorkspacePath::lookup_key).unwrap_or_default(), limit.to_string()],
+        ).await
+    }
+
     async fn subtree(&self, branch: BranchId, path: &WorkspacePath) -> Result<Vec<Node>> {
         if path.is_root() {
             return self.nodes(branch).await;

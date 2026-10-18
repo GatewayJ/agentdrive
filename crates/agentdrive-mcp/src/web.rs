@@ -25,6 +25,14 @@ pub(crate) fn api(services: Services) -> Router {
             "/api/workspaces/{workspace}/revisions/{revision}/diff",
             get(revision_diff),
         )
+        .route(
+            "/api/workspaces/{workspace}/branches/{branch}/files",
+            get(branch_files),
+        )
+        .route(
+            "/api/workspaces/{workspace}/branches/{branch}/file",
+            get(branch_file),
+        )
         .route("/api/lifecycle", post(lifecycle))
         .with_state(services)
 }
@@ -64,6 +72,7 @@ pub(crate) fn assets() -> Router {
         .route("/workspace.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/workspace.js")) }))
         .route("/settings.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/settings.js")) }))
         .route("/revisions.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/revisions.js")) }))
+        .route("/branch-files.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/branch-files.js")) }))
         .route("/changes.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/changes.js")) }))
         .route("/dashboard.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], include_str!("../dashboard/dashboard.css")) }))
         .layer(axum::middleware::map_response(|mut response: Response| async move {
@@ -108,6 +117,77 @@ async fn workspace(
     let status = services.workspace.status(&actor, workspace).await?;
     let revisions = services.revisions.list(&actor, workspace, None).await?;
     Ok(Json(WorkspaceView::new(status, revisions)))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BranchFilesQuery {
+    path: WorkspacePath,
+    after: Option<WorkspacePath>,
+    version: Option<String>,
+}
+
+async fn branch_files(
+    State(services): State<Services>,
+    Extension(actor): Extension<Principal>,
+    Path((workspace, branch)): Path<(WorkspaceId, BranchId)>,
+    Query(query): Query<BranchFilesQuery>,
+) -> std::result::Result<Json<BranchFiles>, ApiError> {
+    Ok(Json(
+        services
+            .branch_files
+            .list(
+                &actor,
+                ListBranchFiles {
+                    workspace,
+                    branch,
+                    path: query.path,
+                    after: query.after,
+                    version: query.version,
+                },
+            )
+            .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BranchFileQuery {
+    path: WorkspacePath,
+    version: String,
+    offset: u64,
+    size: u32,
+}
+
+async fn branch_file(
+    State(services): State<Services>,
+    Extension(actor): Extension<Principal>,
+    Path((workspace, branch)): Path<(WorkspaceId, BranchId)>,
+    Query(query): Query<BranchFileQuery>,
+) -> std::result::Result<Response, ApiError> {
+    let bytes = services
+        .branch_files
+        .read(
+            &actor,
+            ReadBranchFile {
+                workspace,
+                branch,
+                path: query.path,
+                version: query.version,
+                offset: query.offset,
+                size: query.size,
+            },
+        )
+        .await?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/octet-stream"),
+            (header::CACHE_CONTROL, "no-store"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]

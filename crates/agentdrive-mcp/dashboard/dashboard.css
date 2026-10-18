@@ -974,3 +974,13 @@ body:has(.revision-dialog[open]) { overflow:hidden; }
   #mount-table th,#mount-table td { padding:12px 16px; }
   .graph-legend { padding-left:16px; padding-right:16px; }
 }
+
+.branch-files-body {padding:24px; min-width:0;}
+.branch-files-toolbar,.branch-file-navigation {display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom:16px;}
+.branch-directory {flex:1; overflow-wrap:anywhere; min-width:100px;}
+.branch-file-list {max-height:55vh; overflow-y:auto;}
+.branch-file-kind {font-size:12px; color:var(--muted); flex-shrink:0;}
+.branch-file-path {overflow-wrap:anywhere; margin-top:0;}
+.branch-file-content {white-space:pre-wrap; overflow-wrap:anywhere; max-height:52vh; overflow:auto; font:13px/1.6 ui-monospace,monospace; background:#f7f9fb; padding:16px; border-radius:8px; tab-size:4;}
+.branch-files-dialog .changes-layout {align-items:start;}
+@media (max-width:700px) {.branch-files-body {padding:16px;} .branch-file-list {max-height:28vh;}}

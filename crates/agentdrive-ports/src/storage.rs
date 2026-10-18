@@ -131,6 +131,14 @@ pub trait LocalStateStore: Send + Sync {
     async fn history_index(&self, branch: BranchId) -> Result<Option<ObjectRef>>;
     /// 仅返回直接子项，保留显示名称的大小写。
     async fn children(&self, branch: BranchId, parent: &WorkspacePath) -> Result<Vec<Node>>;
+    /// Bounded direct children ordered by the normalized path key.
+    async fn children_page(
+        &self,
+        branch: BranchId,
+        parent: &WorkspacePath,
+        after: Option<&WorkspacePath>,
+        limit: usize,
+    ) -> Result<Vec<Node>>;
     /// 返回根节点及后代，用于目录移动；普通文件只返回自身。
     async fn subtree(&self, branch: BranchId, path: &WorkspacePath) -> Result<Vec<Node>>;
     async fn usage(&self, branch: BranchId) -> Result<WorkingTreeUsage>;

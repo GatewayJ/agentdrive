@@ -3890,3 +3890,358 @@ async fn revision_comparison_pages_text_renames_and_permissions() {
             .all(|entry| entry.kind == FileChangeKind::Added)
     );
 }
+
+#[tokio::test]
+async fn branch_file_preview_reads_current_bytes_without_creating_versions_or_mounts() {
+    let h = Harness::new(None).await;
+    let workspace = h.workspace().await;
+    let (mount, fs) = h.branch_mount(workspace.id, "preview", None).await;
+    h.write_new(&fs, "note.txt", b"saved").await;
+    h.commit(mount.branch).await;
+    let list = ListBranchFiles {
+        workspace: workspace.id,
+        branch: mount.branch,
+        path: path("/"),
+        after: None,
+        version: None,
+    };
+    let saved = h
+        .engine
+        .services
+        .branch_files
+        .list(&actor(), list.clone())
+        .await
+        .unwrap();
+    let mut read = ReadBranchFile {
+        workspace: workspace.id,
+        branch: mount.branch,
+        path: path("/note.txt"),
+        version: saved.version.clone(),
+        offset: 1,
+        size: 3,
+    };
+    assert_eq!(
+        h.engine
+            .services
+            .branch_files
+            .read(&actor(), read.clone())
+            .await
+            .unwrap(),
+        "ave"
+    );
+    let inode = h
+        .local
+        .node_at(mount.branch, &path("/note.txt"))
+        .await
+        .unwrap()
+        .unwrap()
+        .inode;
+    let handle = h
+        .engine
+        .services
+        .files
+        .open(
+            &fs,
+            inode.id,
+            OpenMode {
+                read: true,
+                write: true,
+                append: false,
+            },
+        )
+        .await
+        .unwrap();
+    h.engine
+        .services
+        .files
+        .write(&fs, handle.id, 0, Bytes::from_static(b"latest unsaved"))
+        .await
+        .unwrap();
+    h.engine
+        .services
+        .files
+        .release(&fs, handle.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        h.engine
+            .services
+            .branch_files
+            .read(&actor(), read.clone())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::TargetMoved
+    );
+    let before = h.local.branch(mount.branch).await.unwrap().unwrap();
+    let history = h.local.revisions(workspace.id).await.unwrap().len();
+    let current = h
+        .engine
+        .services
+        .branch_files
+        .list(&actor(), list.clone())
+        .await
+        .unwrap();
+    assert!(
+        current
+            .entries
+            .iter()
+            .any(|node| node.path == path("/note.txt") && node.dirty)
+    );
+    read.version = current.version;
+    read.offset = 0;
+    read.size = 256 * 1024;
+    assert_eq!(
+        h.engine
+            .services
+            .branch_files
+            .read(&actor(), read.clone())
+            .await
+            .unwrap(),
+        "latest unsaved"
+    );
+    assert_eq!(h.local.branch(mount.branch).await.unwrap().unwrap(), before);
+    assert_eq!(
+        h.local.revisions(workspace.id).await.unwrap().len(),
+        history
+    );
+    read.size += 1;
+    assert_eq!(
+        h.engine
+            .services
+            .branch_files
+            .read(&actor(), read.clone())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidArgument
+    );
+    read.size = 10;
+    read.offset = u64::MAX;
+    assert!(
+        h.engine
+            .services
+            .branch_files
+            .read(&actor(), read.clone())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let outsider: Principal = "outsider".to_owned().try_into().unwrap();
+    assert_eq!(
+        h.engine
+            .services
+            .branch_files
+            .list(&outsider, list.clone())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::PermissionDenied
+    );
+    assert_eq!(
+        h.engine
+            .services
+            .branch_files
+            .read(&outsider, read.clone())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::PermissionDenied
+    );
+    let other = h.workspace().await;
+    let mut wrong = list.clone();
+    wrong.workspace = other.id;
+    assert_eq!(
+        h.engine
+            .services
+            .branch_files
+            .list(&actor(), wrong)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::PermissionDenied
+    );
+    let mut scoped = workspace.clone();
+    scoped.grants.push(Grant {
+        principal: outsider.clone(),
+        branch: Some(mount.branch),
+        permissions: vec![Permission::Read],
+    });
+    h.local
+        .commit(LocalCommit {
+            workspaces: vec![scoped],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    h.engine
+        .services
+        .branch_files
+        .list(&outsider, list.clone())
+        .await
+        .unwrap();
+    let revision = h.commit(mount.branch).await;
+    let fork = success(
+        h.engine
+            .services
+            .revisions
+            .fork(
+                context(),
+                ForkBranch {
+                    workspace: workspace.id,
+                    source: Some(revision),
+                    source_branch: None,
+                    name: "unmounted-preview".into(),
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    let CommandResult::Branch { branch } = fork.result.unwrap() else {
+        panic!("missing branch")
+    };
+    let unmounted = h
+        .engine
+        .services
+        .branch_files
+        .list(
+            &actor(),
+            ListBranchFiles {
+                branch: branch.id,
+                ..list.clone()
+            },
+        )
+        .await
+        .unwrap();
+    read.branch = branch.id;
+    read.version = unmounted.version;
+    read.offset = 0;
+    read.size = 100;
+    assert_eq!(
+        h.engine
+            .services
+            .branch_files
+            .read(&actor(), read.clone())
+            .await
+            .unwrap(),
+        "latest unsaved"
+    );
+    assert_eq!(
+        h.engine
+            .services
+            .branch_files
+            .read(&outsider, read)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::PermissionDenied
+    );
+    assert!(
+        h.local
+            .mounts()
+            .await
+            .unwrap()
+            .iter()
+            .all(|mount| mount.branch != branch.id)
+    );
+}
+
+#[tokio::test]
+async fn branch_file_listing_pages_direct_children_and_rejects_stale_cursors() {
+    let h = Harness::new(None).await;
+    let workspace = h.workspace().await;
+    let (mount, fs) = h.branch_mount(workspace.id, "pagination", None).await;
+    for i in 0..205 {
+        h.engine
+            .services
+            .files
+            .create(
+                &fs,
+                InodeId::ROOT,
+                &format!("file-{i:03}"),
+                FileKind::File,
+                0o644,
+            )
+            .await
+            .unwrap();
+    }
+    let directory = h
+        .engine
+        .services
+        .files
+        .create(&fs, InodeId::ROOT, "nested", FileKind::Directory, 0o755)
+        .await
+        .unwrap();
+    h.engine
+        .services
+        .files
+        .create(&fs, directory.id, "inside", FileKind::File, 0o644)
+        .await
+        .unwrap();
+    let mut request = ListBranchFiles {
+        workspace: workspace.id,
+        branch: mount.branch,
+        path: path("/"),
+        after: None,
+        version: None,
+    };
+    let first = h
+        .engine
+        .services
+        .branch_files
+        .list(&actor(), request.clone())
+        .await
+        .unwrap();
+    assert_eq!(first.entries.len(), 200);
+    request.after = first.next;
+    request.version = Some(first.version);
+    let second = h
+        .engine
+        .services
+        .branch_files
+        .list(&actor(), request.clone())
+        .await
+        .unwrap();
+    assert_eq!(second.entries.len(), 6);
+    assert!(second.next.is_none());
+    assert!(
+        !second
+            .entries
+            .iter()
+            .any(|node| node.path == path("/nested/inside"))
+    );
+    let mut nested = request.clone();
+    nested.after = None;
+    nested.path = path("/NESTED");
+    let children = h
+        .engine
+        .services
+        .branch_files
+        .list(&actor(), nested)
+        .await
+        .unwrap();
+    assert_eq!(children.entries[0].path, path("/nested/inside"));
+    let mut invalid = request.clone();
+    invalid.after = Some(path("/nested/inside"));
+    assert_eq!(
+        h.engine
+            .services
+            .branch_files
+            .list(&actor(), invalid)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidArgument
+    );
+    h.write_new(&fs, "new.txt", b"new").await;
+    assert_eq!(
+        h.engine
+            .services
+            .branch_files
+            .list(&actor(), request)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::TargetMoved
+    );
+}

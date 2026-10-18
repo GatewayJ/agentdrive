@@ -37,7 +37,7 @@ function fixture() {
     revision('merge-candidate', null, ['parent-commit', 'child-autosave'], 'candidate', 4),
   ];
   const main = {id:'main', name:'main', formal_head:'parent-commit', autosave_head:null, base_revision:'initial',
-    source_branch:null, working_root:{id:'tree-parent-commit'}, dirty:false, mutation_seq:1, saved_seq:1, state:'writable'};
+    source_branch:null, working_root:{id:'tree-parent-commit'}, dirty:false, mutation_seq:1, saved_seq:1, state:'writable', authority_epoch:1, generation:1};
   const child = {...main, id:'feature', name:'feature', source_branch:'main', base_revision:'parent-commit',
     autosave_head:'child-autosave', working_root:{id:'tree-child-autosave'}, dirty:true};
   const empty = {...main, id:'empty', name:'empty', source_branch:'main', base_revision:'parent-commit'};
@@ -63,6 +63,17 @@ async function open(t, data = fixture()) {
       await route.fulfill({json:[{id:'workspace', name:'Review workspace'}]});
     } else if (url.pathname === '/api/workspaces/workspace') {
       await route.fulfill({json:data});
+    } else if (url.pathname.endsWith('/files')) {
+      const branch = url.pathname.split('/').at(-2);
+      const version = `${branch}:1:1:1`;
+      const entries = url.searchParams.get('path') === '/nested' ? [] : [
+        {path:'/nested', inode:{kind:'directory', mode:493, size:0}, dirty:false},
+        {path:'/note.txt', inode:{kind:'file', mode:420, size:18}, dirty:true},
+        {path:'/binary', inode:{kind:'file', mode:420, size:3}, dirty:false},
+      ];
+      await route.fulfill({json:{version, entries, next:null}});
+    } else if (url.pathname.endsWith('/file')) {
+      await route.fulfill({contentType:'application/octet-stream', body:url.searchParams.get('path') === '/binary' ? Buffer.from([0,255,1]) : Buffer.from('hello <script>world')});
     } else if (url.pathname.endsWith('/changes')) {
       await route.fulfill({json:{total:2, next:null, entries:[{path:'/first.txt', kind:'modified'}, {path:'/second.txt', kind:'added'}]}});
     } else if (url.pathname.endsWith('/diff')) {
@@ -125,7 +136,7 @@ test('double click opens combined details, uses the parent and selects the first
   const {page, requests} = await open(t);
   assert.equal(await page.locator('.revision-more,.revision-menu').count(), 0);
   await page.locator('#revision-child-autosave').click();
-  assert.equal(await page.locator('dialog').evaluate(el => el.open), false);
+  assert.equal(await page.locator('#revision-dialog').evaluate(el => el.open), false);
   assert.equal(differenceReads(requests).length, 0);
   await openRevision(page);
   assert.deepEqual(await page.locator('.revision-section-title').allTextContents(), ['版本信息','修改内容']);
@@ -138,9 +149,9 @@ test('double click opens combined details, uses the parent and selects the first
   await page.getByRole('button', {name:'关闭弹框'}).click();
   await page.locator('#revision-child-autosave').press('Space');
   await page.locator('.diff-path').waitFor();
-  const bounds = await page.locator('dialog').boundingBox();
+  const bounds = await page.locator('#revision-dialog').boundingBox();
   await page.mouse.click(bounds.x - 4, bounds.y + 5);
-  assert.equal(await page.locator('dialog').evaluate(el => el.open), false);
+  assert.equal(await page.locator('#revision-dialog').evaluate(el => el.open), false);
 });
 
 test('open revision metadata follows a new commit without reloading the selected difference', async t => {
@@ -156,7 +167,7 @@ test('open revision metadata follows a new commit without reloading the selected
   data.revisions.push(revision('next-commit', 'feature', ['child-autosave'], 'commit', 5));
   branch.formal_head = 'next-commit'; branch.working_root = {id:'tree-next-commit'};
   await refresh(page);
-  assert.equal(await page.locator('dialog').evaluate(el => el.open), true);
+  assert.equal(await page.locator('#revision-dialog').evaluate(el => el.open), true);
   assert(!(await page.locator('.revision-detail').textContent()).includes('当前正式提交'));
   assert.equal(await page.locator('.diff-path').textContent(), '/second.txt');
   assert.equal(differenceReads(requests).length, count);
@@ -171,11 +182,90 @@ test('source revisions remain accessible with the child selected and dialogs fit
   assert((await page.locator('.revision-detail').textContent()).includes('parent-commit'));
   assert(differenceReads(requests).every(url => url.searchParams.get('before') === 'initial'));
   await refresh(page);
-  assert.equal(await page.locator('dialog').evaluate(el => el.open), true);
+  assert.equal(await page.locator('#revision-dialog').evaluate(el => el.open), true);
   await page.setViewportSize({width:390, height:844});
-  const layout = await page.locator('dialog').evaluate(el => ({width:el.clientWidth, scrollWidth:el.scrollWidth,
+  const layout = await page.locator('#revision-dialog').evaluate(el => ({width:el.clientWidth, scrollWidth:el.scrollWidth,
     left:el.getBoundingClientRect().left, right:el.getBoundingClientRect().right}));
   assert(layout.scrollWidth <= layout.width && layout.left >= 0 && layout.right <= 390);
   await page.keyboard.press('Escape');
   assert.equal(await page.evaluate(() => document.activeElement.id), 'origin-main-parent-commit');
+});
+
+
+test('double clicking an unselected branch opens current files and preserves single click history', async t => {
+  const {page, requests} = await open(t);
+  await page.locator('#branch-main').click();
+  assert.equal(await page.locator('#branch-files-dialog').evaluate(el => el.open), false);
+  assert.equal(requests.filter(url => url.pathname.endsWith('/files')).length, 0);
+  await page.locator('#branch-feature').dblclick({delay:80});
+  await page.locator('.branch-file-content').waitFor();
+  assert.equal(await page.locator('#history-title').textContent(), 'feature');
+  assert.equal(await page.locator('.branch-file-path').textContent(), '/note.txt');
+  assert.equal(await page.locator('.branch-file-content').textContent(), 'hello <script>world');
+  assert((await page.locator('.branch-file-preview').textContent()).includes('当前工作内容'));
+  assert.equal(await page.locator('.branch-file-content script').count(), 0);
+  await page.locator('.branch-file[data-path="/binary"]').click();
+  await page.waitForFunction(() => document.querySelector('.branch-file-content')?.textContent.includes('00 ff 01'));
+  await page.locator('.branch-file[data-path="/nested"]').click();
+  await page.getByText('此目录为空。', {exact:true}).waitFor();
+  await page.getByRole('button', {name:'上级目录', exact:true}).click();
+  await page.locator('.branch-file-content').waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'branch-feature');
+  await page.locator('#branch-main').press('Enter');
+  await page.locator('.branch-file-content').waitFor();
+  assert((await page.locator('#branch-files-dialog .revision-dialog-subtitle').textContent()).startsWith('main'));
+  await page.setViewportSize({width:390,height:844});
+  const bounds = await page.locator('#branch-files-dialog').evaluate(el => ({width:el.clientWidth,scroll:el.scrollWidth,right:el.getBoundingClientRect().right}));
+  assert(bounds.scroll <= bounds.width && bounds.right <= 390);
+});
+
+test('file browser reports changes, refreshes current files and cancels a delayed response when closed', async t => {
+  const {page, branch} = await open(t);
+  await page.locator('#branch-feature').dblclick();
+  await page.locator('.branch-file-content').waitFor();
+  branch.mutation_seq++;
+  await refresh(page);
+  await page.getByText('分支内容已更新，可点击“刷新文件”读取最新内容。', {exact:true}).waitFor();
+  await page.route('**/branches/feature/file?**', route => route.fulfill({status:409,json:{error:{message:'changed'}}}));
+  await page.locator('.branch-file[data-path="/binary"]').click();
+  await page.getByText('分支内容已更新，请点击“刷新文件”重新读取。', {exact:true}).waitFor();
+  await page.unroute('**/branches/feature/file?**');
+  await page.getByRole('button', {name:'刷新文件',exact:true}).first().click();
+  await page.locator('.branch-file-content').waitFor();
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  await page.route('**/branches/feature/file?**', async route => { await pending; await route.fulfill({body:'delayed'}).catch(() => {}); });
+  await page.locator('.branch-file[data-path="/binary"]').click();
+  await page.getByText('正在读取文件…',{exact:true}).waitFor();
+  await page.keyboard.press('Escape'); release();
+  assert.equal(await page.locator('#branch-files-dialog').evaluate(el => el.open), false);
+  assert.equal(await page.locator('.branch-file-content').count(), 0);
+});
+
+test('file pagination keeps UTF-8 character boundaries and directory pagination keeps the same version', async t => {
+  const {page, requests} = await open(t);
+  const content = Buffer.from('a'.repeat(65535) + '中文结束');
+  await page.route('**/branches/main/files?**', route => {
+    const url = new URL(route.request().url());
+    const next = !url.searchParams.has('after');
+    return route.fulfill({json:{version:'main:1:1:1', entries:[{path:next ? '/large.txt' : '/empty.txt', inode:{kind:'file',mode:420,size:next ? content.length : 0}}], next:next ? '/large.txt' : null}});
+  });
+  await page.route('**/branches/main/file?**', route => {
+    const url = new URL(route.request().url());
+    const offset = Number(url.searchParams.get('offset')), size = Number(url.searchParams.get('size'));
+    return route.fulfill({body:content.subarray(offset, offset+size)});
+  });
+  await page.locator('#branch-main').dblclick({delay:80});
+  await page.locator('.branch-file-content').waitFor();
+  assert.equal((await page.locator('.branch-file-content').textContent()).length,65535);
+  await page.getByRole('button',{name:'下一段',exact:true}).click();
+  await page.waitForFunction(() => document.querySelector('.branch-file-content')?.textContent === '中文结束');
+  await page.getByRole('button',{name:'上一段',exact:true}).click();
+  await page.waitForFunction(() => document.querySelector('.branch-file-content')?.textContent.length === 65535);
+  const nextPage = page.waitForRequest(request => request.url().includes('after='));
+  await page.getByRole('button',{name:'加载更多文件',exact:true}).click();
+  const url = new URL((await nextPage).url());
+  assert.equal(url.searchParams.get('version'),'main:1:1:1');
+  await page.locator('.branch-file[data-path="/empty.txt"]').waitFor();
 });

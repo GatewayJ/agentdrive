@@ -1,4 +1,5 @@
 //! Workspace services. Storage, host integration and transport remain behind ports.
+mod branch_files;
 mod cache;
 mod content;
 mod engine;

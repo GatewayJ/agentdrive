@@ -444,6 +444,39 @@ pub trait OperationApi: Send + Sync {
     async fn cancel(&self, actor: &Principal, operation: OperationId) -> Result<OperationRecord>;
 }
 
+/// Read-only access to the current local branch tree, including unsaved writes.
+#[async_trait]
+pub trait BranchFilesApi: Send + Sync {
+    async fn list(&self, actor: &Principal, request: ListBranchFiles) -> Result<BranchFiles>;
+    async fn read(&self, actor: &Principal, request: ReadBranchFile) -> Result<Bytes>;
+}
+
+#[derive(Clone, Debug)]
+pub struct ListBranchFiles {
+    pub workspace: WorkspaceId,
+    pub branch: BranchId,
+    pub path: WorkspacePath,
+    pub after: Option<WorkspacePath>,
+    pub version: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BranchFiles {
+    pub version: String,
+    pub entries: Vec<Node>,
+    pub next: Option<WorkspacePath>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReadBranchFile {
+    pub workspace: WorkspaceId,
+    pub branch: BranchId,
+    pub path: WorkspacePath,
+    pub version: String,
+    pub offset: u64,
+    pub size: u32,
+}
+
 #[derive(Clone)]
 pub struct Services {
     pub workspace: Arc<dyn WorkspaceApi>,
@@ -455,6 +488,7 @@ pub struct Services {
     pub mounts: Arc<dyn MountApi>,
     pub operations: Arc<dyn OperationApi>,
     pub files: Arc<dyn crate::FileSystem>,
+    pub branch_files: Arc<dyn BranchFilesApi>,
 }
 
 impl std::fmt::Debug for Services {

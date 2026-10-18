@@ -73,6 +73,11 @@ impl Engine {
             publisher.clone(),
             snapshots,
         );
+        let branch_files = crate::branch_files::BranchFileService::new(
+            runtime.clone(),
+            content.clone(),
+            adapters.working.clone(),
+        );
         let files = FileService::new(
             runtime.clone(),
             trees.clone(),
@@ -133,6 +138,7 @@ impl Engine {
             mounts,
             operations,
             files,
+            branch_files,
         };
         Ok(Arc::new(Self {
             services,

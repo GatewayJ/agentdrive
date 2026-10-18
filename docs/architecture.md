@@ -136,3 +136,9 @@ Bearer credentials select a principal before creating the MCP service. Each cred
 Workspace grants authorize application actions. Native filesystem access is tied to the daemon's OS identity. Keep configuration, credentials, state, mount roots, and exchange roots restricted to that identity; on Windows configure their NTFS permissions accordingly. S3 credentials and administrators are trusted storage writers.
 
 See [configuration and S3](configuration.md), [CLI usage](cli.md), and [MCP parameters and capabilities](mcp.md).
+
+## Current branch file reads
+
+`Dashboard -> BranchFilesApi -> BranchFileService` provides current directory and file reads. The service owns branch authorization, version validation and concurrent reads. `LocalStateStore::children_page` uses the `(branch, parent, path)` index to page direct children; `node_at` resolves one file. Unsaved files use `WorkingTreeStore`; saved objects use `ContentResolver`, including remote retrieval when needed. HTTP translates parameters and byte responses. The browser owns directory navigation, UTF-8 boundaries and binary presentation.
+
+Read versions contain the branch ID, authority epoch, generation and mutation sequence. Version checks and metadata reads run under the branch lock. Bounded working-file reads retain that lock; immutable reads hold the object retention barrier and release the branch lock. Browsing creates no file handles, mount bindings, checkpoints or revisions.

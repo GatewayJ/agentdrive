@@ -110,6 +110,10 @@ agentdrive integrate --protocol codex-app-server --workspace "$WORKSPACE" \
 
 版本查询接口为 `GET /api/workspaces/{workspace}/revisions/{revision}/changes` 和 `GET /api/workspaces/{workspace}/revisions/{revision}/diff`，均要求 bearer 认证与工作区读取权限。`changes` 接受 `before`、`cursor`、`limit`；`diff` 接受 `before`、`path`、`previous_path`。省略 `before` 表示与空目录比较。参数及返回字段见 [MCP 文档](mcp.zh-CN.md)。
 
+双击分支，或聚焦分支后按 Enter／空格，打开 **分支文件** 弹框。左侧按目录浏览全部文件（包含隐藏文件），右侧默认预览首个普通文件。预览读取当前工作内容，包括尚未保存或提交的修改；未挂载的本机分支同样可以浏览。文本按 64 KiB 分段显示，通过“上一段／下一段”继续读取；二进制和非 UTF-8 内容显示十六进制。目录每页最多 200 项，通过“加载更多文件”继续浏览。进入子目录后可以返回上级或根目录。
+
+预览期间分支发生变化时，页面提示“刷新文件”，随后读取最新内容。读取功能不会切换挂载、生成版本或触发检查点。目录接口 `GET /api/workspaces/{workspace}/branches/{branch}/files` 接受 `path`、可选 `after` 和 `version`，返回 `entries`、`next`、`version`。后续目录页和文件读取使用同一个 `version`；分支变化返回 HTTP 409。文件接口 `GET /api/workspaces/{workspace}/branches/{branch}/file` 接受 `path`、`version`、`offset` 和 `size`，返回原始字节，每次读取范围为 1–262144 字节。两个接口均验证 Bearer 身份、工作区归属和分支读取权限，并禁止缓存响应。
+
 ## macOS FUSE-T
 
 安装 FUSE-T 1.2.9 和 pkg-config，使用 `make -j "$(sysctl -n hw.ncpu)" build FEATURES=macos-fuse-t` 编译。AgentDrive 使用本机 NFS 后端并关闭属性缓存，无需内核扩展。FUSE-T 的[许可条款](https://github.com/macos-fuse-t/fuse-t)要求商业使用或随商业软件分发时取得商业许可。
