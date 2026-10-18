@@ -349,25 +349,12 @@ h1 {
   font-size:10px;
   font-weight:500;
 }
-.tree-legend {
+.tree-hint {
   font-size:9px;
-  display:flex;
-  align-items:center;
-  gap:5px;
-  color:#8b95a2;
+  text-align:right;
+  color:#a2aab5;
   border-bottom:1px solid var(--line);
   padding:9px 21px 15px;
-}
-.legend-dot {
-  width:5px;
-  height:5px;
-  border-radius:50%;
-  background:#42a688;
-}
-.tree-caption {
-  margin-left:auto;
-  color:#a2aab5;
-  font-size:9px;
 }
 .branch-tree {
   min-height:352px;
