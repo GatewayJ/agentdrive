@@ -1,6 +1,7 @@
 """Enforce production dependency boundaries and shared lint settings."""
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -23,9 +24,13 @@ ADAPTER_DEPENDENCIES = {
 
 
 def main():
+    environment = os.environ.copy()
+    # Metadata inspection does not use the Make jobserver inherited by Python.
+    for name in ("MAKEFLAGS", "CARGO_MAKEFLAGS"):
+        environment.pop(name, None)
     metadata = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--no-deps", "--format-version=1", "--locked"],
-        cwd=ROOT, text=True, encoding='utf-8',
+        cwd=ROOT, env=environment, text=True, encoding='utf-8',
     ))
     members = set(metadata["workspace_members"])
     packages = [p for p in metadata["packages"] if p["id"] in members]

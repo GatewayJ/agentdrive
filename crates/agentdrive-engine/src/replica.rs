@@ -969,13 +969,13 @@ mod upload_tests {
     use agentdrive_test_support::{ManualClock, MemoryRemote};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    #[derive(Default)]
     struct ObservedRemote {
         remote: MemoryRemote,
         active: AtomicUsize,
         peak: AtomicUsize,
         completed: AtomicUsize,
         fail: AtomicBool,
+        rendezvous: tokio::sync::Barrier,
     }
     struct Active<'a>(&'a AtomicUsize);
     impl Drop for Active<'_> {
@@ -989,7 +989,9 @@ mod upload_tests {
             let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
             let _active = Active(&self.active);
             self.peak.fetch_max(active, Ordering::SeqCst);
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            tokio::time::timeout(std::time::Duration::from_secs(30), self.rendezvous.wait())
+                .await
+                .expect("four uploads must reach the remote concurrently");
             self.completed.fetch_add(1, Ordering::SeqCst);
             if self.fail.load(Ordering::SeqCst) {
                 return Err(Error::new(
@@ -1015,7 +1017,14 @@ mod upload_tests {
     async fn uploads_share_a_limit_and_errors_release_all_permits() {
         let dir = tempfile::tempdir().unwrap();
         let local = Arc::new(LocalBackend::open(dir.path()).unwrap());
-        let remote = Arc::new(ObservedRemote::default());
+        let remote = Arc::new(ObservedRemote {
+            remote: MemoryRemote::default(),
+            active: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
+            completed: AtomicUsize::new(0),
+            fail: AtomicBool::new(false),
+            rendezvous: tokio::sync::Barrier::new(4),
+        });
         let runtime = Runtime::new(local.clone(), Arc::new(ManualClock::default()))
             .await
             .unwrap();
@@ -1043,8 +1052,7 @@ mod upload_tests {
         );
         first.unwrap();
         second.unwrap();
-        assert!(remote.peak.load(Ordering::SeqCst) > 1);
-        assert!(remote.peak.load(Ordering::SeqCst) <= 4);
+        assert_eq!(remote.peak.load(Ordering::SeqCst), 4);
         assert_eq!(remote.active.load(Ordering::SeqCst), 0);
         let completed = remote.completed.load(Ordering::SeqCst);
         remote.fail.store(true, Ordering::SeqCst);
