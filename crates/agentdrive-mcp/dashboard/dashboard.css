@@ -947,8 +947,7 @@ h1 {
 .settings-content .storage-check input { width:auto; margin:0; }
 
 .revision-changes{padding:24px;min-width:0}
-.changes-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
-.compare-label{font-size:12px;color:#64748b}.compare-parent{max-width:100%;padding:7px;border:1px solid #cbd5e1;border-radius:6px;background:white;color:#334155}
+.comparison-summary{margin:0 0 14px;font-size:12px;color:#64748b;overflow-wrap:anywhere}
 .changes-status{font-size:12px;color:#64748b;line-height:1.6}.changes-error{font-size:12px;color:#b91c1c;overflow-wrap:anywhere}
 .changes-layout{display:grid;grid-template-columns:minmax(180px,30%) minmax(0,1fr);gap:16px;align-items:start}.changed-files{min-width:0}.changed-file-list{max-height:480px;overflow:auto;margin-bottom:10px}
 .changed-file{width:100%;border:0;border-bottom:1px solid #eef2f6;background:transparent;display:flex;gap:8px;text-align:left;padding:10px 6px;cursor:pointer;font-size:12px;align-items:flex-start}.changed-file:hover,.changed-file.active{background:#eff6ff}.changed-file:focus-visible{outline:2px solid #2563eb;outline-offset:-2px}.changed-path{overflow-wrap:anywhere}.change-kind{flex-shrink:0;color:#64748b}.change-kind.added{color:#15803d}.change-kind.deleted{color:#b91c1c}.change-kind.modified,.change-kind.renamed{color:#1d4ed8}
