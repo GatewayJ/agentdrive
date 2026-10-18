@@ -376,7 +376,6 @@ h1 {
 .branch-symbol { font-size:21px; flex-shrink:0; color:#77a58f; }
 .branch-copy { min-width:0; flex:1; }
 .branch-name { display:block; font-size:12px; overflow-wrap:anywhere; line-height:1.6; font-weight:600; }
-.branch-sub { font-size:10px; display:block; color:#93a098; margin-top:4px; font-family:ui-monospace,monospace; }
 .branch-badges { display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; max-width:80px; }
 .default-mark,.mount-mark,.branch-unavailable { display:inline-block; font-size:9px; border-radius:4px; padding:3px 5px; white-space:nowrap; }
 .default-mark { background:#edf0f7; color:#6b7491; }

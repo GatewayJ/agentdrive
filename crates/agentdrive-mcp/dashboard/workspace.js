@@ -56,7 +56,7 @@ export function createWorkspaceView({element, selectBranch, showRevision}) {
         button.disabled = branch.state === 'deleted'; button.title = branch.name;
         const symbol = element('span', 'branch-symbol', '⑂'); symbol.setAttribute('aria-hidden', 'true');
         const copy = element('span', 'branch-copy');
-        copy.append(element('span', 'branch-name', branch.name), element('span', 'branch-sub', short(branch.id)));
+        copy.append(element('span', 'branch-name', branch.name));
         const badges = element('span', 'branch-badges');
         if (branch.id === status.selected_branch) {
           const badge = element('span', 'default-mark', '默认'); badge.title = '未指定分支时的本机选择'; badges.append(badge);
