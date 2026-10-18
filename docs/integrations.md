@@ -50,6 +50,8 @@ The tool imports the directory using the same validation as `workspace_import`, 
 
 Success requires `phase: "complete"`, `mount_ready: true`, and no `error`. The operation returns the workspace ID in `workspace`. The result contains `branch`, `path`, `backup_path`, `binding`, and `restart_required: true`. Restart the Agent with the original path as its working directory. For later explicit mounting, use the returned branch ID. Keep the backup until the restarted Agent has verified its files; backup cleanup is manual.
 
+WinFsp creates its own directory mount point. On Windows, AgentDrive removes the validated empty placeholder immediately before starting the driver, then restores it if startup fails. Existing files and reparse points are rejected, and the original imported files remain in the backup. The successful mount uses the same original path. See the [WinFsp directory mount implementation](https://github.com/winfsp/winfsp/blob/v2.1/src/dll/mount.c#L439).
+
 If mounting fails after the move, the original files remain at `backup_path`; the original path may be empty. Pause file access and retry with the same request ID and identical arguments, including after daemon restart. A completed retry reuses the imported branch. Inspect `operation_get` or `operation_by_request` after a lost response. If import itself failed, correct the source and use a new request ID. Do not start another conversion on an already moved path.
 
 ## Application launch commands

@@ -1,5 +1,7 @@
 //! Native mounting and confined host directories.
 mod directories;
+#[cfg(any(windows, test))]
+mod mount_point;
 mod native;
 
 pub use directories::HostDirectories;

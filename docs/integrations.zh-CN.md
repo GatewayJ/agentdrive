@@ -50,6 +50,8 @@ MCP 返回 `result.binding`，其中包含 `id`、`branch`、`path` 和 `generat
 
 成功时 `phase` 为 `complete`、`mount_ready` 为 `true`，且没有 `error`。操作记录的 `workspace` 返回 workspace ID。结果包含 `branch`、`path`、`backup_path`、`binding` 和 `restart_required: true`。重启 Agent 时继续使用原路径作为工作目录，后续显式挂载使用返回的 branch ID。确认重启后的 Agent 能正常访问文件后，可以自行清理备份。
 
+WinFsp 会创建目录挂载点。Windows 上，AgentDrive 在启动驱动前移除经过检查的空目录；启动失败时恢复该目录。已有文件和 reparse point 会被拒绝，导入的原始文件继续保存在备份目录中。挂载成功后使用原路径。参见 [WinFsp 目录挂载实现](https://github.com/winfsp/winfsp/blob/v2.1/src/dll/mount.c#L439)。
+
 移动目录后如果挂载失败，原文件保存在 `backup_path`，原路径可能为空。暂停目录访问，使用相同 request ID 和相同参数重试；daemon 重启后也支持继续处理，并复用已导入的 branch。响应丢失时通过 `operation_get` 或 `operation_by_request` 查询结果。导入阶段失败时，修正源目录后使用新的 request ID。已经移动的路径应继续原请求。
 
 ## 应用启动命令

@@ -51,12 +51,6 @@ impl Driver {
         tokio::task::spawn_blocking(move || {
             win::init().map_err(|error| Error::new(ErrorCode::Unsupported, error.to_string()))?;
             let binding = spec.binding;
-            if binding.path.exists() && std::fs::read_dir(&binding.path)?.next().is_some() {
-                return Err(Error::new(
-                    ErrorCode::MountBusy,
-                    "mount directory must be empty",
-                ));
-            }
             let point = U16CString::from_os_str(&binding.path)
                 .map_err(|_| Error::invalid("invalid Windows mount path"))?;
             let mut volume = win::VolumeParams::default();
@@ -86,15 +80,17 @@ impl Driver {
                 open: open.clone(),
                 alive: alive.clone(),
             };
-            let filesystem = win::FileSystem::start(
-                win::Params {
-                    volume_params: volume,
-                    guard_strategy: win::OperationGuardStrategy::Coarse,
-                },
-                Some(&point),
-                filesystem,
-            )
-            .map_err(native_error)?;
+            let filesystem = crate::mount_point::start(&binding.path, || {
+                win::FileSystem::start(
+                    win::Params {
+                        volume_params: volume,
+                        guard_strategy: win::OperationGuardStrategy::Coarse,
+                    },
+                    Some(&point),
+                    filesystem,
+                )
+                .map_err(native_error)
+            })?;
             mounts.lock().insert(
                 binding.id,
                 Mounted {
