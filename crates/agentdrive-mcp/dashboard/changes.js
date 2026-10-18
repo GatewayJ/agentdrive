@@ -46,7 +46,6 @@ export function createRevisionChanges({api, element, container}) {
       const more = element('button', 'secondary', '加载更多'); more.type = 'button'; more.hidden = true;
       sidebar.append(list, more);
       const preview = element('div', 'diff-preview'); preview.setAttribute('aria-live', 'polite');
-      preview.append(element('p', 'changes-status', '选择文件查看修改内容。'));
       layout.append(sidebar, preview); body.append(status, layout);
       let cursor = null, count = 0, selected = null, loading = false;
       function query(values = {}) {
@@ -105,6 +104,7 @@ export function createRevisionChanges({api, element, container}) {
             button.append(element('span', `change-kind ${entry.kind}`, labels[entry.kind]), element('span', 'changed-path', entry.path));
             if (entry.previous_path) button.title = `${entry.previous_path} → ${entry.path}`;
             button.onclick = () => view(entry, button); list.append(button);
+            if (!selected) view(entry, button);
           }
           count += data.entries.length; cursor = data.next; more.hidden = !cursor;
           status.replaceChildren(); status.textContent = data.total ? `共 ${data.total} 项修改，已显示 ${count} 项` : '此版本没有文件内容或属性修改。';

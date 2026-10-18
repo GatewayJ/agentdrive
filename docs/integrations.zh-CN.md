@@ -100,7 +100,7 @@ agentdrive integrate --protocol codex-app-server --workspace "$WORKSPACE" \
 
 协议参考：[ACP 会话](https://agentclientprotocol.com/protocol/v1/session-setup)、[ACP 回合](https://agentclientprotocol.com/protocol/v1/prompt-turn)、[Codex app-server](https://developers.openai.com/codex/app-server/)。
 
-版本历史每行右侧提供 **更多（⋯）** 菜单。**版本信息** 在弹框中显示版本属性；**修改内容** 在弹框中显示分页修改文件列表，点击文件读取文本差异。可以通过关闭按钮、Escape 或点击弹框外部关闭。默认比较第一个父版本；合并版本可以选择父版本，初始版本与空目录比较。内容完全相同且来源、目标唯一的移动显示为重命名；存在多个匹配或同时修改内容的移动显示为新增、删除。新增、删除的空文件明确显示为空文件（0 字节）；重命名或属性修改中的相同内容单独说明。二进制和超出预览上限的文件显示元数据。浏览版本保持现有挂载和工作分支。
+版本历史每行右侧提供 **更多（⋯）** 菜单。**版本信息** 在弹框中显示版本属性；**修改内容** 在弹框中显示分页修改文件列表，默认选中第一项并在右侧展示详情与文本差异。切换比较基准时自动展示新列表的第一项；加载更多时保留当前选择。可以通过关闭按钮、Escape 或点击弹框外部关闭。默认比较第一个父版本；合并版本可以选择父版本，初始版本与空目录比较。内容完全相同且来源、目标唯一的移动显示为重命名；存在多个匹配或同时修改内容的移动显示为新增、删除。新增、删除的空文件明确显示为空文件（0 字节）；重命名或属性修改中的相同内容单独说明。二进制和超出预览上限的文件显示元数据。浏览版本保持现有挂载和工作分支。
 
 版本查询接口为 `GET /api/workspaces/{workspace}/revisions/{revision}/changes` 和 `GET /api/workspaces/{workspace}/revisions/{revision}/diff`，均要求 bearer 认证与工作区读取权限。`changes` 接受 `before`、`cursor`、`limit`；`diff` 接受 `before`、`path`、`previous_path`。省略 `before` 表示与空目录比较。参数及返回字段见 [MCP 文档](mcp.zh-CN.md)。
 
