@@ -464,6 +464,7 @@ h1 {
   gap:9px;
   align-items:center;
 }
+.history-hint { font-size:10px; color:var(--muted); }
 .revision-list {
   padding:0 14px 14px;
   max-height:430px;
@@ -471,6 +472,9 @@ h1 {
   min-height:180px;
 }
 .revision-row {
+  cursor:pointer;
+  font:inherit;
+  color:inherit;
   background:#fff;
   border:1px solid transparent;
   border-radius:7px;
@@ -481,6 +485,7 @@ h1 {
   padding:13px 10px;
   gap:13px;
 }
+.revision-row:focus-visible { outline:2px solid var(--green); outline-offset:-2px; }
 .revision-row:hover {
   background:#f8faf9;
 }
@@ -904,51 +909,8 @@ h1 {
 .diff-preview{min-width:0}.diff-path{font:600 13px ui-monospace,monospace;overflow-wrap:anywhere;margin:8px 0}.diff-metadata{display:grid;grid-template-columns:auto 1fr;gap:6px 10px;font-size:11px;color:#64748b}.diff-metadata dd{margin:0;overflow-wrap:anywhere}.diff-lines{overflow:auto;max-height:560px;border:1px solid #e2e8f0;border-radius:6px;font:12px/1.7 ui-monospace,monospace}.diff-line{display:flex;min-width:max-content}.diff-line.added{background:#e6ffed}.diff-line.removed{background:#ffeef0}.line-number{display:inline-block;width:4em;flex-shrink:0;text-align:right;padding-right:10px;color:#64748b;user-select:none}.line-sign{width:1.5em;flex-shrink:0}.line-text{white-space:pre;padding-right:12px;font:inherit}.diff-hunk{background:#eff6ff;padding:6px 10px;color:#475569;white-space:nowrap}.missing-newline{color:#64748b;padding-left:9em;font-size:11px}
 @media(max-width:900px){.changes-layout{grid-template-columns:1fr}.changed-file-list{max-height:240px}.revision-changes{padding:16px}}
 
-.revision-more {
-  align-self:center;
-  flex-shrink:0;
-  width:34px;
-  height:34px;
-  padding:0;
-  border:1px solid transparent;
-  border-radius:7px;
-  background:transparent;
-  color:#657282;
-  font-size:24px;
-  line-height:1;
-}
-.revision-more:hover,.revision-more[aria-expanded="true"] {
-  background:#edf3f0;
-  border-color:#dce7e1;
-  color:#22846a;
-}
-.revision-menu {
-  position:fixed;
-  z-index:10;
-  width:160px;
-  padding:5px;
-  border:1px solid var(--line);
-  border-radius:9px;
-  background:#fff;
-  box-shadow:0 8px 28px #182e2326;
-}
-.revision-menu-item {
-  display:block;
-  width:100%;
-  border:0;
-  border-radius:5px;
-  padding:10px 12px;
-  background:transparent;
-  color:var(--ink);
-  text-align:left;
-}
-.revision-menu-item:hover,.revision-menu-item:focus-visible {
-  background:var(--green-bg);
-  outline:0;
-  color:var(--green);
-}
 .revision-dialog {
-  width:min(680px,calc(100% - 32px));
+  width:min(1120px,calc(100% - 32px));
   max-width:none;
   max-height:calc(100dvh - 48px);
   padding:0;
@@ -959,7 +921,6 @@ h1 {
   box-shadow:0 24px 80px #152a3440;
   overflow:auto;
 }
-.revision-dialog-changes { width:min(1120px,calc(100% - 32px)); }
 .revision-dialog::backdrop { background:#18232f70; }
 body:has(.revision-dialog[open]) { overflow:hidden; }
 .revision-dialog-heading {
@@ -971,7 +932,15 @@ body:has(.revision-dialog[open]) { overflow:hidden; }
   border-bottom:1px solid var(--line);
 }
 .revision-dialog-heading h2 { margin:0; font-size:18px; }
-.revision-dialog .detail-grid { grid-template-columns:84px minmax(0,1fr); gap:16px 20px; font-size:13px; }
+.revision-dialog .detail-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px 28px; font-size:12px; }
+.detail-field { display:grid; grid-template-columns:72px minmax(0,1fr); gap:12px; align-items:baseline; }
+.revision-section-title { margin:0 0 18px; font-size:14px; }
+.revision-changes-section { border-top:1px solid var(--line); }
+.revision-changes-section>.revision-section-title { margin:24px 24px 0; }
+@media(max-width:900px) {
+  .revision-dialog .detail-grid { grid-template-columns:1fr; }
+  .revision-changes-section>.revision-section-title { margin:18px 16px 0; }
+}
 .revision-dialog-subtitle { margin:8px 0 0; color:#657282; font-size:12px; overflow-wrap:anywhere; }
 .revision-dialog-close {
   width:32px;
@@ -991,7 +960,8 @@ body:has(.revision-dialog[open]) { overflow:hidden; }
   .revision-list { padding:0 8px 14px; }
   .revision-dialog { width:calc(100% - 16px); max-height:calc(100dvh - 24px); }
   .revision-dialog-heading,.revision-detail { padding:18px 16px; }
-  .revision-dialog .detail-grid { grid-template-columns:70px minmax(0,1fr); gap:12px; font-size:12px; }
+  .revision-dialog .detail-grid { gap:12px; }
+  .detail-field { grid-template-columns:64px minmax(0,1fr); }
 }
 
 @media(max-width:600px) {

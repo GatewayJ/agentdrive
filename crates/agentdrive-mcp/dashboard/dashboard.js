@@ -90,17 +90,17 @@ function render() {
   const list = $('revision-list'); list.replaceChildren();
   if (!entries.length) list.append(element('div','no-revisions','此分支尚未生成新版本。'));
   for (const revision of entries) {
-    const row = element('div', 'revision-row');
+    const row = element('button', 'revision-row');
     row.append(element('span','revision-node'));
     const copy = element('span','revision-copy'); copy.append(element('span','revision-title',revision.message || titles[revision.kind] || revision.kind));
     const sub = element('span','revision-sub'); sub.append(element('code','',short(revision.id)),element('span','','·'),element('span','',revision.actor));
     if (revision.id === branch.formal_head) sub.append(element('span','','HEAD'));
     copy.append(sub); row.append(copy);
     const time = element('span','revision-time',clock(revision.created_ns)); time.append(element('span','revision-type',labels[revision.kind] || revision.kind)); row.append(time);
-    row.append(revisionViewer.button({workspace:status.workspace.id, revision,
+    revisionViewer.bind(row, {workspace:status.workspace.id, revision,
       message:revision.message || titles[revision.kind] || revision.kind,
       sourceBranch:status.branches.find(value => value.id === revision.branch)?.name || short(revision.branch),
-      isHead:revision.id === branch.formal_head}));
+      isHead:revision.id === branch.formal_head});
     list.append(row);
   }
   revisionViewer.update(status.workspace.id, revisions);
@@ -134,7 +134,7 @@ const settingsPage = createSettingsPage({api, element, $});
 const revisionViewer = createRevisionViewer({api, element});
 const workspaceView = createWorkspaceView({element, selectBranch:chooseBranch, showRevision:(revision, triggerId) => {
   const branch = snapshot.status.branches.find(value => value.id === revision.branch);
-  revisionViewer.information({workspace:snapshot.status.workspace.id, revision,
+  revisionViewer.show({workspace:snapshot.status.workspace.id, revision,
     message:revision.message || titles[revision.kind] || revision.kind,
     sourceBranch:branch?.name || short(revision.branch), isHead:revision.id === branch?.formal_head,
     triggerId});
