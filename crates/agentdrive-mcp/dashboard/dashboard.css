@@ -445,6 +445,11 @@ h1 {
   border-color:#eddfc5;
   color:#a88c50;
 }
+.pill.autosaved {
+  background:#f1f5fb;
+  border-color:#dae4f2;
+  color:#526e98;
+}
 .history-toolbar {
   display:flex;
   justify-content:space-between;
@@ -991,6 +996,7 @@ body:has(.revision-dialog[open]) { overflow:hidden; }
 
 @media(max-width:600px) {
   .branch-tree { padding:16px; }
+  .history-heading { flex-direction:column; align-items:flex-start; }
   .origin-timeline { margin-left:8px; padding-left:16px; }
   .origin-fork>.origin-node { margin-left:-23px; }
   .branch-badges { max-width:65px; }

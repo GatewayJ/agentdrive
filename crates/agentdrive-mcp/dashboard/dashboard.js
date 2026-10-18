@@ -40,6 +40,19 @@ function chooseBranch(id) { revisionViewer.clear(); selectedBranch = id; render(
 function branchHistory(branch, revisions) {
   return revisions.filter(revision => revision.branch === branch.id).sort((a,b) => b.created_ns - a.created_ns || a.id.localeCompare(b.id));
 }
+function branchSaveStatus(branch, revisions) {
+  if (branch.mutation_seq !== branch.saved_seq) {
+    return {text:'有未保存修改', className:'pill paused', title:'最新修改尚未保存到本机。'};
+  }
+  if (!branch.dirty) {
+    return {text:'已提交', className:'pill', title:'当前内容与分支的提交基准一致。'};
+  }
+  const saved = revisions.find(revision => revision.id === (branch.autosave_head || branch.formal_head));
+  const title = !saved ? '内容已保存到本机，版本状态暂不可确认。'
+    : saved.root.id === branch.working_root.id ? '修改已保存为版本，尚未正式提交。'
+    : '内容已保存到本机，正在等待生成自动保存版本。';
+  return {text:'已自动保存 · 有未提交修改', className:'pill autosaved', title};
+}
 function render() {
   if (!snapshot) return;
   const focusId = document.activeElement?.id;
@@ -67,8 +80,11 @@ function render() {
   const origin = snapshot.origins.find(value => value.branch === branch.id);
   const parent = status.branches.find(value => value.id === origin?.source_branch);
   $('branch-meta').append(element('span','',origin?.workspace_root ? '工作区初始分支' : `来源 ${parent?.name || short(origin?.source_branch)} · ${short(branch.base_revision)}`));
-  $('branch-state').textContent = branch.dirty ? '存在工作修改' : branch.state === 'stopped' ? '已停止写入' : '本地已保存';
-  $('branch-state').className = `pill${branch.dirty || branch.state === 'stopped' ? ' paused' : ''}`;
+  if (branch.state === 'stopped') $('branch-meta').append(element('span', 'pill paused', '已停止写入'));
+  const saveStatus = branchSaveStatus(branch, revisions);
+  $('branch-state').textContent = saveStatus.text;
+  $('branch-state').className = saveStatus.className;
+  $('branch-state').title = saveStatus.title;
   const entries = branchHistory(branch,revisions);
   $('history-count').textContent = entries.length;
   const list = $('revision-list'); list.replaceChildren();
