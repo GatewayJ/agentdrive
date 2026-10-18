@@ -216,3 +216,16 @@ Browser checks against an isolated daemon with two native FUSE-T mounts passed f
 ## Combined revision details (2026-10-18)
 
 Double-clicking a history entry opens version metadata and file changes in one dialog. Enter, Space and source revisions in the branch graph also open it. Browser checks passed for single-click behavior without difference requests, automatic first-file loading, refresh preservation, focus return, empty-file messages, failed-request retry and a 390-pixel viewport. JavaScript syntax checks and the FUSE-T build passed for this change.
+
+## Dashboard refresh regression (2026-10-18)
+
+The browser regression suite reproduces a stale current-commit marker when a new commit arrives while the previous revision's dialog is open. The fix refreshes branch metadata without reloading file differences or changing the selected file. The suite also checks branch-owned history, empty child history, local durability and commit states, parent comparisons, source revisions, double-click and keyboard activation, focus return and narrow layouts.
+
+The `dashboard` CI job runs these checks against the shipped frontend modules with controlled API responses. Run locally with Node.js 24:
+
+```sh
+npm --prefix tests/dashboard ci
+(cd tests/dashboard && npx playwright install chromium && npm test)
+```
+
+These browser checks cover presentation and interaction. The Rust workspace tests cover checkpoint persistence, revision creation and the HTTP API; native mounts and RustFS remain separate integration checks.

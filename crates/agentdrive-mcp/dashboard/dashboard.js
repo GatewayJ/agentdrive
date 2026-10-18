@@ -103,7 +103,7 @@ function render() {
       isHead:revision.id === branch.formal_head});
     list.append(row);
   }
-  revisionViewer.update(status.workspace.id, revisions);
+  revisionViewer.update(status.workspace.id, revisions, status.branches);
   if (focusId) document.getElementById(focusId)?.focus({preventScroll:true});
 }
 async function refresh(force=false) {

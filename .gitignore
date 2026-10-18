@@ -8,3 +8,5 @@
 
 /vendor/winfsp_wrs/target/
 /vendor/winfsp_wrs/Cargo.lock
+
+/tests/dashboard/node_modules/

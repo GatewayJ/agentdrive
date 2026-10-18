@@ -27,9 +27,8 @@ export function createRevisionViewer({api, element}) {
     if (restoreFocus) button?.focus();
   }
   function clear() { closeDialog(false); }
-  function show(context) {
-    closeDialog(false); dialogContext = context;
-    const {workspace, revision, message, sourceBranch, isHead} = context;
+  function renderDetails(context) {
+    const {revision, message, sourceBranch, isHead} = context;
     subtitle.textContent = `${revision.id.slice(0, 8)} · ${message}`;
     const grid = element('dl', 'detail-grid');
     const fields = [
@@ -43,8 +42,11 @@ export function createRevisionViewer({api, element}) {
       const field = element('div', 'detail-field');
       field.append(element('dt', '', label), element('dd', '', value)); grid.append(field);
     }
-    detail.append(element('h3', 'revision-section-title', '版本信息'), grid);
-    revisionChanges.show(workspace, revision);
+    detail.replaceChildren(element('h3', 'revision-section-title', '版本信息'), grid);
+  }
+  function show(context) {
+    closeDialog(false); dialogContext = context; renderDetails(context);
+    revisionChanges.show(context.workspace, context.revision);
     dialog.showModal(); dialog.scrollTop = 0;
   }
   function bind(row, context) {
@@ -54,8 +56,16 @@ export function createRevisionViewer({api, element}) {
     row.ondblclick = () => show(context);
     row.onclick = event => { if (event.detail === 0) show(context); };
   }
-  function update(workspace, revisions) {
-    if (dialogContext && (dialogContext.workspace !== workspace || !revisions.some(revision => revision.id === dialogContext.revision.id))) closeDialog(false);
+  function update(workspace, revisions, branches) {
+    if (!dialogContext) return;
+    const revision = revisions.find(revision => revision.id === dialogContext.revision.id);
+    if (dialogContext.workspace !== workspace || !revision) { closeDialog(false); return; }
+    const branch = branches.find(branch => branch.id === revision.branch);
+    const sourceBranch = branch?.name || revision.branch?.slice(0, 8) || '—';
+    const isHead = revision.id === branch?.formal_head;
+    if (dialogContext.sourceBranch !== sourceBranch || dialogContext.isHead !== isHead) {
+      dialogContext = {...dialogContext, sourceBranch, isHead}; renderDetails(dialogContext);
+    }
   }
   close.onclick = () => closeDialog();
   dialog.addEventListener('cancel', event => { event.preventDefault(); closeDialog(); });
