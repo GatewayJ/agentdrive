@@ -1,5 +1,5 @@
 import { createSettingsPage } from './settings.js';
-import { createRevisionChanges } from './changes.js';
+import { createRevisionViewer } from './revisions.js';
 const $ = (id) => document.getElementById(id);
 const fragment = new URLSearchParams(location.hash.slice(1));
 if (fragment.has('token')) {
@@ -9,7 +9,6 @@ if (fragment.has('token')) {
 let token = sessionStorage.getItem('agentdrive-token') || '';
 let snapshot = null;
 let selectedBranch = null;
-let selectedRevision = null;
 let loading = false;
 let generation = 0;
 const labels = {commit:'Commit', autosave:'自动保存', checkpoint:'检查点', candidate:'合并候选'};
@@ -27,7 +26,7 @@ function showLogin() { $('login').hidden = false; $('app').hidden = true; }
 async function api(path, options = {}) {
   const response = await fetch(path, {...options, headers:{...options.headers, Authorization:`Bearer ${token}`}, cache:'no-store'});
   if (response.status === 401) {
-    sessionStorage.removeItem('agentdrive-token'); token = ''; revisionChanges.clear(); showLogin();
+    sessionStorage.removeItem('agentdrive-token'); token = ''; revisionViewer.clear(); showLogin();
     throw new Error('访问令牌无效，请重新连接。');
   }
   if (!response.ok) {
@@ -36,7 +35,7 @@ async function api(path, options = {}) {
   }
   return response.json();
 }
-function chooseBranch(id) { selectedBranch = id; selectedRevision = null; render(); }
+function chooseBranch(id) { revisionViewer.clear(); selectedBranch = id; render(); }
 function renderTree(branches, current) {
   const container = $('branch-tree'); container.replaceChildren();
   const byId = new Map(branches.map(branch => [branch.id, branch]));
@@ -78,23 +77,6 @@ function branchHistory(branch, revisions) {
   }
   return revisions.filter(revision => visited.has(revision.id)).sort((a,b) => b.created_ns - a.created_ns || a.id.localeCompare(b.id));
 }
-function detail(revision, branch) {
-  revisionChanges.show(snapshot.status.workspace.id, revision);
-  const panel = $('revision-detail'); panel.replaceChildren(); panel.hidden = !revision;
-  if (!revision) return;
-  const heading = element('div','detail-heading','版本信息'); heading.append(element('span','',short(revision.id))); panel.append(heading);
-  const grid = element('dl','detail-grid');
-  const fields = [
-    ['版本 ID', revision.id], ['说明', revision.message || titles[revision.kind] || revision.kind],
-    ['创建者',revision.actor], ['保存时间',date(revision.created_ns).toLocaleString('zh-CN',{hour12:false})],
-    ['父版本',revision.parents.length ? revision.parents.map(short).join(' / ') : '初始版本'],
-    ['内容对象',revision.root.id], ['来源分支',snapshot.status.branches.find(value => value.id === revision.branch)?.name || short(revision.branch)],
-    ['保存状态', '本地已保存'],
-  ];
-  if (revision.id === branch.formal_head) fields.push(['分支位置','当前 commit']);
-  for (const [label,value] of fields) { grid.append(element('dt','',label),element('dd','',value)); }
-  panel.append(grid);
-}
 function render() {
   if (!snapshot) return;
   const {status,revisions} = snapshot;
@@ -111,7 +93,7 @@ function render() {
   renderTree(branches, status.selected_branch);
   const branch = branches.find(branch => branch.id === selectedBranch);
   if (!branch) {
-    revisionChanges.clear(); $('revision-detail').hidden = true;
+    revisionViewer.clear();
     $('revision-list').replaceChildren(element('div', 'no-revisions', '暂无保存的版本。'));
     $('history-count').textContent = '0';
     return;
@@ -124,21 +106,25 @@ function render() {
   $('branch-state').className = `pill${branch.dirty || branch.state === 'stopped' ? ' paused' : ''}`;
   const entries = branchHistory(branch,revisions);
   $('history-count').textContent = entries.length;
-  if (!entries.some(revision => revision.id === selectedRevision)) selectedRevision = entries[0]?.id;
+  const focusId = document.activeElement?.classList.contains('revision-more') ? document.activeElement.id : null;
   const list = $('revision-list'); list.replaceChildren();
   if (!entries.length) list.append(element('div','no-revisions','暂无保存的版本。'));
   for (const revision of entries) {
-    const row = element('button',`revision-row${revision.id === selectedRevision ? ' selected' : ''}`); row.type = 'button';
-    row.setAttribute('aria-pressed',String(revision.id === selectedRevision));
+    const row = element('div', 'revision-row');
     row.append(element('span','revision-node'));
     const copy = element('span','revision-copy'); copy.append(element('span','revision-title',revision.message || titles[revision.kind] || revision.kind));
     const sub = element('span','revision-sub'); sub.append(element('code','',short(revision.id)),element('span','','·'),element('span','',revision.actor));
     if (revision.id === branch.formal_head) sub.append(element('span','','HEAD'));
     copy.append(sub); row.append(copy);
     const time = element('span','revision-time',clock(revision.created_ns)); time.append(element('span','revision-type',labels[revision.kind] || revision.kind)); row.append(time);
-    row.addEventListener('click', () => { selectedRevision = revision.id; render(); }); list.append(row);
+    row.append(revisionViewer.button({workspace:status.workspace.id, revision,
+      message:revision.message || titles[revision.kind] || revision.kind,
+      sourceBranch:status.branches.find(value => value.id === revision.branch)?.name || short(revision.branch),
+      isHead:revision.id === branch.formal_head}));
+    list.append(row);
   }
-  detail(entries.find(revision => revision.id === selectedRevision),branch);
+  revisionViewer.update(status.workspace.id, entries);
+  if (focusId) document.getElementById(focusId)?.focus({preventScroll:true});
 }
 async function refresh(force=false) {
   if (!token || (loading && !force)) return;
@@ -151,7 +137,7 @@ async function refresh(force=false) {
     for (const workspace of workspaces) { const option = element('option','',workspace.name); option.value = workspace.id; $('workspace').append(option); }
     if (workspaces.some(workspace => workspace.id === selection)) $('workspace').value = selection;
     $('empty').hidden = workspaces.length > 0; $('panels').hidden = !workspaces.length;
-    if (!workspaces.length) { snapshot = null; revisionChanges.clear(); $('workspace-name').textContent='暂无工作区'; ['branch-count','revision-count'].forEach(id => $(id).textContent='0'); }
+    if (!workspaces.length) { snapshot = null; revisionViewer.clear(); $('workspace-name').textContent='暂无工作区'; ['branch-count','revision-count'].forEach(id => $(id).textContent='0'); }
     else {
       const data = await api(`/api/workspaces/${encodeURIComponent($('workspace').value)}`);
       if (request !== generation) return;
@@ -165,9 +151,7 @@ async function refresh(force=false) {
   } finally { if (request === generation) { loading = false; $('refresh').disabled = false; } }
 }
 const settingsPage = createSettingsPage({api, element, $});
-const changesContainer = element('section', 'revision-changes');
-$('revision-detail').after(changesContainer);
-const revisionChanges = createRevisionChanges({api, element, container:changesContainer});
+const revisionViewer = createRevisionViewer({api, element});
 function isSettings() { return location.pathname === '/settings'; }
 async function refreshPage() {
   if (!token) return;
@@ -175,6 +159,7 @@ async function refreshPage() {
   else await refresh();
 }
 function showPage() {
+  revisionViewer.clear();
   const settings = isSettings();
   $('history-page').hidden = settings;
   $('settings-page').hidden = !settings;
@@ -197,8 +182,8 @@ for (const id of ['history-nav', 'settings-nav']) $(id).addEventListener('click'
 });
 window.addEventListener('popstate', showPage);
 $('login-form').addEventListener('submit', event => { event.preventDefault(); token=$('token').value.trim(); sessionStorage.setItem('agentdrive-token',token); $('token').value=''; settingsPage.clear(); $('login').hidden=true; $('app').hidden=false; showPage(); });
-$('logout').addEventListener('click', () => { generation++; token=''; loading=false; sessionStorage.removeItem('agentdrive-token'); snapshot=null; settingsPage.clear(); revisionChanges.clear(); showLogin(); });
-$('workspace').addEventListener('change', () => { selectedBranch=null; selectedRevision=null; revisionChanges.clear(); refresh(true); });
+$('logout').addEventListener('click', () => { generation++; token=''; loading=false; sessionStorage.removeItem('agentdrive-token'); snapshot=null; settingsPage.clear(); revisionViewer.clear(); showLogin(); });
+$('workspace').addEventListener('change', () => { selectedBranch=null; revisionViewer.clear(); refresh(true); });
 $('refresh').addEventListener('click', refreshPage);
 showPage();
 if (token) { $('login').hidden=true; $('app').hidden=false; } else showLogin();

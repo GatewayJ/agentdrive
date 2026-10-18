@@ -61,6 +61,7 @@ pub(crate) fn assets() -> Router {
         .route("/dashboard", get(|| async { Html(include_str!("../dashboard/index.html")) }))
         .route("/dashboard.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/dashboard.js")) }))
         .route("/settings.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/settings.js")) }))
+        .route("/revisions.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/revisions.js")) }))
         .route("/changes.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/changes.js")) }))
         .route("/dashboard.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], include_str!("../dashboard/dashboard.css")) }))
         .layer(axum::middleware::map_response(|mut response: Response| async move {

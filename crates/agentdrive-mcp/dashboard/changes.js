@@ -1,11 +1,17 @@
 export function createRevisionChanges({api, element, container}) {
   const labels = {added:'新增', deleted:'删除', modified:'修改', metadata:'属性', renamed:'重命名'};
   const messages = {
-    unchanged:'文件内容相同，可查看上方的路径和属性变化。',
     binary:'二进制文件，显示文件大小和内容标识。',
     too_large:'文件超过文本预览上限（256 KiB 或 10,000 行）。',
     directory:'目录变化。',
   };
+  function unchangedMessage(diff, entry) {
+    if (!diff.before && diff.after?.kind === 'file' && diff.after.size === 0) return '此版本新增了一个空文件（0 字节），没有可显示的文本。';
+    if (!diff.after && diff.before?.kind === 'file' && diff.before.size === 0) return '此版本删除了一个空文件（0 字节）。';
+    if (diff.before?.kind !== diff.after?.kind) return '没有文本行变化，文件类型和属性变化见上方。';
+    const content = diff.after?.size === 0 ? '文件为空（0 字节）。' : '文件内容未修改。';
+    return content + (entry.kind === 'renamed' ? '本次修改了文件路径，属性信息见上方。' : '本次修改了文件属性，属性信息见上方。');
+  }
   let key = null, controller = null, fileController = null;
   function clear() {
     key = null; controller?.abort(); fileController?.abort();
@@ -17,7 +23,6 @@ export function createRevisionChanges({api, element, container}) {
     if (key === nextKey) return;
     clear(); key = nextKey; container.hidden = false;
     const heading = element('div', 'changes-heading');
-    heading.append(element('h3', '', '修改内容'));
     const label = element('label', 'compare-label', '比较基准 ');
     const select = element('select', 'compare-parent');
     const parents = revision.parents.length ? revision.parents : [null];
@@ -69,7 +74,10 @@ export function createRevisionChanges({api, element, container}) {
           }
           metadata.append(element('dt', '', '修改前'), element('dd', '', describe(diff.before)), element('dt', '', '修改后'), element('dd', '', describe(diff.after)));
           preview.append(metadata);
-          if (diff.status !== 'text') { preview.append(element('p', 'changes-status', messages[diff.status] || '暂无文本差异。')); return; }
+          if (diff.status !== 'text') {
+            const message = diff.status === 'unchanged' ? unchangedMessage(diff, entry) : messages[diff.status] || '暂无文本差异。';
+            preview.append(element('p', 'changes-status', message)); return;
+          }
           const lines = element('div', 'diff-lines');
           for (const hunk of diff.hunks) {
             const first = hunk[0];
