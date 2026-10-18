@@ -1,4 +1,4 @@
-use crate::{Runtime, TreeService};
+use crate::Runtime;
 use agentdrive_model::*;
 use agentdrive_ports::*;
 use async_trait::async_trait;
@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 pub struct SnapshotService {
     runtime: Arc<Runtime>,
-    trees: Arc<TreeService>,
+    trees: Arc<dyn RevisionReader>,
+    editor: Arc<dyn TreeEditor>,
+    objects: Arc<dyn LocalObjectStore>,
     working: Arc<dyn WorkingTreeStore>,
 }
 
@@ -19,12 +21,16 @@ impl std::fmt::Debug for SnapshotService {
 impl SnapshotService {
     pub fn new(
         runtime: Arc<Runtime>,
-        trees: Arc<TreeService>,
+        trees: Arc<dyn RevisionReader>,
+        editor: Arc<dyn TreeEditor>,
+        objects: Arc<dyn LocalObjectStore>,
         working: Arc<dyn WorkingTreeStore>,
     ) -> Arc<Self> {
         Arc::new(Self {
             runtime,
             trees,
+            editor,
+            objects,
             working,
         })
     }
@@ -111,6 +117,7 @@ impl SnapshotService {
 impl SnapshotCapture for SnapshotService {
     async fn capture(&self, branch: &Branch) -> Result<CapturedTree> {
         let deltas = self.runtime.state.node_deltas(branch.id).await?;
+        let batch = self.objects.begin_batch(branch.workspace).await?;
         let previous: std::collections::BTreeMap<_, _> = deltas
             .iter()
             .filter_map(|delta| delta.before.as_ref())
@@ -145,10 +152,7 @@ impl SnapshotCapture for SnapshotService {
         for delta in &deltas {
             if let Some(mut node) = delta.after.clone() {
                 if node.dirty && node.inode.kind == FileKind::File {
-                    let object = self
-                        .trees
-                        .content
-                        .local
+                    let object = batch
                         .seal(WorkingFile {
                             workspace: branch.workspace,
                             branch: branch.id,
@@ -187,36 +191,19 @@ impl SnapshotCapture for SnapshotService {
         let root = if deltas.is_empty() {
             branch.working_root.clone()
         } else {
-            let old: TreeRoot = decode(
-                &self
-                    .trees
-                    .content
-                    .metadata(branch.workspace, &branch.working_root)
-                    .await?,
-            )?;
-            let directories = self
-                .trees
-                .update_index(branch.workspace, &old.directories, directories)
-                .await?;
-            let inodes = self
-                .trees
-                .update_index(branch.workspace, &old.inodes, inodes)
-                .await?;
-            let data = encode(&TreeRoot {
-                format_version: FORMAT_VERSION,
-                directories,
-                inodes,
-            })?;
-            if object_ref(ObjectKind::Tree, &data) == branch.working_root {
-                branch.working_root.clone()
-            } else {
-                self.trees
-                    .content
-                    .local
-                    .put(branch.workspace, ObjectKind::Tree, data.into())
-                    .await?
-            }
+            self.editor
+                .edit_tree(
+                    branch.workspace,
+                    &branch.working_root,
+                    TreeChanges {
+                        directories,
+                        inodes,
+                    },
+                    batch.as_ref(),
+                )
+                .await?
         };
+        batch.finish().await?;
         Ok(CapturedTree {
             branch: branch.clone(),
             root,

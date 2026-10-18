@@ -145,6 +145,10 @@ impl ContentService {
 
 #[async_trait]
 impl ContentResolver for ContentService {
+    fn remote_available(&self) -> bool {
+        self.remote().is_some()
+    }
+
     async fn open(&self, workspace: WorkspaceId, reference: &ObjectRef) -> Result<ObjectStream> {
         match self.local.open(workspace, reference).await {
             Ok(stream) => return Ok(stream),

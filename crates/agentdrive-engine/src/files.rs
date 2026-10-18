@@ -1,4 +1,4 @@
-use crate::{Runtime, TreeService, runtime::increment};
+use crate::{Runtime, runtime::increment};
 use agentdrive_model::*;
 use agentdrive_ports::*;
 use async_trait::async_trait;
@@ -17,7 +17,9 @@ struct OpenFile {
 
 pub struct FileService {
     runtime: Arc<Runtime>,
-    trees: Arc<TreeService>,
+    trees: Arc<dyn RevisionReader>,
+    content: Arc<dyn ContentResolver>,
+    objects: Arc<dyn LocalObjectStore>,
     working: Arc<dyn WorkingTreeStore>,
     durability: Arc<dyn DurabilityService>,
     handles: Mutex<BTreeMap<HandleId, OpenFile>>,
@@ -34,26 +36,32 @@ impl std::fmt::Debug for FileService {
 impl FileService {
     pub fn new(
         runtime: Arc<Runtime>,
-        trees: Arc<TreeService>,
+        trees: Arc<dyn RevisionReader>,
+        content: Arc<dyn ContentResolver>,
+        objects: Arc<dyn LocalObjectStore>,
         working: Arc<dyn WorkingTreeStore>,
         durability: Arc<dyn DurabilityService>,
     ) -> Arc<Self> {
         Arc::new(Self {
             runtime,
             trees,
+            content,
+            objects,
             working,
             durability,
             handles: Mutex::new(BTreeMap::new()),
         })
     }
 
-    async fn binding(&self, context: &FsContext, write: bool) -> Result<(MountBinding, Branch)> {
-        let mount = self
+    async fn view(&self, context: &FsContext, write: bool, query: FileQuery) -> Result<FileView> {
+        let view = self
             .runtime
             .state
-            .mount(context.mount)
+            .file_view(context.mount, query)
             .await?
             .ok_or_else(|| Error::new(ErrorCode::StaleBinding, "mount binding no longer exists"))?;
+        let mount = &view.mount;
+        let branch = &view.branch;
         if mount.generation != context.generation || mount.state != MountState::Ready {
             return Err(Error::new(
                 ErrorCode::StaleBinding,
@@ -66,20 +74,24 @@ impl FileService {
                 "local user cannot access this mount",
             ));
         }
-        let permission = if write {
-            Permission::Write
-        } else {
-            Permission::Read
-        };
-        self.runtime
-            .authorize(
-                &mount.principal,
-                mount.workspace,
-                Some(mount.branch),
-                permission,
-            )
-            .await?;
-        let branch = self.runtime.branch(mount.branch).await?;
+        if branch.workspace != mount.workspace
+            || view.workspace.id != mount.workspace
+            || branch.id != mount.branch
+        {
+            return Err(Error::new(
+                ErrorCode::PermissionDenied,
+                "branch belongs to another workspace",
+            ));
+        }
+        view.workspace.authorize(
+            &mount.principal,
+            Some(branch.id),
+            if write {
+                Permission::Write
+            } else {
+                Permission::Read
+            },
+        )?;
         if mount.revision.is_none() && branch.generation != mount.generation {
             return Err(Error::new(
                 ErrorCode::StaleBinding,
@@ -96,15 +108,14 @@ impl FileService {
             if mount.access != AccessMode::ReadWrite || mount.revision.is_some() {
                 return Err(Error::new(ErrorCode::ReadOnly, "mount is read-only"));
             }
-            if branch.generation != mount.generation {
-                return Err(Error::new(
-                    ErrorCode::StaleBinding,
-                    "branch generation changed",
-                ));
-            }
             branch.check_write(self.runtime.location, branch.authority_epoch)?;
         }
-        Ok((mount, branch))
+        Ok(view)
+    }
+
+    async fn binding(&self, context: &FsContext, write: bool) -> Result<(MountBinding, Branch)> {
+        let view = self.view(context, write, FileQuery::Binding).await?;
+        Ok((view.mount, view.branch))
     }
 
     async fn nodes(&self, mount: &MountBinding) -> Result<Vec<Node>> {
@@ -180,7 +191,7 @@ impl FileService {
                 .content
                 .as_ref()
                 .ok_or_else(|| Error::integrity("file content is missing"))?;
-            let stream = self.trees.content.open(branch.workspace, content).await?;
+            let stream = self.content.open(branch.workspace, content).await?;
             self.working
                 .create(Self::working_file(branch, node), Some(stream))
                 .await?;
@@ -296,61 +307,83 @@ impl FileSystem for FileService {
     async fn lookup(&self, context: &FsContext, parent: InodeId, name: &str) -> Result<Inode> {
         let (mount, _) = self.binding(context, false).await?;
         let _gate = self.runtime.lock_branch(mount.branch).await;
-        let (mount, _) = self.binding(context, false).await?;
-        let parent = self.node(&mount, parent).await?;
+        let view = self
+            .view(
+                context,
+                false,
+                FileQuery::Child {
+                    parent,
+                    name: name.to_owned(),
+                },
+            )
+            .await?;
+        let parent = if view.mount.revision.is_some() {
+            self.node(&view.mount, parent).await?
+        } else {
+            view.node
+                .ok_or_else(|| Error::new(ErrorCode::NotFound, "inode does not exist"))?
+        };
         Self::directory(&parent)?;
         Self::permission(context, &parent.inode, 1)?;
-        let path = match name {
-            "." => parent.path.clone(),
-            ".." => parent.path.parent().unwrap_or_else(WorkspacePath::root),
-            name => parent.path.join(name)?,
-        };
-        let node = if mount.revision.is_some() {
-            self.nodes(&mount)
+        let node = if view.mount.revision.is_some() {
+            let path = match name {
+                "." => parent.path.clone(),
+                ".." => parent.path.parent().unwrap_or_else(WorkspacePath::root),
+                name => parent.path.join(name)?,
+            };
+            self.nodes(&view.mount)
                 .await?
                 .into_iter()
                 .find(|node| node.path.lookup_key() == path.lookup_key())
         } else {
-            self.runtime.state.node_at(mount.branch, &path).await?
-        }
-        .ok_or_else(|| Error::new(ErrorCode::NotFound, "directory entry does not exist"))?;
-        Ok(Self::local_attributes(&mount, node.inode))
+            view.child
+        };
+        let node =
+            node.ok_or_else(|| Error::new(ErrorCode::NotFound, "directory entry does not exist"))?;
+        Ok(Self::local_attributes(&view.mount, node.inode))
     }
 
     async fn getattr(&self, context: &FsContext, inode: InodeId) -> Result<Inode> {
         let (mount, _) = self.binding(context, false).await?;
         let _gate = self.runtime.lock_branch(mount.branch).await;
-        let (mount, _) = self.binding(context, false).await?;
-        Ok(Self::local_attributes(
-            &mount,
-            self.node(&mount, inode).await?.inode,
-        ))
+        let view = self.view(context, false, FileQuery::Inode(inode)).await?;
+        let node = if view.mount.revision.is_some() {
+            self.node(&view.mount, inode).await?
+        } else {
+            view.node
+                .ok_or_else(|| Error::new(ErrorCode::NotFound, "inode does not exist"))?
+        };
+        Ok(Self::local_attributes(&view.mount, node.inode))
     }
 
     async fn readdir(&self, context: &FsContext, inode: InodeId) -> Result<Vec<DirectoryItem>> {
         let (mount, _) = self.binding(context, false).await?;
         let _gate = self.runtime.lock_branch(mount.branch).await;
-        let (mount, _) = self.binding(context, false).await?;
-        let node = self.node(&mount, inode).await?;
+        let view = self
+            .view(context, false, FileQuery::Children(inode))
+            .await?;
+        let node = if view.mount.revision.is_some() {
+            self.node(&view.mount, inode).await?
+        } else {
+            view.node
+                .ok_or_else(|| Error::new(ErrorCode::NotFound, "inode does not exist"))?
+        };
         Self::directory(&node)?;
         Self::permission(context, &node.inode, 5)?;
-        let children = if mount.revision.is_some() {
-            self.nodes(&mount)
+        let children = if view.mount.revision.is_some() {
+            self.nodes(&view.mount)
                 .await?
                 .into_iter()
                 .filter(|child| child.path.parent() == Some(node.path.clone()))
                 .collect()
         } else {
-            self.runtime
-                .state
-                .children(mount.branch, &node.path)
-                .await?
+            view.children
         };
         Ok(children
             .into_iter()
             .map(|child| DirectoryItem {
                 name: child.path.name().to_owned(),
-                inode: Self::local_attributes(&mount, child.inode),
+                inode: Self::local_attributes(&view.mount, child.inode),
             })
             .collect())
     }
@@ -559,7 +592,7 @@ impl FileSystem for FileService {
                 .await;
         }
         read_content(
-            self.trees.content.as_ref(),
+            self.content.as_ref(),
             branch.workspace,
             node.inode
                 .content
@@ -745,10 +778,12 @@ impl FileSystem for FileService {
         let now = self.runtime.clock.now_ns();
         parent.inode.modified_ns = now;
         new_parent.inode.modified_ns = now;
-        changes.push(NodeChange::Put {
-            branch: branch.id,
-            node: parent,
-        });
+        if parent.inode.id != new_parent.inode.id {
+            changes.push(NodeChange::Put {
+                branch: branch.id,
+                node: parent,
+            });
+        }
         changes.push(NodeChange::Put {
             branch: branch.id,
             node: new_parent,
@@ -899,7 +934,7 @@ impl FileSystem for FileService {
 
     async fn statfs(&self, context: &FsContext) -> Result<VolumeStats> {
         self.binding(context, false).await?;
-        self.trees.content.local.volume_stats().await
+        self.objects.volume_stats().await
     }
 }
 

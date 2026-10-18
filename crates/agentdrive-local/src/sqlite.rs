@@ -140,24 +140,26 @@ pub(crate) fn unsigned_integer(value: i64) -> Result<u64> {
         .map_err(|_| Error::integrity("database contains a negative unsigned integer"))
 }
 
-fn read_one<T: DeserializeOwned>(
+pub(crate) fn read_one<T: DeserializeOwned>(
     connection: &Connection,
     sql: &str,
     args: &[String],
 ) -> Result<Option<T>> {
     let bytes: Option<Vec<u8>> = connection
-        .query_row(sql, params_from_iter(args), |row| row.get(0))
+        .prepare_cached(sql)
+        .map_err(sql_error)?
+        .query_row(params_from_iter(args), |row| row.get(0))
         .optional()
         .map_err(sql_error)?;
     bytes.map(|value| decode(&value)).transpose()
 }
 
-fn read_many<T: DeserializeOwned>(
+pub(crate) fn read_many<T: DeserializeOwned>(
     connection: &Connection,
     sql: &str,
     args: &[String],
 ) -> Result<Vec<T>> {
-    let mut statement = connection.prepare(sql).map_err(sql_error)?;
+    let mut statement = connection.prepare_cached(sql).map_err(sql_error)?;
     let rows = statement
         .query_map(params_from_iter(args), |row| row.get::<_, Vec<u8>>(0))
         .map_err(sql_error)?;
@@ -267,6 +269,14 @@ fn put_node(transaction: &Transaction<'_>, branch: BranchId, node: &Node) -> Res
 
 #[async_trait]
 impl LocalStateStore for LocalBackend {
+    async fn file_view(&self, mount: MountId, query: FileQuery) -> Result<Option<FileView>> {
+        self.read_file_view(mount, query).await
+    }
+
+    async fn retention_state(&self) -> Result<RetentionState> {
+        self.read_retention_state().await
+    }
+
     async fn selected_branch(&self, workspace: WorkspaceId) -> Result<Option<BranchId>> {
         self.db(move |connection| {
             let branch: Option<String> = connection

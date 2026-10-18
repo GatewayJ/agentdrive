@@ -3,6 +3,7 @@ mod cache;
 mod content;
 mod engine;
 mod files;
+mod indexes;
 mod merge;
 mod mounts;
 mod operations;

@@ -23,7 +23,9 @@
 | --- | --- |
 | `engine/runtime` | Workspace authorization, local identity, mutation coordination and shared runtime state |
 | `engine/files` | File operations, open handles, permission and generation checks |
-| `engine/content`, `engine/trees` | Verified content reads, immutable indexes and object closure traversal |
+| `engine/content` | Verified content reads and coordinated downloads through `ContentResolver` |
+| `engine/trees`, `engine/indexes` | Tree interpretation and copy-on-write page editing through `RevisionReader`, `ObjectGraph` and `TreeEditor` |
+| `local/batch`, `local/queries` | Durable object publication batches and consistent SQLite read views |
 | `engine/snapshots`, `engine/revisions` | Capture working changes, save revisions, create branches and restore content |
 | `engine/workspaces` | Workspace creation, status and host-directory import/export |
 | `engine/mounts` | Select the local branch for a workspace, reuse mount bindings, save mounted files and coordinate mount transitions |
@@ -47,12 +49,16 @@
 | Interface or module | Responsibility | Caller boundary |
 | --- | --- | --- |
 | `FileSystem` / `engine/files` | Permissions, handles, paths, capacity checks and node mutations | Platform adapters translate requests and errors; they do not access SQLite or select branches |
-| `LocalStateStore` | Node queries, working-tree usage and atomic guarded commits | The engine submits `LocalCommit`, without SQL or schema dependencies |
+| `LocalStateStore` | Consistent file/retention views, working-tree usage and atomic guarded commits | The engine submits `LocalCommit`, without SQL or schema dependencies |
+| `ObjectWriter` / `ObjectBatch` | Stage complete immutable objects and finish durable publication | The caller retains object protection until the new root commits; staging alone does not make a reference durable |
+| `TreeEditor` / `ObjectGraph` | Edit immutable indexes and traverse retained dependencies | Storage adapters own synchronization; the engine owns retention decisions |
 | `WorkingTreeStore` | Mutable local file I/O | No quota, authorization, revision or remote durability decisions |
 | `ContentResolver` | Immutable content retrieval, download coordination and verification | File operations do not call S3 directly |
 | `SnapshotCapture` / revisions | Consistent capture, revisions and sync jobs | Local persistence and remote confirmation remain separate outcomes |
 | replica | Publication order, retries and bounded uploads | All dependencies must succeed before BranchRef publication |
 | remote storage ports | Verified transfers and conditional reference updates | Adapters do not mutate branches, mounts or working trees |
+
+`file_view` reads the mount, workspace, branch and requested nodes in one SQLite read transaction. File operations read the binding before taking the branch mutex and obtain a fresh view after acquiring it; authorization and generation checks use that fresh view. There is no authorization cache. Prepared statements are reused. Rename within one parent updates that parent once.
 
 `usage` reads branch inode and logical-byte counters maintained in the same SQLite transaction as node mutations. Rollback restores both. The engine applies workspace limits; these counters do not measure historical objects, cache, temporary files or host free space.
 
@@ -84,9 +90,15 @@ A `TreeRoot` refers to bounded directory and inode indexes. Index pages contain 
 
 Each branch has a serialization gate covering mutation and capture. `node_deltas` records the first previous value of each changed path in the same SQLite transaction as the node change. Capture seals changed files as complete immutable file objects and rewrites affected inode/directory index pages. The branch root, saved sequence, captured node values and journal removal commit atomically. Old roots remain readable.
 
+A checkpoint stages its complete file objects, directory pages, inode pages and `TreeRoot` through one `ObjectBatch`. Each new object file is synchronized before publication. After publishing the batch, the local adapter synchronizes the workspace object directory once, and its parent once when first needed in the process. Windows retains write-through publication. One SQLite transaction registers the new objects, then the engine atomically advances the branch checkpoint. Failed publication leaves the checkpoint and pending deltas unchanged. WAL and `synchronous=FULL` remain required.
+
+Index editing distributes overflowing pages evenly, and merges or redistributes changed pages below half capacity with adjacent siblings. Unchanged pages are reused and single-child roots collapse. Existing format-1 indexes remain readable; existing sparse pages are reorganized when affected by edits, without rewriting all history.
+
 Filesystem `fsync` creates a durable working checkpoint without creating a revision. Local checkpoints do not create operation receipts or synchronization jobs; unchanged local fsync is a no-op. Remote fsync additionally publishes the working root and waits for remote confirmation. Its receipt records an operation, but intermediate checkpoints are not retained as historical versions. Autosave creates revisions after five seconds without writes or thirty seconds of continuous writes; the daemon checks once per second. Explicit `mount_save`, `revision_commit`, branch creation and branch handoff retain versions when needed. Checkpointing does not reset the autosave deadline. Restart restores the latest checkpoint and schedules any unversioned checkpoint for autosave.
 
 `branch_history` caches the latest immutable history index for incremental updates. A missing projection on an existing database is rebuilt on the next publication job. `object_usage` stores confirmed-cache and unconfirmed-object byte counts; SQLite triggers update them with object insertion, removal and confirmation. `LocalObjectStore::volume_stats` supplies host capacity to filesystem STATFS without scanning object metadata. Cache collection can reclaim unconfirmed objects proven unreachable from branches, queued publications, retained revisions and pins, while holding the object retention barrier and respecting active readers. SQLite and complete file storage remain the persistence model. The latest history index pages of each retained local branch remain cached so incremental local saves work while remote storage is unavailable. This retention covers index pages only; historical file contents remain eligible for normal eviction.
+
+Cache collection reads a consistent retention snapshot and traverses object graphs without the exclusive object barrier. Before each deletion batch of at most 32 objects, it tries to acquire that barrier and rechecks branch roots, queued publications, retained revisions, history indexes, candidates and pins. Busy writers or changed retention roots defer collection. Reader leases and confirmation state are checked again during deletion. Each affected directory is synchronized once per deletion batch. Concurrent collectors are excluded.
 
 A lifecycle gate serializes mount changes, restore, merge apply, ownership transfer, and cancellation. File handles carry mount and branch generations. Generation changes reject stale handles. A mount path has one active binding, and a branch has at most one writable mount.
 

@@ -1,7 +1,6 @@
 use crate::{
-    LocalBackend, create_private_dir, now_ns, publish_object,
-    sqlite::{db_integer, sql_error, unsigned_integer},
-    sync_directory,
+    LocalBackend, now_ns,
+    sqlite::{sql_error, unsigned_integer},
 };
 use agentdrive_model::*;
 use agentdrive_ports::*;
@@ -17,7 +16,7 @@ use std::{
     sync::Arc,
     task::{Context, Poll},
 };
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, ReadBuf};
 
 impl LocalBackend {
     async fn remove_cached(
@@ -26,28 +25,15 @@ impl LocalBackend {
         object: &ObjectRef,
         confirmed: bool,
     ) -> Result<bool> {
-        let object = object.clone();
-        self.blocking(move |backend| {
-            let _guard = backend.inner.object_io.lock();
-            let key = (workspace, object.id.clone());
-            if backend.inner.leases.lock().get(&key).is_some_and(|count| *count > 0) { return Ok(false); }
-            let mut connection = backend.inner.connection.lock();
-            let transaction = connection.transaction().map_err(sql_error)?;
-            let eligible: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM objects WHERE workspace=?1 AND hash=?2 AND remote_confirmed=?3)",
-                params![workspace.to_string(), object.id.as_str(), confirmed], |row| row.get(0)).map_err(sql_error)?;
-            if !eligible { return Ok(false); }
-            let path = backend.object_path(workspace, &object.id);
-            match std::fs::remove_file(&path) {
-                Ok(()) => (),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-                Err(error) => return Err(error.into()),
-            }
-            sync_directory(path.parent().ok_or_else(|| Error::integrity("object path has no parent"))?)?;
-            transaction.execute("DELETE FROM objects WHERE workspace=?1 AND hash=?2", params![workspace.to_string(), object.id.as_str()]).map_err(sql_error)?;
-            transaction.commit().map_err(sql_error)?;
-            backend.inner.verified.lock().remove(&key);
-            Ok(true)
-        }).await
+        let (_, count) = self
+            .remove_objects(vec![CachedObject {
+                workspace,
+                reference: object.clone(),
+                remote_confirmed: confirmed,
+                last_access_ns: 0,
+            }])
+            .await?;
+        Ok(count > 0)
     }
 
     pub(crate) fn object_path(&self, workspace: WorkspaceId, object: &ObjectId) -> PathBuf {
@@ -58,7 +44,7 @@ impl LocalBackend {
             .join(object.as_str())
     }
 
-    fn verify_file(&self, workspace: WorkspaceId, object: &ObjectRef) -> Result<File> {
+    pub(crate) fn verify_file(&self, workspace: WorkspaceId, object: &ObjectRef) -> Result<File> {
         let path = self.object_path(workspace, &object.id);
         let mut file = File::open(path)?;
         let metadata = file.metadata()?;
@@ -99,97 +85,12 @@ impl LocalBackend {
         &self,
         workspace: WorkspaceId,
         kind: ObjectKind,
-        mut reader: ByteStream,
+        reader: ByteStream,
         expected: Option<ObjectRef>,
     ) -> Result<ObjectRef> {
-        let staging = self.inner.root.join("staging");
-        let (file, temporary) = self
-            .blocking(move |_| Ok(tempfile::NamedTempFile::new_in(staging)?.into_parts()))
-            .await?;
-        let mut output = tokio::fs::File::from_std(file);
-        let mut digest = object_hasher(kind);
-        let mut size = 0u64;
-        let mut buffer = vec![0; IO_BUFFER_BYTES];
-        loop {
-            let count = reader.read(&mut buffer).await?;
-            if count == 0 {
-                break;
-            }
-            size = size
-                .checked_add(count as u64)
-                .ok_or_else(|| Error::invalid("object is too large"))?;
-            if expected.as_ref().is_some_and(|object| size > object.size) {
-                return Err(Error::integrity(
-                    "object stream exceeded its declared length",
-                ));
-            }
-            if kind != ObjectKind::File && size > MAX_METADATA_BYTES as u64 {
-                return Err(Error::invalid("metadata object exceeds its size limit"));
-            }
-            digest.update(&buffer[..count]);
-            output.write_all(&buffer[..count]).await?;
-        }
-        let reference = ObjectRef {
-            id: finish_digest(digest),
-            kind,
-            size,
-        };
-        if expected.as_ref().is_some_and(|object| object != &reference) {
-            return Err(Error::integrity(
-                "downloaded object failed digest verification",
-            ));
-        }
-        let existing = reference.clone();
-        let reusable = self
-            .blocking(move |backend| {
-                let _guard = backend.inner.object_io.lock();
-                let indexed: bool = backend
-                    .inner
-                    .connection
-                    .lock()
-                    .query_row(
-                        "SELECT EXISTS(SELECT 1 FROM objects WHERE workspace=?1 AND hash=?2)",
-                        params![workspace.to_string(), existing.id.as_str()],
-                        |row| row.get(0),
-                    )
-                    .map_err(sql_error)?;
-                if !indexed {
-                    return Ok(false);
-                }
-                match backend.verify_file(workspace, &existing) {
-                    Ok(_) => Ok(true),
-                    Err(error) if error.code == ErrorCode::NotFound => Ok(false),
-                    Err(error) => Err(error),
-                }
-            })
-            .await?;
-        if reusable {
-            return Ok(reference);
-        }
-        output.sync_all().await?;
-        drop(output);
-        let installed = reference.clone();
-        self.blocking(move |backend| {
-            let _guard = backend.inner.object_io.lock();
-            let destination = backend.object_path(workspace, &installed.id);
-            let parent = destination.parent().ok_or_else(|| Error::integrity("object path has no parent"))?;
-            create_private_dir(parent)?;
-            match publish_object(temporary, &destination) {
-                Ok(()) => (),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    backend.verify_file(workspace, &installed)?;
-                }
-                Err(error) => return Err(error.into()),
-            }
-            sync_directory(parent)?;
-            sync_directory(&backend.inner.root.join("objects"))?;
-            let metadata = std::fs::metadata(&destination)?;
-            backend.inner.verified.lock().insert((workspace, installed.id.clone()), (metadata.len(), metadata.modified()?));
-            backend.inner.connection.lock().execute(
-                "INSERT INTO objects(workspace,hash,kind,size,remote_confirmed,last_access_ns) VALUES(?1,?2,?3,?4,0,?5) ON CONFLICT(workspace,hash) DO UPDATE SET last_access_ns=excluded.last_access_ns",
-                params![workspace.to_string(), installed.id.as_str(), serde_json::to_string(&installed.kind)?, db_integer(installed.size)?, now_ns()]).map_err(sql_error)?;
-            Ok(())
-        }).await?;
+        let staged = self.stage_object(workspace, kind, reader, expected).await?;
+        let reference = staged.reference.clone();
+        self.publish_batch(workspace, vec![staged]).await?;
         Ok(reference)
     }
 }
@@ -224,6 +125,14 @@ impl Drop for LeasedReader {
 
 #[async_trait]
 impl LocalObjectStore for LocalBackend {
+    async fn begin_batch(&self, workspace: WorkspaceId) -> Result<Box<dyn ObjectBatch>> {
+        Ok(Box::new(crate::batch::Batch::new(self.clone(), workspace)))
+    }
+
+    async fn remove_batch(&self, objects: Vec<CachedObject>) -> Result<u64> {
+        self.remove_objects(objects).await.map(|result| result.0)
+    }
+
     async fn ingest(
         &self,
         workspace: WorkspaceId,
@@ -232,25 +141,6 @@ impl LocalObjectStore for LocalBackend {
     ) -> Result<ObjectRef> {
         self.install_stream(workspace, kind, reader, None).await
     }
-    async fn put(
-        &self,
-        workspace: WorkspaceId,
-        kind: ObjectKind,
-        data: Bytes,
-    ) -> Result<ObjectRef> {
-        if kind != ObjectKind::File && data.len() > MAX_METADATA_BYTES {
-            return Err(Error::invalid("metadata object exceeds the format limit"));
-        }
-        self.install_stream(workspace, kind, Box::pin(std::io::Cursor::new(data)), None)
-            .await
-    }
-
-    async fn seal(&self, file: WorkingFile) -> Result<ObjectRef> {
-        let reader = tokio::fs::File::open(self.working_path(file)).await?;
-        self.install_stream(file.workspace, ObjectKind::File, Box::pin(reader), None)
-            .await
-    }
-
     async fn install(&self, workspace: WorkspaceId, stream: ObjectStream) -> Result<()> {
         if stream.reference.kind != ObjectKind::File
             && stream.reference.size > MAX_METADATA_BYTES as u64
@@ -415,5 +305,27 @@ impl LocalObjectStore for LocalBackend {
             })
         })
         .await
+    }
+}
+
+#[async_trait]
+impl ObjectWriter for LocalBackend {
+    async fn put(
+        &self,
+        workspace: WorkspaceId,
+        kind: ObjectKind,
+        data: Bytes,
+    ) -> Result<ObjectRef> {
+        if kind != ObjectKind::File && data.len() > MAX_METADATA_BYTES {
+            return Err(Error::invalid("metadata object exceeds the format limit"));
+        }
+        self.install_stream(workspace, kind, Box::pin(std::io::Cursor::new(data)), None)
+            .await
+    }
+
+    async fn seal(&self, file: WorkingFile) -> Result<ObjectRef> {
+        let reader = tokio::fs::File::open(self.working_path(file)).await?;
+        self.install_stream(file.workspace, ObjectKind::File, Box::pin(reader), None)
+            .await
     }
 }

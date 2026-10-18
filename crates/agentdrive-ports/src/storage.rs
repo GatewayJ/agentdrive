@@ -77,6 +77,37 @@ pub struct ReservedOperation {
     pub created: bool,
 }
 
+/// A consistent local read; authorization remains in the file service.
+#[derive(Clone, Debug)]
+pub struct FileView {
+    pub mount: MountBinding,
+    pub workspace: Workspace,
+    pub branch: Branch,
+    pub node: Option<Node>,
+    pub child: Option<Node>,
+    pub children: Vec<Node>,
+}
+
+#[derive(Clone, Debug)]
+pub enum FileQuery {
+    Binding,
+    Inode(InodeId),
+    Child { parent: InodeId, name: String },
+    Children(InodeId),
+}
+
+/// Metadata used by the engine to determine object retention.
+#[derive(Clone, Debug, Default)]
+pub struct RetentionState {
+    pub workspaces: Vec<WorkspaceId>,
+    pub branches: Vec<Branch>,
+    pub histories: Vec<(BranchId, ObjectRef)>,
+    pub revisions: Vec<Revision>,
+    pub jobs: Vec<SyncJob>,
+    pub merges: Vec<MergeCandidate>,
+    pub pins: Vec<CachePin>,
+}
+
 /// 当前工作树统计；与 node_changes 在同一事务中更新。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WorkingTreeUsage {
@@ -87,6 +118,8 @@ pub struct WorkingTreeUsage {
 /// 本地元数据查询与原子提交；权限、配额和发布决策由 engine 负责。
 #[async_trait]
 pub trait LocalStateStore: Send + Sync {
+    async fn file_view(&self, mount: MountId, query: FileQuery) -> Result<Option<FileView>>;
+    async fn retention_state(&self) -> Result<RetentionState>;
     async fn selected_branch(&self, workspace: WorkspaceId) -> Result<Option<BranchId>>;
     async fn location(&self) -> Result<LocationId>;
     async fn workspace(&self, id: WorkspaceId) -> Result<Option<Workspace>>;
@@ -149,16 +182,29 @@ pub struct CachedObject {
 }
 
 #[async_trait]
-pub trait LocalObjectStore: Send + Sync {
+pub trait ObjectWriter: Send + Sync {
+    async fn put(&self, workspace: WorkspaceId, kind: ObjectKind, data: Bytes)
+    -> Result<ObjectRef>;
+    async fn seal(&self, file: WorkingFile) -> Result<ObjectRef>;
+}
+
+/// References become durable and readable after finish succeeds. Dropping an
+/// unfinished batch discards its staged files. The caller protects reused
+/// objects from retention until the new root has been committed.
+#[async_trait]
+pub trait ObjectBatch: ObjectWriter {
+    async fn finish(self: Box<Self>) -> Result<()>;
+}
+
+#[async_trait]
+pub trait LocalObjectStore: ObjectWriter {
+    async fn begin_batch(&self, workspace: WorkspaceId) -> Result<Box<dyn ObjectBatch>>;
     async fn ingest(
         &self,
         workspace: WorkspaceId,
         kind: ObjectKind,
         reader: ByteStream,
     ) -> Result<ObjectRef>;
-    async fn put(&self, workspace: WorkspaceId, kind: ObjectKind, data: Bytes)
-    -> Result<ObjectRef>;
-    async fn seal(&self, file: WorkingFile) -> Result<ObjectRef>;
     async fn install(&self, workspace: WorkspaceId, stream: ObjectStream) -> Result<()>;
     async fn open(&self, workspace: WorkspaceId, object: &ObjectRef) -> Result<ObjectStream>;
     async fn read_range(
@@ -175,6 +221,9 @@ pub trait LocalObjectStore: Send + Sync {
     /// Caller proves the object is unreachable while holding the object retention barrier.
     async fn discard_unconfirmed(&self, workspace: WorkspaceId, object: &ObjectRef)
     -> Result<bool>;
+    /// The caller validates reachability under its retention barrier. Skip
+    /// leased objects or entries whose remote confirmation has changed.
+    async fn remove_batch(&self, objects: Vec<CachedObject>) -> Result<u64>;
     async fn stats(&self) -> Result<StorageStats>;
     async fn volume_stats(&self) -> Result<VolumeStats>;
 }

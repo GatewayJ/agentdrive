@@ -47,16 +47,25 @@ impl Engine {
         let runtime = Runtime::new(adapters.state, adapters.clock).await?;
         let operations = OperationService::new(runtime.clone());
         let content = ContentService::new(
-            adapters.objects,
+            adapters.objects.clone(),
             adapters.remote_objects,
             adapters.remote_refs,
         );
         let trees = TreeService::new(runtime.clone(), content.clone());
-        let snapshots =
-            SnapshotService::new(runtime.clone(), trees.clone(), adapters.working.clone());
+        let snapshots = SnapshotService::new(
+            runtime.clone(),
+            trees.clone(),
+            trees.clone(),
+            adapters.objects.clone(),
+            adapters.working.clone(),
+        );
         snapshots.recover().await?;
-        let publisher =
-            ReplicaService::new(runtime.clone(), trees.clone(), content, operations.clone());
+        let publisher = ReplicaService::new(
+            runtime.clone(),
+            trees.clone(),
+            content.clone(),
+            operations.clone(),
+        );
         let revisions = RevisionService::new(
             runtime.clone(),
             trees.clone(),
@@ -67,6 +76,8 @@ impl Engine {
         let files = FileService::new(
             runtime.clone(),
             trees.clone(),
+            content.clone(),
+            adapters.objects.clone(),
             adapters.working,
             revisions.clone(),
         );
@@ -82,7 +93,10 @@ impl Engine {
         let versions = VersionService::new(revisions.clone(), mounts.clone());
         let cache = CacheService::new(
             runtime.clone(),
+            trees.clone(),
             trees,
+            content,
+            adapters.objects,
             operations.clone(),
             config.live.clone(),
         );

@@ -2,6 +2,25 @@ use crate::{ObjectStream, RequestContext};
 use agentdrive_model::*;
 use async_trait::async_trait;
 use bytes::Bytes;
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, Default)]
+pub struct TreeChanges {
+    pub directories: BTreeMap<String, Option<DirectoryEntry>>,
+    pub inodes: BTreeMap<String, Option<Inode>>,
+}
+
+#[async_trait]
+pub trait TreeEditor: Send + Sync {
+    async fn save_tree(&self, workspace: WorkspaceId, tree: &FileTree) -> Result<ObjectRef>;
+    async fn edit_tree(
+        &self,
+        workspace: WorkspaceId,
+        root: &ObjectRef,
+        changes: TreeChanges,
+        writer: &dyn crate::ObjectWriter,
+    ) -> Result<ObjectRef>;
+}
 
 #[derive(Clone, Debug)]
 pub struct OperationContext {
@@ -29,6 +48,7 @@ pub trait OperationCoordinator: Send + Sync {
 
 #[async_trait]
 pub trait ContentResolver: Send + Sync {
+    fn remote_available(&self) -> bool;
     async fn open(&self, workspace: WorkspaceId, reference: &ObjectRef) -> Result<ObjectStream>;
     async fn read_range(
         &self,
@@ -48,10 +68,19 @@ pub trait ContentResolver: Send + Sync {
 }
 
 #[async_trait]
+pub trait ObjectGraph: Send + Sync {
+    async fn closure(
+        &self,
+        workspace: WorkspaceId,
+        roots: Vec<ObjectRef>,
+    ) -> Result<Vec<ObjectRef>>;
+    async fn index_pages(&self, workspace: WorkspaceId, root: ObjectRef) -> Result<Vec<ObjectRef>>;
+}
+
+#[async_trait]
 pub trait RevisionReader: Send + Sync {
     async fn revision(&self, workspace: WorkspaceId, revision: RevisionId) -> Result<Revision>;
     async fn tree(&self, workspace: WorkspaceId, root: &ObjectRef) -> Result<FileTree>;
-    async fn save_tree(&self, workspace: WorkspaceId, tree: &FileTree) -> Result<ObjectRef>;
 }
 
 #[derive(Clone, Debug)]

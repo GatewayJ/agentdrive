@@ -23,7 +23,9 @@
 | --- | --- |
 | `engine/runtime` | 工作区授权、本地身份、修改顺序与共享运行状态 |
 | `engine/files` | 文件操作、打开的句柄、权限与 generation 检查 |
-| `engine/content`、`engine/trees` | 内容读取验证、不可变索引与关联对象遍历 |
+| `engine/content` | 通过 `ContentResolver` 验证内容与协调下载 |
+| `engine/trees`、`engine/indexes` | 通过 `RevisionReader`、`ObjectGraph`、`TreeEditor` 解释目录树、遍历对象及修改不可变页面 |
+| `local/batch`、`local/queries` | 批量持久化对象，以及读取一致的 SQLite 数据 |
 | `engine/snapshots`、`engine/revisions` | 捕获工作内容、保存版本、创建分支与恢复内容 |
 | `engine/workspaces` | 创建工作区、查询状态，以及主机目录的导入导出 |
 | `engine/mounts` | 选择工作区在本机使用的分支、复用挂载关联、保存挂载文件、协调挂载切换 |
@@ -61,12 +63,16 @@ flowchart TD
 | 接口或模块 | 负责内容 | 调用方应遵守的范围 |
 | --- | --- | --- |
 | `FileSystem` / `engine/files` | 权限、句柄、路径行为、容量检查、节点变化 | platform 仅转换操作系统请求和错误；不直接访问 SQLite 或决定 branch |
-| `LocalStateStore` | 节点查询、工作树统计、版本检查与原子提交 | engine 提交 `LocalCommit`；不依赖 SQL、表名或触发器 |
+| `LocalStateStore` | 一致的文件和保留引用查询、工作树统计、版本检查与原子提交 | engine 提交 `LocalCommit`；不依赖 SQL、表名或触发器 |
+| `ObjectWriter` / `ObjectBatch` | 暂存完整不可变对象与完成持久化发布 | 调用方保护对象直到新根提交；暂存返回的引用需要等待批次完成才具有持久性 |
+| `TreeEditor` / `ObjectGraph` | 修改不可变索引和遍历保留对象 | 存储适配器负责同步，engine 决定对象保留范围 |
 | `WorkingTreeStore` | 本地可修改文件的创建、读取、写入、截断和删除 | 不决定配额、权限、revision 或远端持久性 |
 | `ContentResolver` | 不可变对象读取、下载合并与校验 | 文件操作通过此接口读取内容，不直接访问 S3 |
 | `SnapshotCapture` / `engine/revisions` | 捕获一致内容、保存 revision、建立同步任务 | `local_saved` 与 `remote_confirmed` 分别表达本地保存和远端确认 |
 | `engine/replica` | 发布顺序、重试、对象上传并发限制 | 全部依赖对象成功后才能发布 BranchRef；S3 适配器不决定发布时机 |
 | `RemoteObjectStore` / `RemoteRefStore` | 对象传输、完整性验证和条件更新 | 协议实现不修改 branch、挂载或本地工作树 |
+
+`file_view` 在同一个 SQLite 读取事务中查询 mount、workspace、branch 和需要的节点。文件操作在取得 branch 互斥锁之前读取关联，取得锁后重新读取完整视图，并据此检查权限与 generation。权限结果没有缓存。SQL prepared statement 可以复用；同目录 rename 仅更新一次父目录。
 
 `LocalStateStore::usage` 返回当前 branch 的节点数量和逻辑字节数。local 在修改节点的同一个 SQLite 事务内增量更新统计；事务回滚同时恢复统计。engine 负责将统计与 workspace 限额比较。这里的逻辑容量不包含历史对象、下载缓存和临时文件，也不代表宿主机剩余磁盘容量。
 
@@ -98,9 +104,15 @@ object ID 使用 SHA-256 对域分隔标记、格式版本、对象类型和内�
 
 每个 branch 通过互斥锁管理文件修改与内容捕获。`node_deltas` 在节点修改的同一个 SQLite 事务内记录每个路径首次修改前的值。捕获时，将变化的文件保存为完整不可变文件对象，并更新受影响的 inode 和目录索引页面。branch 根对象、保存序号、节点内容及日志清理在同一个事务中提交，旧根对象保持可读。
 
+一次检查点通过同一个 `ObjectBatch` 暂存完整文件对象、目录页面、inode 页面和 `TreeRoot`。每个新增对象在发布前完成文件同步。批量发布后，local 同步一次 workspace 对象目录，并在当前进程首次需要时同步其父目录；Windows 继续使用 write-through 发布。随后在同一个 SQLite 事务中登记新增对象，engine 再原子提交 branch 检查点。发布失败保留原检查点和待处理变化。WAL 与 `synchronous=FULL` 保持不变。
+
+索引页面容量超过上限时平均分配内容；变化页面不足一半容量时，与相邻页面合并或重新分配。未变化页面直接复用，只有一个子项的根页面可以减少一级。已有 format 1 索引继续可读，原有稀疏页面在相关编辑发生时整理，无需重写全部历史。
+
 文件系统 `fsync` 保存工作检查点，不创建 revision。本地检查点无需创建 operation 或同步任务；没有变化时，本地 fsync 直接返回。远端 fsync 额外发布工作根对象并等待远端确认，它拥有 operation 记录，中间检查点不会逐个保留为历史版本。自动保存仍按五秒无新写入、三十秒持续写入的期限创建 revision，daemon 每秒检查。显式 `mount_save`、`revision_commit`、创建 branch 和交接 branch 会按需要保存版本。检查点不会重置自动保存期限；重启恢复最新检查点后，尚未形成版本的内容会继续安排自动保存。
 
 `branch_history` 保存最新不可变历史索引的引用，用于增量更新；已有数据库缺少该记录时，在创建下一项同步任务时重建。`object_usage` 保存已确认缓存与未确认对象的字节计数，由 SQLite trigger 在对象新增、删除及远端确认时同步更新。`LocalObjectStore::volume_stats` 为文件系统 STATFS 提供宿主磁盘容量，无需扫描对象记录。缓存回收在持有对象保护锁、检查活动读取者后，可以移除 branch、同步队列、保留版本和 pin 均未引用的未确认对象。持久化继续使用 SQLite 和完整文件对象。本地保留的 branch 会保留最新历史索引的全部页面，保证远端不可用时仍能增量保存。此规则仅保留索引页面，历史文件内容仍按正常缓存策略回收。
+
+缓存清理读取一致的保留引用，在没有独占对象锁的情况下遍历对象。每批最多删除 32 个对象，删除前尝试取得独占锁，并重新核对 branch 根、同步任务、保留版本、历史索引、合并候选内容和 pin。写入正在进行或引用发生变化时，清理等待后续执行。删除过程中再次检查读取租约与远端确认状态，每个受影响目录每批同步一次。同一时刻仅运行一个清理任务。
 
 生命周期控制依次执行挂载变更、恢复、合并应用、所有权交接和取消操作。文件句柄携带挂载和分支的 generation，generation 变化后会拒绝旧句柄。一个挂载路径只能有一个活动关联，一个分支最多具有一个可写挂载。
 

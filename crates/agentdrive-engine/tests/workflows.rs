@@ -3539,3 +3539,141 @@ async fn mount_completion_preserves_concurrent_publication_receipt() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn failed_object_batch_preserves_checkpoint_and_retries_without_data_loss() {
+    let harness = Harness::new(None).await;
+    let workspace = harness.workspace().await;
+    let (binding, fs) = harness
+        .branch_mount(workspace.id, "batch-failure", None)
+        .await;
+    let before = harness.local.branch(binding.branch).await.unwrap().unwrap();
+    let expected = b"durable checkpoint after retry";
+    harness.write_new(&fs, "file", expected).await;
+    let object = object_ref(ObjectKind::File, expected);
+    let obstruction = harness
+        .local
+        .data_dir()
+        .join("objects")
+        .join(workspace.id.to_string())
+        .join(object.id.as_str());
+    std::fs::create_dir(&obstruction).unwrap();
+    assert!(harness.engine.services.files.fsync(&fs).await.is_err());
+    let failed = harness.local.branch(binding.branch).await.unwrap().unwrap();
+    assert_eq!(failed.saved_seq, before.saved_seq);
+    assert_eq!(failed.working_root, before.working_root);
+    assert!(failed.mutation_seq > failed.saved_seq);
+    assert!(
+        !harness
+            .local
+            .node_deltas(binding.branch)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    std::fs::remove_dir(obstruction).unwrap();
+    harness.engine.services.files.fsync(&fs).await.unwrap();
+    let saved = harness.local.branch(binding.branch).await.unwrap().unwrap();
+    assert_eq!(saved.mutation_seq, saved.saved_seq);
+    let node = harness
+        .local
+        .node_at(binding.branch, &path("/file"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(node.inode.content, Some(object.clone()));
+    // No shutdown flush: recovery must use the successful checkpoint alone.
+    let directory = harness.directory;
+    drop(harness.driver);
+    drop(harness.engine);
+    drop(harness.local);
+    let (local, _engine, _, _) = open(directory.path(), None).await;
+    let recovered = local
+        .node_at(binding.branch, &path("/file"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.inode.content, Some(object.clone()));
+    assert_eq!(
+        local
+            .read_range(workspace.id, &object, 0, 1024)
+            .await
+            .unwrap()
+            .as_ref(),
+        expected
+    );
+}
+
+#[tokio::test]
+async fn combined_file_queries_observe_permission_and_binding_changes() {
+    let harness = Harness::new(None).await;
+    let workspace = harness.workspace().await;
+    let (binding, fs) = harness
+        .branch_mount(workspace.id, "query-guards", None)
+        .await;
+    let inode = harness.write_new(&fs, "visible", b"content").await;
+    assert_eq!(
+        harness
+            .engine
+            .services
+            .files
+            .lookup(&fs, InodeId::ROOT, "visible")
+            .await
+            .unwrap()
+            .id,
+        inode.id
+    );
+    let mut unauthorized = binding.clone();
+    unauthorized.principal = "ungranted".to_owned().try_into().unwrap();
+    harness
+        .local
+        .commit(LocalCommit {
+            mounts: vec![unauthorized],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        harness
+            .engine
+            .services
+            .files
+            .getattr(&fs, inode.id)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::PermissionDenied
+    );
+    assert_eq!(
+        harness
+            .engine
+            .services
+            .files
+            .readdir(&fs, InodeId::ROOT)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::PermissionDenied
+    );
+    let mut changed = binding;
+    changed.generation += 1;
+    harness
+        .local
+        .commit(LocalCommit {
+            mounts: vec![changed],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        harness
+            .engine
+            .services
+            .files
+            .getattr(&fs, inode.id)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::StaleBinding
+    );
+}

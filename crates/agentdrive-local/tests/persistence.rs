@@ -244,3 +244,109 @@ async fn receipt_guards_reject_stale_updates_atomically() {
         Some(complete)
     );
 }
+
+#[tokio::test]
+async fn object_batch_publishes_after_finish_and_survives_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let backend = LocalBackend::open(directory.path()).unwrap();
+    let workspace = WorkspaceId::new();
+    let batch = backend.begin_batch(workspace).await.unwrap();
+    let mut references = Vec::new();
+    for value in [b"first".as_slice(), b"second", b""] {
+        let reference = batch
+            .put(workspace, ObjectKind::File, Bytes::copy_from_slice(value))
+            .await
+            .unwrap();
+        assert!(!backend.contains(workspace, &reference).await.unwrap());
+        references.push((reference, value.to_vec()));
+    }
+    assert!(backend.objects(workspace).await.unwrap().is_empty());
+    batch.finish().await.unwrap();
+    assert_eq!(backend.objects(workspace).await.unwrap().len(), 3);
+    drop(backend);
+    let backend = LocalBackend::open(directory.path()).unwrap();
+    for (reference, expected) in references {
+        let mut stream = backend.open(workspace, &reference).await.unwrap();
+        let mut actual = Vec::new();
+        stream.reader.read_to_end(&mut actual).await.unwrap();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[tokio::test]
+async fn abandoned_batches_remove_staging_and_reject_other_workspaces() {
+    let directory = tempfile::tempdir().unwrap();
+    let backend = LocalBackend::open(directory.path()).unwrap();
+    let workspace = WorkspaceId::new();
+    let batch = backend.begin_batch(workspace).await.unwrap();
+    let reference = batch
+        .put(
+            workspace,
+            ObjectKind::File,
+            Bytes::from_static(b"abandoned"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        batch
+            .put(WorkspaceId::new(), ObjectKind::File, Bytes::new())
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidArgument
+    );
+    drop(batch);
+    assert_eq!(
+        std::fs::read_dir(directory.path().join("staging"))
+            .unwrap()
+            .count(),
+        0
+    );
+    assert!(!backend.contains(workspace, &reference).await.unwrap());
+    assert!(backend.objects(workspace).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn batch_reclamation_respects_readers_confirmation_and_empty_files() {
+    let directory = tempfile::tempdir().unwrap();
+    let backend = LocalBackend::open(directory.path()).unwrap();
+    let workspace = WorkspaceId::new();
+    let held = backend
+        .put(workspace, ObjectKind::File, Bytes::from_static(b"held"))
+        .await
+        .unwrap();
+    let changed = backend
+        .put(
+            workspace,
+            ObjectKind::File,
+            Bytes::from_static(b"confirmed later"),
+        )
+        .await
+        .unwrap();
+    let removed = backend
+        .put(workspace, ObjectKind::File, Bytes::from_static(b"unused"))
+        .await
+        .unwrap();
+    let empty = backend
+        .put(workspace, ObjectKind::File, Bytes::new())
+        .await
+        .unwrap();
+    let candidates = backend.objects(workspace).await.unwrap();
+    let reader = backend.open(workspace, &held).await.unwrap();
+    backend.confirm_remote(workspace, &changed).await.unwrap();
+    assert_eq!(
+        backend.remove_batch(candidates).await.unwrap(),
+        removed.size
+    );
+    assert!(backend.contains(workspace, &held).await.unwrap());
+    assert!(backend.contains(workspace, &changed).await.unwrap());
+    assert!(!backend.contains(workspace, &removed).await.unwrap());
+    assert!(!backend.contains(workspace, &empty).await.unwrap());
+    drop(reader);
+    assert!(backend.discard_unconfirmed(workspace, &held).await.unwrap());
+    let stats = backend.stats().await.unwrap();
+    assert_eq!(
+        (stats.cached_bytes, stats.protected_bytes),
+        (changed.size, 0)
+    );
+}

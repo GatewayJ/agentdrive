@@ -14,6 +14,8 @@ The workflow tests exercise concurrent request retries, atomic append, rename wi
 
 Directory conversion tests cover initial `main` contents in a new workspace, import into an existing workspace, required Agent restart acknowledgement, preserved backups, invalid input, and retry after mount failure and daemon restart.
 
+`verify` runs rustfmt, Clippy with warnings denied, workspace tests, and `tests/architecture.py`. The architecture check validates production crate dependencies, keeps database/native-driver/protocol adapters out of the core, requires inherited workspace lint settings, and checks Python test syntax. Default Make builds use the committed lockfile. CI runs these checks on Linux, macOS and Windows; Linux and Windows additionally run the native branch-switch smoke suite. On Windows use `PYTHON=python` if `python3` is unavailable.
+
 ## Native filesystems
 
 Install and enable the platform driver, then run:
@@ -58,7 +60,7 @@ Backend tests exercise competing conditional reference creation, stale condition
 | Two-daemon S3 replication and ownership transfer | macOS and Linux |
 | macFUSE callback compilation | macOS |
 
-[GitHub Actions](https://github.com/GatewayJ/agentdrive/actions) runs the checked-in test matrix for each commit. Native macOS mounting was verified with FUSE-T 1.2.9. The two native tests passed, including directory adoption, exclusive creation, rename with an open handle, more than 128 entries, read-only history, and normal unmount. macOS AppleDouble metadata files are excluded from directory-entry count assertions.
+[GitHub Actions](https://github.com/GatewayJ/agentdrive/actions) runs the checked-in test matrix for each commit. Native macOS mounting was verified with FUSE-T 1.2.9. The three native tests passed, including directory adoption, exclusive creation, rename with an open handle, more than 128 entries, read-only history, and normal unmount. macOS AppleDouble metadata files are excluded from directory-entry count assertions.
 
 The create/import/read/export/mount examples in [CLI usage](cli.md) were executed against a temporary daemon. The [MCP parameter tables](mcp.md) were checked against the running daemon's tool schemas. S3 configuration was checked against the daemon config loader, adapter, and credential/endpoint selection in the locked `object_store` dependency. These documentation checks do not add an AWS S3 deployment to the verified environments above.
 
@@ -141,3 +143,30 @@ Regression tests reproduce and cover two failure cases: a local save after cache
 The follow-up `make -j8 verify build FEATURES=macos-fuse-t` passed with 62 workspace tests. All three real FUSE-T mount tests, the S3 backend test, and six Python smoke suites passed on macOS. SQLite retains transaction checks; retry policy and mount/publication state transitions remain in the engine.
 
 The complete RustFS rerun also passed: the original directory path and branch isolation were preserved, 21 queued saves were confirmed in 1.37 seconds after the outage, and fresh downloads of main (1093 files) and feature (1138 files) matched every path, size and SHA-256 value. Restart verification passed and the final synchronization queue was empty.
+
+## Batched checkpoints and index balance (2026-10-18)
+
+The local FUSE-T run passed 69 workspace tests, rustfmt, Clippy, the architecture check, all three native mount tests, the real S3 backend test, and six Python smoke suites. Added regressions cover staged-object cleanup, batch publication/reopen, publication failure without checkpoint advancement, reader/confirmation checks during reclamation, retention changes during graph traversal, current authorization/generation checks, and index balance with preserved historical roots.
+
+The retained `ab0d422` debug binary and the new debug binary ran the same native workload against isolated RustFS prefixes. The new binary ran twice. Filesystem settings and file-level synchronization remain unchanged.
+
+| Native workload | Before | After, two runs |
+| --- | --- | --- |
+| Create 543 files, explicit fsync per file | 78.836 s | 35.175 / 35.228 s |
+| Rename a regular file 50 times | 669.663 ms | 347.672 / 390.050 ms |
+| Rename its AppleDouble file 50 times | 293.282 ms | 147.446 / 155.802 ms |
+| Create 100 files without application fsync | 18.191 s | 6.136 / 6.174 s |
+| Create 100 AppleDouble control files | 647.561 ms | 366.033 / 356.635 ms |
+| Final local save | 172.914 ms | 156.118 / 139.408 ms |
+
+The final tree has 1399 directory entries and 1400 inodes. Directory leaf pages decreased from 111 to 19; single-entry directory pages decreased from 97 to zero. Inode leaf pages increased from 11 to 21 because balanced page splits retain room for subsequent writes. Total active directory/inode index pages decreased from 124 to 42. This counts the current root, not retained historical pages.
+
+| Background files | Write ×100 before/after ms | Readdir ×50 before/after ms | Rename ×50 before/after ms | Write + fsync ×10 before/after ms | STATFS ×1000 before/after ms |
+| --- | --- | --- | --- | --- | --- |
+| 100 | 44 / 40 | 11 / 5 | 34 / 29 | 394 / 287 | 104 / 58 |
+| 1000 | 39 / 36 | 11 / 5 | 35 / 28 | 486 / 324 | 115 / 53 |
+| 10000 | 35 / 31 | 11 / 5 | 32 / 28 | 530 / 370 | 117 / 50 |
+
+The complete native workflow preserved the original directory path and MCP branch isolation. Independent RustFS downloads matched every path, size and SHA-256 for main (1093 files) and feature (1138 files). Restart and outage recovery passed. A separate outage queued 554 explicit saves; after the daemon restarted against the restored endpoint, all were remotely confirmed in 11.223 seconds, transferring 3612 objects / 34,354,999 bytes. All original results were retained and a fresh location restored 1093 matching files. The previous 554-explicit-save run included two additional autosaves and confirmed in 13.592 seconds. Both measurements include daemon startup and 0.5-second polling. Final queues were empty.
+
+These measurements preserve SQLite WAL/FULL and complete-file objects. Native creates still include FUSE-T/macOS metadata traffic and per-object file synchronization. No internal exclusive-time profile was repeated in this run. The local measurements cover macOS; Linux and Windows are checked by CI after publication.

@@ -1,6 +1,8 @@
 //! A single local persistence boundary for metadata, objects and working files.
 
+mod batch;
 mod objects;
+mod queries;
 mod sqlite;
 mod working;
 
@@ -10,7 +12,7 @@ use agentdrive_model::{
 use parking_lot::Mutex;
 use rusqlite::Connection;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
     sync::Arc,
@@ -28,6 +30,7 @@ struct Inner {
     leases: Mutex<BTreeMap<(WorkspaceId, ObjectId), usize>>,
     verified: Mutex<BTreeMap<(WorkspaceId, ObjectId), (u64, SystemTime)>>,
     object_io: Mutex<()>,
+    durable_directories: Mutex<BTreeSet<WorkspaceId>>,
     _lock: File,
     location: LocationId,
 }
@@ -69,6 +72,7 @@ impl LocalBackend {
         }
         let mut connection = Connection::open(database).map_err(sqlite::sql_error)?;
         sqlite::validate_format(&connection, FORMAT_VERSION)?;
+        connection.set_prepared_statement_cache_capacity(64);
         connection
             .busy_timeout(std::time::Duration::from_secs(5))
             .map_err(sqlite::sql_error)?;
@@ -90,6 +94,7 @@ impl LocalBackend {
                 leases: Mutex::new(BTreeMap::new()),
                 verified: Mutex::new(BTreeMap::new()),
                 object_io: Mutex::new(()),
+                durable_directories: Mutex::new(BTreeSet::new()),
                 _lock: lock,
                 location,
             }),
