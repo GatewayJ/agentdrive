@@ -211,7 +211,8 @@ test('double clicking an unselected branch opens current files and preserves sin
   await page.waitForFunction(() => document.querySelector('.branch-file-content')?.textContent.includes('00 ff 01'));
   await page.locator('.branch-file[data-path="/nested"]').click();
   await page.getByText('此目录为空。', {exact:true}).waitFor();
-  await page.getByRole('button', {name:'上级目录', exact:true}).click();
+  assert.equal(await page.locator('#branch-files-dialog .branch-directory').textContent(), '/nested');
+  await page.getByRole('button', {name:'根目录', exact:true}).click();
   await page.locator('.branch-file-content').waitFor();
   await page.keyboard.press('Escape');
   assert.equal(await page.evaluate(() => document.activeElement.id), 'branch-feature');

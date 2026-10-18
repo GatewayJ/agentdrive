@@ -3,11 +3,9 @@ import { renderDocument } from './file-preview.js';
 export function createFileBrowser({api, element, container, onNavigate}) {
   const body = element('section', 'branch-files-body');
   const toolbar = element('div', 'branch-files-toolbar');
-  const root = element('button', 'secondary', '根目录'); root.type = 'button';
-  const up = element('button', 'secondary', '上级目录'); up.type = 'button';
   const refresh = element('button', 'secondary', '刷新文件'); refresh.type = 'button';
-  const directory = element('code', 'branch-directory');
-  toolbar.append(root, up, directory, refresh);
+  const directory = element('nav', 'branch-directory'); directory.setAttribute('aria-label', '目录路径');
+  toolbar.append(directory, refresh);
   const status = element('p', 'changes-status'); status.setAttribute('role', 'status');
   const layout = element('div', 'changes-layout');
   const sidebar = element('div', 'changed-files');
@@ -123,10 +121,29 @@ export function createFileBrowser({api, element, container, onNavigate}) {
     } catch (error) { if (!current.signal.aborted) failure(status, error, () => page(append)); }
     finally { if (!current.signal.aborted) more.disabled = false; }
   }
+  function renderDirectory() {
+    const focused = directory.contains(document.activeElement) ? document.activeElement.dataset.path : null;
+    directory.replaceChildren();
+    const segment = (name, destination) => {
+      const button = element('button', 'directory-segment', name); button.type = 'button';
+      button.dataset.path = destination; button.title = destination;
+      if (destination === '/') button.setAttribute('aria-label', '根目录');
+      if (destination === path) button.setAttribute('aria-current', 'location');
+      button.onclick = () => navigate(destination);
+      directory.append(button);
+      if (focused === destination) button.focus({preventScroll:true});
+    };
+    segment('/', '/');
+    let destination = '';
+    path.split('/').filter(Boolean).forEach((name, index) => {
+      if (index) { const separator = element('span', 'directory-separator', '/'); separator.setAttribute('aria-hidden', 'true'); directory.append(separator); }
+      destination += '/' + name; segment(name, destination);
+    });
+  }
   function navigate(destination, latest = false) {
     request?.abort(); fileRequest?.abort(); path = destination; cursor = null; selected = null; entries = []; filter.value = '';
     if (latest) { version = null; changed = false; }
-    directory.textContent = path; onNavigate?.(path); up.disabled = path === '/';
+    renderDirectory(); onNavigate?.(path);
     list.replaceChildren(); preview.replaceChildren(); more.hidden = true; status.textContent = '正在读取目录…'; page();
   }
   function show(workspace, branch, destination = '/') {
@@ -140,7 +157,6 @@ export function createFileBrowser({api, element, container, onNavigate}) {
     if (version && expected !== version) { changed = true; status.textContent = '分支内容已更新，可点击“刷新文件”读取最新内容。'; }
   }
   filter.oninput = renderEntries; hiddenFiles.onchange = renderEntries;
-  root.onclick = () => navigate('/'); up.onclick = () => navigate(path.slice(0,path.lastIndexOf('/')) || '/');
   refresh.onclick = () => navigate(path, true); more.onclick = () => page(true);
   return {show, update, clear, refresh:() => context && navigate(path, true)};
 }
