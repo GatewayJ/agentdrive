@@ -171,8 +171,10 @@ impl DirectoryAccess for HostDirectories {
             }
             #[cfg(unix)]
             {
-                backup.try_clone()?.into_std_file().sync_all()?;
-                parent.try_clone()?.into_std_file().sync_all()?;
+                // Linux directory capability handles can use O_PATH. Reopen
+                // relative to the capability to obtain a handle for fsync.
+                backup.open(".")?.sync_all()?;
+                parent.open(".")?.sync_all()?;
             }
             match parent.create_dir(&name) {
                 Ok(()) => (),
@@ -187,7 +189,7 @@ impl DirectoryAccess for HostDirectories {
                 ));
             }
             #[cfg(unix)]
-            parent.try_clone()?.into_std_file().sync_all()?;
+            parent.open(".")?.sync_all()?;
             Ok(())
         })
         .await

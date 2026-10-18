@@ -446,7 +446,7 @@ impl FileSystemInterface for WindowsFs {
                     } else {
                         0o644
                     }),
-                    modified_ns: None,
+                    ..Default::default()
                 },
             ))
             .map(info)
