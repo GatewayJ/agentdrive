@@ -2,7 +2,7 @@
 
 [English](architecture.md) | [简体中文](architecture.zh-CN.md)
 
-`agentdrived` 负责组装应用：创建具体适配器，将其注入 engine，并通过生成的 `Services` 提供服务。engine 依赖 model、ports 和 config crate；持久化、原生驱动、S3 和协议依赖由适配器管理。
+`agentdrived` 负责组装应用：创建具体适配器，将其注入 engine，并通过生成的 `Services` 提供服务。engine 依赖 model、ports 和 config crate；持久化、原生驱动、S3、OpenCSG 和协议依赖由适配器管理。
 
 | Crate | 职责 |
 | --- | --- |
@@ -12,6 +12,7 @@
 | `agentdrive-engine` | 文件行为，以及工作区、版本、挂载、同步、缓存、所有权和合并流程 |
 | `agentdrive-local` | 进程锁定、SQLite 元数据、不可变对象、工作文件、租约和读取验证 |
 | `agentdrive-s3` | 不可变对象的流式传输和引用的条件更新 |
+| `agentdrive-opencsg` | Codes HTTP 对象传输、数据块验证和引用的条件更新 |
 | `agentdrive-platform` | FUSE/WinFsp 回调、受目录范围限制的主机目录访问和时钟 |
 | `agentdrive-mcp` | 具有明确类型的工具、带身份验证的 HTTP 路由、Dashboard 与设置接口、客户端和 stdio 转发 |
 | `agentdrive-test-support` | 可控时钟、挂载和存储测试替代对象、服务中断和确认丢失的故障注入 |
@@ -36,7 +37,7 @@
 | `engine/cache` | 预取、固定缓存，以及按照当前配置回收允许清理的内容 |
 | `engine/merge` | 准备合并候选内容、编辑文件、解决冲突与应用结果 |
 | `engine/operations` | 请求去重、操作进度与持久化结果记录 |
-| `config/types` | 缓存与 S3 的配置类型及策略校验 |
+| `config/types`、`config/remote` | 缓存、S3 与 OpenCSG 的配置类型、凭据隐藏及策略校验 |
 | `config/file` | 配置文件结构、默认值、token 文件读取与初始化目录 |
 | `config/store` | 校验候选配置、控制写入顺序、保存文件与发布 `ArcSwap` 快照 |
 | `mcp/gateway`、`mcp/server` | 验证 HTTP 请求身份并调用应用接口 |
@@ -44,7 +45,9 @@
 | `apps/agentdrive/integration` | ACP、Codex app-server 事件转发与持久化生命周期 |
 | `apps/agentdrived/main` | 创建适配器、运行 HTTP 服务和后台任务、正常关闭服务 |
 
-`agentdrive-ports` 定义 engine 使用的接口，存储和平台适配器负责实现接口。配置模块依赖 model 中的数据类型，数据库、挂载、S3 和 HTTP 服务由 daemon 创建。daemon 将同一个 `LiveConfig` 传给 engine 和 HTTP 入口；`ConfigStore` 统一发布配置，使用配置的模块为每次操作取得完整快照。
+`agentdrive-ports` 定义 engine 使用的接口，存储和平台适配器负责实现接口。配置模块依赖 model 中的数据类型，数据库、挂载和网络服务由 daemon 创建。daemon 将同一个 `LiveConfig` 传给 engine 和 HTTP 入口；`ConfigStore` 统一发布配置，使用配置的模块为每次操作取得完整快照。启动和运行期间修改均通过 `apps/agentdrived/settings::remote_storage` 选择远程适配器。
+
+两种远程后端均实现 `RemoteObjectStore` 和 `RemoteRefStore`。engine 复用已有的发布顺序、持久化重试、历史导入、所有权和存储切换流程。OpenCSG HTTP 路径、Bearer 认证、响应解析、数据块编码及 Git 分支版本检查由 `agentdrive-opencsg` 管理，领域对象和 MCP 工具继续使用原有版本含义。
 
 HTTP 工作区展示模块 `mcp/workspace_view` 通过 `WorkspaceApi::status` 与 `RevisionApi::list` 的结果生成有类型的统计和创建来源信息。数据读取继续由应用接口负责。浏览器的 workspace 模块负责来源版本连接图及挂载目录表，revision viewer 负责版本信息与差异弹框。
 
@@ -68,6 +71,7 @@ flowchart TD
     State --> Local[local: SQLite]
     Working --> Disk[local: 宿主机文件系统]
     Remote --> S3[s3: 对象传输与 CAS]
+    Remote --> OpenCSG[opencsg: Codes HTTP 与 CAS]
 ```
 
 | 接口或模块 | 负责内容 | 调用方应遵守的范围 |
@@ -77,9 +81,9 @@ flowchart TD
 | `ObjectWriter` / `ObjectBatch` | 暂存完整不可变对象与完成持久化发布 | 调用方保护对象直到新根提交；暂存返回的引用需要等待批次完成才具有持久性 |
 | `TreeEditor` / `ObjectGraph` | 修改不可变索引和遍历保留对象 | 存储适配器负责同步，engine 决定对象保留范围 |
 | `WorkingTreeStore` | 本地可修改文件的创建、读取、写入、截断和删除 | 不决定配额、权限、revision 或远端持久性 |
-| `ContentResolver` | 不可变对象读取、下载合并与校验 | 文件操作通过此接口读取内容，不直接访问 S3 |
+| `ContentResolver` | 不可变对象读取、下载合并与校验 | 文件操作通过此接口读取远程内容 |
 | `SnapshotCapture` / `engine/revisions` | 捕获一致内容、保存 revision、建立同步任务 | `local_saved` 与 `remote_confirmed` 分别表达本地保存和远端确认 |
-| `engine/replica` | 发布顺序、重试、对象上传并发限制 | 全部依赖对象成功后才能发布 BranchRef；S3 适配器不决定发布时机 |
+| `engine/replica` | 发布顺序、重试、对象上传并发限制 | 全部依赖对象成功后才能发布 BranchRef，由 engine 决定发布时机 |
 | `RemoteObjectStore` / `RemoteRefStore` | 对象传输、完整性验证和条件更新 | 协议实现不修改 branch、挂载或本地工作树 |
 
 `file_view` 在同一个 SQLite 读取事务中查询 mount、workspace、branch 和需要的节点。文件操作在取得 branch 互斥锁之前读取关联，取得锁后重新读取完整视图，并据此检查权限与 generation。权限结果没有缓存。SQL prepared statement 可以复用；同目录 rename 仅更新一次父目录。
@@ -96,17 +100,17 @@ SQLite 中的 `parent` 查询列和 `node_usage` 统计由 local 管理。新建
 
 ## 配置生命周期
 
-`ConfigStore::open` 读取并校验文件。`StartupConfig` 在服务创建时提供存储目录、挂载、连接与凭据配置。缓存策略、S3 连接和 HTTP Origin 允许列表由同一个 `ArcSwap<Snapshot>` 保存。缓存清理在操作期间保持同一份快照；HTTP 身份验证为每次请求取得当前快照。
+`ConfigStore::open` 读取并校验文件。`StartupConfig` 在服务创建时提供存储目录、挂载、连接与凭据配置。缓存策略、远程连接和 HTTP Origin 允许列表由同一个 `ArcSwap<Snapshot>` 保存。缓存清理在操作期间保持同一份快照；HTTP 身份验证为每次请求取得当前快照。
 
 daemon 每秒检查配置文件。Dashboard 保存与文件加载使用同一个 `ConfigStore` 和写入锁。保存时检查配置版本，在同目录写入并同步临时文件，替换配置文件，然后发布快照；Unix 还会同步目录。文件错误、无效内容以及启动配置变化都会保留当前有效配置，并提供错误信息。配置版本检查会拒绝过期的 API 保存请求及已经检测到的外部修改；外部编辑器不使用 daemon 的写入锁，建议通过原子替换文件提交修改。
 
-设置管理权限由启动配置中的 `administrators` 决定，默认为 `["owner"]`，与工作区授权分别管理。设置接口不会读取或返回 token 内容。修改 HTTP 凭据、管理员、本地目录或监听地址需要重启。S3 设置通过 `ConfigApplier` 准备内容、保存配置，并在持有生命周期、发布和内容保护锁期间更换远程适配器。字段说明与 HTTP 接口见[配置说明](configuration.zh-CN.md)。
+设置管理权限由启动配置中的 `administrators` 决定，默认为 `["owner"]`，与工作区授权分别管理。设置接口不会返回 token 内容或已保存的远程密钥。修改 HTTP 凭据、管理员、本地目录或监听地址需要重启。远程设置通过 `ConfigApplier` 检查服务、准备内容、保存配置，并在持有生命周期、发布和内容保护锁期间更换远程适配器。字段说明与 HTTP 接口见[配置说明](configuration.zh-CN.md)。
 
 ## 本地持久化
 
 每个守护进程状态目录包含 `engine.lock`、`meta.db`、SQLite WAL 文件，以及 `objects/`、`staging/` 和 `working/`。进程锁定确保只有一个写入者。SQLite 使用 WAL 和 `synchronous=FULL`。修改数据库结构前会检查持久化格式版本，存储错误通过明确的错误类型返回。
 
-两种存储模式均将 `meta.db` 和 WAL 文件保存在本地。S3 接收不可变对象，以及下文说明的控制记录和分支引用。拉取操作将已发布历史导入接收端的数据库；本机身份、分支选择、挂载关联、缓存保留设置和尚未完成的工作属于本地状态。缓存容量仅统计不可变对象文件。S3 模式使用 `cache.max_bytes`，自动计算 75% 的清理目标，并使用内部固定的 64 MiB 磁盘剩余空间阈值。本地模式完整保留历史内容。
+所有存储模式均将 `meta.db` 和 WAL 文件保存在本地。远程后端接收不可变对象，以及下文说明的控制记录和分支引用。拉取操作将已发布历史导入接收端的数据库；本机身份、分支选择、挂载关联、缓存保留设置和尚未完成的工作属于本地状态。缓存容量仅统计不可变对象文件。远程模式使用 `cache.max_bytes`，自动计算 75% 的清理目标，并使用内部固定的 64 MiB 磁盘剩余空间阈值。本地模式完整保留历史内容。
 
 object ID 使用 SHA-256 对域分隔标记、格式版本、对象类型和内容字节计算摘要。发布时验证摘要和大小，将临时文件同步到存储设备，以不可变名称发布文件并登记对象。Unix 会在发布后同步目录，Windows 使用 write-through 文件移动。元数据事务引用已经安装的不可变对象，读取租约保护打开的内容，使其不会被缓存回收。
 
@@ -140,6 +144,12 @@ object ID 使用 SHA-256 对域分隔标记、格式版本、对象类型和内�
 
 拉取会导入远端历史和引用，并保留活动本地分支的状态。接管已有分支需要经过确认的所有权交接。交接时停止旧写入者，完成其发布队列，然后通过条件写入更新 owner 和 epoch。新的 location 接管已确认状态。该 API 无法强制替换无法联系的 owner。
 
+## OpenCSG 存储格式
+
+配置的 Codes 仓库分支包含 `<prefix>/<workspace>/objects/<object-id>.json` manifest、`chunks/<sha256>` base64 文件、`control.json` 和 `branches/<branch-id>.json`。manifest 保留原始 `ObjectRef`，每个数据块最多包含 4 MiB 原始内容。上传在发布 manifest 前验证完整对象的大小和摘要。下载读取指定 Git commit，并使用大小受限的缓冲区验证每个数据块和完整对象。分支发现通过指定 commit 的分页 tree API 完成。
+
+Git 分支 head 作为 `VersionedRef.version` 返回。单文件 POST/PUT 携带 `start_sha`，Gitaly 条件更新会拒绝已经变化的分支版本。其他引用和对象的写入也会推进同一 Git 分支，因此不可变对象创建支持重试，引用冲突交给 engine 处理。写入后读取当前内容可以确认响应丢失的操作，无法读取结果时返回 `CasOutcome::Unknown`。连接检查验证更新和创建行为，验证通过后才会写入工作区数据。所有 workspace branch 和 revision 都保存为该存储分支内的 AgentDrive 记录，Git commit 记录存储操作。远程物理删除继续禁用。
+
 ## 合并
 
 合并准备会选择共同祖先，或检查调用者指定的祖先，然后比较路径变化并生成不可变候选内容。AI 可以查询候选版本的文件列表，选择 source、target，删除文件，提交替换内容，或从已有版本复制文件。编辑会生成新的候选版本。应用要求目标分支没有未提交内容、所有权与版本匹配、全部冲突已处理，并且挂载允许切换。合并版本保留来源与目标两个父版本。
@@ -149,9 +159,9 @@ object ID 使用 SHA-256 对域分隔标记、格式版本、对象类型和内�
 
 创建 MCP 服务前，bearer 凭据会选择 principal。每项凭据拥有独立的 HTTP 会话管理器，工具参数无法覆盖 principal。HTTP 入口使用 Host 和 Origin 允许列表，并将请求正文限制为 8 MiB。守护进程监听本机回环地址。远程访问需要管理员管理的身份验证 TLS 代理，并保留允许的 Host 值。
 
-工作区授权控制应用操作。原生文件系统访问使用守护进程的操作系统身份。配置、凭据、状态、挂载根目录和交换根目录应限制为该身份访问；Windows 需要相应配置 NTFS 权限。S3 凭据持有者和管理员被视为可信的存储写入者。
+工作区授权控制应用操作。原生文件系统访问使用守护进程的操作系统身份。配置、凭据、状态、挂载根目录和交换根目录应限制为该身份访问；Windows 需要相应配置 NTFS 权限。远程凭据持有者和管理员被视为可信的存储写入者。
 
-参见[配置与 S3](configuration.zh-CN.md)、[CLI 使用](cli.zh-CN.md)和 [MCP 参数与能力](mcp.zh-CN.md)。
+参见[配置与远程存储](configuration.zh-CN.md)、[CLI 使用](cli.zh-CN.md)和 [MCP 参数与能力](mcp.zh-CN.md)。
 
 ## 当前分支文件读取
 

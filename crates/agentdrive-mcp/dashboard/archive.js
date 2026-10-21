@@ -70,7 +70,7 @@ export function createArchivePage({api, element, container}) {
     };
     states.replaceChildren(
       card('本地进度',state.saved ? '本机已保存' : '有未保存修改',!state.saved ? '正在等待本机保存' : branch.dirty ? '工作内容尚未正式提交' : '工作内容已提交',!state.saved),
-      card('远程保存',state.remote,state.confirmed ? '与本机内容一致 · 上次确认' : snapshot.capabilities.remote_configured ? '交接前确认远端保存结果' : '可在设置中连接 S3 / RustFS',snapshot.capabilities.remote_configured && !state.confirmed),
+      card('远程保存',state.remote,state.confirmed ? '与本机内容一致 · 上次确认' : snapshot.capabilities.remote_configured ? '交接前确认远端保存结果' : '可在设置中连接 S3 或 OpenCSG',snapshot.capabilities.remote_configured && !state.confirmed),
       card('工作目录',mounted.length ? `${mounted.length} 个目录使用中` : '当前未挂载',branch.owner === snapshot.location ? '由本机管理此分支' : '本机读取副本 · 同步后更新')
     );
     if (mounted.length) states.lastChild.title = mounted.map(mount => mount.path).join('\n');

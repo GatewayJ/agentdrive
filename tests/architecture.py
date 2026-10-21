@@ -14,6 +14,7 @@ BOUNDARIES = {
     "agentdrive-engine": {"agentdrive-model", "agentdrive-ports", "agentdrive-config"},
     "agentdrive-local": {"agentdrive-model", "agentdrive-ports"},
     "agentdrive-s3": {"agentdrive-model", "agentdrive-ports", "agentdrive-config"},
+    "agentdrive-opencsg": {"agentdrive-model", "agentdrive-ports", "agentdrive-config"},
     "agentdrive-platform": {"agentdrive-model", "agentdrive-ports"},
     "agentdrive-mcp": {"agentdrive-model", "agentdrive-ports", "agentdrive-config"},
     "agentdrive-test-support": {"agentdrive-model", "agentdrive-ports"},

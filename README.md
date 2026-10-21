@@ -18,7 +18,7 @@ Keep using your preferred agent, editor and terminal. MCP lets agents manage sav
 
 | When you need to… | AgentDrive helps you… |
 | --- | --- |
-| Work locally and save remotely | Use ordinary file tools, keep local work, and synchronize results through configured S3 / RustFS storage. |
+| Work locally and save remotely | Use ordinary file tools, keep local work, and synchronize results through configured S3 / RustFS or OpenCSG Codes storage. |
 | Hand work to an agent elsewhere | Save the brief, input files, results and next steps together; pull them on the receiving machine. |
 | Try several approaches in parallel | Branch from shared material, complete separate tasks, review changes and merge the results. |
 | Check progress yourself | Browse current files in the Archive, then inspect their origins and changes in Branches & Versions. |
@@ -37,7 +37,7 @@ The agent creates, mounts or adopts a workspace through MCP, then continues usin
 
 ### 2. Synchronize local results to remote storage
 
-Open **Settings** in the dashboard and configure S3 or RustFS with an endpoint, bucket and credentials. Machines collaborating on a project use the same bucket, prefix and authorized project identity, with independent local configuration and state directories. [Connection guide](docs/configuration.md)
+Open **Settings** in the dashboard and choose a remote backend. Configure S3 / RustFS with an endpoint, bucket and credentials, or OpenCSG Codes with a domain, repository and access token. Machines collaborating on a project use the same storage destination and authorized project identity, with independent local configuration and state directories. [Connection guide](docs/configuration.md)
 
 > Save this branch remotely. After remote publication is confirmed, report the workspace ID, branch, version and handoff document path.
 
@@ -95,7 +95,7 @@ A single `branch_switch` call completes a branch change. If a process occupies t
 
 Build from source on Linux, macOS or Windows. Native mounts require FUSE, FUSE-T / macFUSE or WinFsp respectively. [Installation, dependencies and startup commands](docs/installation.md)
 
-- [Remote storage configuration](docs/configuration.md): local storage, S3, RustFS and multiple machines.
+- [Remote storage configuration](docs/configuration.md): local storage, S3, RustFS, OpenCSG Codes and multiple machines.
 - [Operations and recovery](docs/operations.md): publication confirmation, handoffs, merging and recovery.
 - [Documentation index](docs/README.md): complete usage references and developer documentation.
 

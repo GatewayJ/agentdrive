@@ -1,4 +1,4 @@
-use agentdrive_config::{ConfigStore, SettingsUpdate, initialize};
+use agentdrive_config::{ConfigStore, RemoteConfig, SettingsUpdate, initialize};
 use agentdrive_model::{ErrorCode, Principal};
 use serde_json::{Value, json};
 use std::{fs, sync::Arc};
@@ -11,6 +11,115 @@ fn setup() -> (tempfile::TempDir, Arc<ConfigStore>) {
     let path = initialize(directory.path(), "127.0.0.1:7421".parse().unwrap()).unwrap();
     let store = ConfigStore::open(&path).unwrap();
     (directory, store)
+}
+
+#[test]
+fn opencsg_token_is_private_and_only_reused_for_the_same_destination() {
+    let (_directory, store) = setup();
+    let settings = store.settings(&owner()).unwrap();
+    let mut runtime = settings.runtime;
+    runtime.remote = Some(
+        serde_json::from_value(json!({
+            "backend":"opencsg", "endpoint":"https://opencsg.example.com",
+            "repository":"owner/storage", "token":"private-test-token"
+        }))
+        .unwrap(),
+    );
+    let saved = store
+        .update(
+            &owner(),
+            SettingsUpdate {
+                revision: settings.revision,
+                runtime,
+            },
+        )
+        .unwrap();
+    assert!(
+        !serde_json::to_string(&saved)
+            .unwrap()
+            .contains("private-test-token")
+    );
+    assert!(!format!("{:?}", store.live().load()).contains("private-test-token"));
+    let mut runtime = saved.runtime.clone();
+    let RemoteConfig::OpenCsg(config) = runtime.remote.as_mut().unwrap() else {
+        panic!("OpenCSG settings");
+    };
+    assert!(config.token.is_empty());
+    config.prefix = "agentdrive/other".into();
+    let saved = store
+        .update(
+            &owner(),
+            SettingsUpdate {
+                revision: saved.revision,
+                runtime,
+            },
+        )
+        .unwrap();
+    let reopened = ConfigStore::open(&saved.config_path).unwrap();
+    let snapshot = reopened.live().load();
+    let RemoteConfig::OpenCsg(config) = snapshot.values.remote.as_ref().unwrap() else {
+        panic!("OpenCSG settings");
+    };
+    assert_eq!(config.token, "private-test-token");
+    for field in ["endpoint", "repository"] {
+        let mut update = serde_json::to_value(&saved.runtime).unwrap();
+        update["remote"][field] = if field == "endpoint" {
+            json!("https://other.example.com")
+        } else {
+            json!("other/storage")
+        };
+        let before = fs::read(&saved.config_path).unwrap();
+        let error = store
+            .update(
+                &owner(),
+                SettingsUpdate {
+                    revision: saved.revision.clone(),
+                    runtime: serde_json::from_value(update).unwrap(),
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+        assert_eq!(fs::read(&saved.config_path).unwrap(), before);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&saved.config_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+}
+
+#[test]
+fn remote_configuration_accepts_legacy_s3_and_rejects_unsafe_opencsg_destinations() {
+    let legacy: RemoteConfig =
+        serde_json::from_value(json!({"bucket":"existing", "endpoint":null})).unwrap();
+    assert!(matches!(legacy, RemoteConfig::S3(_)));
+    legacy.validate().unwrap();
+    let base = json!({"backend":"opencsg","endpoint":"https://example.com","repository":"owner/repo","token":"token"});
+    let good: RemoteConfig = serde_json::from_value(base.clone()).unwrap();
+    good.validate().unwrap();
+    for (field, invalid) in [
+        ("endpoint", "https://token@example.com"),
+        ("endpoint", "https://example.com/api"),
+        ("endpoint", "http://example.com"),
+        ("endpoint", "https://example.com?token=x"),
+        ("repository", "../storage"),
+        ("repository", "owner/repo/extra"),
+        ("prefix", "../data"),
+        ("branch", "main..branch"),
+        ("token", "token\nheader"),
+    ] {
+        let mut value = base.clone();
+        value[field] = invalid.into();
+        let config: RemoteConfig = serde_json::from_value(value).unwrap();
+        assert!(config.validate().is_err(), "{field}");
+    }
 }
 
 #[test]
@@ -297,7 +406,10 @@ fn s3_settings_persist_secrets_without_returning_them_and_preserve_blank_passwor
     assert!(!response.contains("test-session"));
     assert!(!format!("{:?}", store.live().load()).contains("test-secret"));
     let mut runtime = saved.runtime;
-    runtime.remote.as_mut().unwrap().region = "eu-west-1".into();
+    let RemoteConfig::S3(config) = runtime.remote.as_mut().unwrap() else {
+        panic!("S3 settings");
+    };
+    config.region = "eu-west-1".into();
     let saved = store
         .update(
             &owner(),
@@ -309,18 +421,17 @@ fn s3_settings_persist_secrets_without_returning_them_and_preserve_blank_passwor
         .unwrap();
     let restarted = ConfigStore::open(&saved.config_path).unwrap();
     let snapshot = restarted.live().load();
-    let credentials = snapshot
-        .values
-        .remote
-        .as_ref()
-        .unwrap()
-        .credentials
-        .as_ref()
-        .unwrap();
+    let RemoteConfig::S3(config) = snapshot.values.remote.as_ref().unwrap() else {
+        panic!("S3 settings");
+    };
+    let credentials = config.credentials.as_ref().unwrap();
     assert_eq!(credentials.secret_access_key, "test-secret");
     assert_eq!(credentials.session_token.as_deref(), Some("test-session"));
     let mut runtime = saved.runtime;
-    runtime.remote.as_mut().unwrap().credentials = None;
+    let RemoteConfig::S3(config) = runtime.remote.as_mut().unwrap() else {
+        panic!("S3 settings");
+    };
+    config.credentials = None;
     store
         .update(
             &owner(),

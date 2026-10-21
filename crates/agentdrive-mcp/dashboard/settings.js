@@ -12,22 +12,31 @@ export function createSettingsPage({api, element, $}) {
     $('settings-state').textContent = busy ? '正在处理，存储切换期间需要传输历史内容…' : dirty ? '有尚未保存的修改' : '当前配置已生效';
     $('settings-reload').textContent = dirty ? '重新载入并放弃修改' : '重新载入';
   }
-  function changed() { dirty = true; message('settings-notice', ''); state(); }
+  function changed() { dirty = true; storageFields(); message('settings-notice', ''); state(); }
   function render(data) {
     current = data; dirty = false;
     $('settings-form').hidden = false; $('startup-panel').hidden = false;
     $('cache-max').value = data.runtime.cache.max_bytes / gib;
     $('allowed-origins').value = data.runtime.allowed_origins.join('\n');
     const remote = data.runtime.remote;
-    $('storage-mode').value = remote?.enabled !== false && remote ? 's3' : 'local';
-    $('s3-endpoint').value = remote?.endpoint || '';
-    $('s3-bucket').value = remote?.bucket || '';
-    $('s3-region').value = remote?.region || 'us-east-1';
-    $('s3-prefix').value = remote?.prefix || 'agentdrive/v1';
-    $('s3-http').checked = remote?.allow_http || false;
-    $('s3-auth').value = remote?.credentials ? 'saved' : 'environment';
-    $('s3-access-key').value = remote?.credentials?.access_key_id || '';
+    const backend = remote?.backend || 's3';
+    $('storage-mode').value = remote?.enabled !== false && remote ? backend : 'local';
+    const s3 = backend === 's3' ? remote : null;
+    const opencsg = backend === 'opencsg' ? remote : null;
+    $('s3-endpoint').value = s3?.endpoint || '';
+    $('s3-bucket').value = s3?.bucket || '';
+    $('s3-region').value = s3?.region || 'us-east-1';
+    $('s3-prefix').value = s3?.prefix || 'agentdrive/v1';
+    $('s3-http').checked = s3?.allow_http || false;
+    $('s3-auth').value = s3?.credentials ? 'saved' : 'environment';
+    $('s3-access-key').value = s3?.credentials?.access_key_id || '';
     $('s3-secret-key').value = ''; $('s3-session-token').value = '';
+    $('opencsg-endpoint').value = opencsg?.endpoint || '';
+    $('opencsg-repository').value = opencsg?.repository || '';
+    $('opencsg-branch').value = opencsg?.branch || 'main';
+    $('opencsg-prefix').value = opencsg?.prefix || 'agentdrive/v1';
+    $('opencsg-http').checked = opencsg?.allow_http || false;
+    $('opencsg-token').value = '';
     storageFields();
     const values = $('startup-values'); values.replaceChildren();
     const startup = data.startup;
@@ -65,31 +74,51 @@ export function createSettingsPage({api, element, $}) {
     } finally { if (request === generation) { busy = false; state(); } }
   }
   function runtime() {
-    const enabled = $('storage-mode').value === 's3';
+    const mode = $('storage-mode').value;
+    const enabled = mode !== 'local';
     const maxBytes = enabled ? Math.round(Number($('cache-max').value) * gib) : current.runtime.cache.max_bytes;
     if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('本地缓存容量必须大于零，且不能超过浏览器支持的整数范围。');
     const cache = {max_bytes:maxBytes};
-    const bucket = $('s3-bucket').value.trim();
-    if (enabled && !bucket) throw new Error('请填写 S3 Bucket。');
-    const remote = bucket ? {
-      enabled, bucket, endpoint:$('s3-endpoint').value.trim() || null,
+    let remote = current.runtime.remote ? {...current.runtime.remote, enabled:false} : null;
+    if (mode === 's3') {
+      const bucket = $('s3-bucket').value.trim();
+      if (!bucket) throw new Error('请填写 S3 Bucket。');
+      remote = {
+      backend:'s3', enabled:true, bucket, endpoint:$('s3-endpoint').value.trim() || null,
       region:$('s3-region').value.trim(), prefix:$('s3-prefix').value.trim(), allow_http:$('s3-http').checked,
       credentials:$('s3-auth').value === 'saved' ? {
         access_key_id:$('s3-access-key').value.trim(), secret_access_key:$('s3-secret-key').value,
         session_token:$('s3-session-token').value || null,
       } : null,
-    } : null;
+      };
+    } else if (mode === 'opencsg') {
+      remote = {backend:'opencsg', enabled:true, endpoint:$('opencsg-endpoint').value.trim(),
+        repository:$('opencsg-repository').value.trim(), branch:$('opencsg-branch').value.trim(),
+        prefix:$('opencsg-prefix').value.trim(), token:$('opencsg-token').value, allow_http:$('opencsg-http').checked};
+      if (!remote.endpoint || !remote.repository) throw new Error('请填写 OpenCSG 域名和仓库。');
+    }
     return {cache, remote, allowed_origins:[...new Set($('allowed-origins').value.split('\n').map(value => value.trim()).filter(Boolean))]};
   }
   function storageFields() {
-    const enabled = $('storage-mode').value === 's3';
+    const mode = $('storage-mode').value;
+    const enabled = mode !== 'local';
     $('cache-panel').hidden = !enabled;
     $('cache-max').disabled = !enabled;
     $('cache-max').required = enabled;
-    $('s3-bucket').required = enabled;
-    const saved = $('s3-auth').value === 'saved';
+    $('s3-fields').hidden = mode !== 's3';
+    $('s3-fields').disabled = mode !== 's3';
+    $('opencsg-fields').hidden = mode !== 'opencsg';
+    $('opencsg-fields').disabled = mode !== 'opencsg';
+    $('s3-bucket').required = mode === 's3';
+    const saved = mode === 's3' && $('s3-auth').value === 'saved';
     for (const id of ['s3-access-key', 's3-secret-key', 's3-session-token']) $(id).disabled = !saved;
-    $('s3-access-key').required = saved && enabled;
+    $('s3-access-key').required = saved;
+    for (const name of ['endpoint','repository','branch','prefix']) $('opencsg-'+name).required = mode === 'opencsg';
+    const previous = current?.runtime.remote;
+    const retained = previous?.backend === 'opencsg' && previous.endpoint === $('opencsg-endpoint').value.trim()
+      && previous.repository === $('opencsg-repository').value.trim();
+    $('opencsg-token').required = mode === 'opencsg' && !retained;
+    $('opencsg-token').placeholder = retained ? '留空保留已保存 token' : '请输入仓库访问 token';
   }
   $('storage-mode').addEventListener('change', storageFields);
   $('s3-auth').addEventListener('change', storageFields);

@@ -62,9 +62,10 @@
         <form id="settings-form" hidden>
           <fieldset id="settings-fields">
             <section class="panel settings-panel" aria-labelledby="storage-title">
-              <div class="settings-heading"><div><h2 id="storage-title">存储设置</h2><p>本地模式保存全部版本内容。S3 模式将版本内容同步到远程存储。切换会补齐历史内容，完成后继续使用当前挂载目录。</p></div><span class="pill">保存后切换</span></div>
+              <div class="settings-heading"><div><h2 id="storage-title">存储设置</h2><p>远程存储保存工作区内容和版本记录。切换会传输已有历史，完成后继续使用当前挂载目录。</p></div><span class="pill">保存后切换</span></div>
+              <div class="storage-fields storage-selector"><label>存储模式<select id="storage-mode"><option value="local">本地存储</option><option value="s3">S3 存储</option><option value="opencsg">OpenCSG Codes 存储</option></select></label></div>
+              <fieldset id="s3-fields" hidden disabled>
               <div class="storage-fields">
-                <label>存储模式<select id="storage-mode"><option value="local">本地存储</option><option value="s3">S3 存储</option></select></label>
                 <label>Endpoint<input id="s3-endpoint" type="url" placeholder="https://s3.example.com" spellcheck="false"></label>
                 <label>Bucket<input id="s3-bucket" spellcheck="false"></label>
                 <label>Region<input id="s3-region" value="us-east-1" spellcheck="false"></label>
@@ -76,6 +77,19 @@
               </div>
               <label class="storage-check"><input id="s3-http" type="checkbox">允许使用 HTTP Endpoint</label>
               <p class="settings-help">密钥保存在当前配置文件中，请限制该文件的访问权限。页面不会返回已保存的 Secret Access Key 或 Session Token。修改 Session Token 时请同时填写 Secret Access Key。</p>
+              </fieldset>
+              <fieldset id="opencsg-fields" hidden disabled>
+                <div class="storage-fields">
+                  <label>OpenCSG 域名<input id="opencsg-endpoint" type="url" placeholder="https://opencsg-stg.com" autocomplete="off" spellcheck="false"></label>
+                  <label>Codes 仓库<input id="opencsg-repository" placeholder="namespace/repository" autocomplete="off" spellcheck="false"></label>
+                  <label>存储分支<input id="opencsg-branch" value="main" spellcheck="false"></label>
+                  <label>存储目录<input id="opencsg-prefix" value="agentdrive/v1" spellcheck="false"></label>
+                  <label>Access Token<input id="opencsg-token" type="password" autocomplete="new-password" placeholder="请输入仓库访问 token" spellcheck="false"></label>
+                </div>
+                <label class="storage-check"><input id="opencsg-http" type="checkbox">允许使用 HTTP 域名</label>
+                <p class="settings-help">请选择专用 Codes 仓库和已有分支，token 需要仓库读写权限。版本管理继续使用 AgentDrive。保存时会验证连接和条件更新能力。</p>
+                <p class="settings-help">token 保存在当前配置文件中，页面不会返回已保存的值。修改域名或仓库时需要重新填写 token。</p>
+              </fieldset>
             </section>
             <section id="cache-panel" class="panel settings-panel" aria-labelledby="cache-title" hidden>
               <div class="settings-heading"><div><h2 id="cache-title">本地缓存</h2><p>后台每 30 秒检查一次。超过容量时，自动清理到设置容量的 75%；磁盘空间不足时也会尝试清理。</p></div><span class="pill">保存后生效</span></div>

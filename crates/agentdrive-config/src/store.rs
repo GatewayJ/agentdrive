@@ -1,4 +1,4 @@
-use crate::{CacheConfig, Config, S3Config, StartupConfig};
+use crate::{CacheConfig, Config, RemoteConfig, StartupConfig};
 use agentdrive_model::{Error, ErrorCode, Principal, Result};
 use arc_swap::ArcSwap;
 use parking_lot::Mutex;
@@ -17,7 +17,7 @@ const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     #[serde(default)]
-    pub remote: Option<S3Config>,
+    pub remote: Option<RemoteConfig>,
     pub cache: CacheConfig,
     pub allowed_origins: Vec<String>,
 }
@@ -251,20 +251,8 @@ impl ConfigStore {
                 "configuration changed; reload settings before saving",
             ));
         }
-        if let Some(remote) = &mut update.runtime.remote
-            && let Some(credentials) = &mut remote.credentials
-            && credentials.secret_access_key.is_empty()
-        {
-            let saved = current
-                .values
-                .remote
-                .as_ref()
-                .and_then(|value| value.credentials.as_ref())
-                .filter(|saved| saved.access_key_id == credentials.access_key_id)
-                .ok_or_else(|| {
-                    Error::invalid("provide the secret key for the selected access key")
-                })?;
-            *credentials = saved.clone();
+        if let Some(remote) = &mut update.runtime.remote {
+            remote.restore_credentials(current.values.remote.as_ref())?;
         }
         update.runtime.validate()?;
         let config = Config::with_runtime(self.startup.clone(), update.runtime);

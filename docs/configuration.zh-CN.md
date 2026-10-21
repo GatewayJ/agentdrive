@@ -1,4 +1,4 @@
-# 配置与 S3
+# 配置与远程存储
 
 [English](configuration.md) | [简体中文](configuration.zh-CN.md)
 
@@ -17,8 +17,8 @@
 | `credentials` | 必填，格式为 `{ "principal": "owner", "token_file": "/absolute/path/token" }` 的数组，至少需要一项凭据。 |
 | `administrators` | 可以读取和修改 daemon 设置的身份列表，默认为 `["owner"]`。与工作区授权分别管理，修改后需要重启。 |
 | `allowed_origins` | HTTP Origin 允许列表，默认 `[]`。CLI 和 stdio 连接不会发送 Origin。 |
-| `cache` | 可选对象，只包含 `max_bytes`：本地不可变对象的缓存容量，以字节为单位，默认为 `2147483648`（2 GiB），必须为正整数。启用 S3 时用于缓存清理。 |
-| `remote` | 下文的 S3 配置。省略或设置为 `null` 时仅使用本地存储。 |
+| `cache` | 可选对象，只包含 `max_bytes`：本地不可变对象的缓存容量，以字节为单位，默认为 `2147483648`（2 GiB），必须为正整数。启用远程存储时用于缓存清理。 |
+| `remote` | 下文的 S3 或 OpenCSG 配置，通过 `backend` 选择。省略或设置为 `null` 时仅使用本地存储。已有配置没有 `backend` 时继续使用 S3。 |
 
 例如，添加 `"cache": { "max_bytes": 536870912 }` 可以将缓存容量设为 512 MiB。程序自动将清理目标设为容量的 75%，此例对应 384 MiB。
 
@@ -28,7 +28,7 @@ token 文件必须是普通文件，最多 4096 字节，去除首尾空白后�
 
 ## 热更新与 Dashboard 设置
 
-在 Dashboard 左侧选择“设置”，或访问 `/settings`，使用管理员 token 认证。页面支持修改 S3 连接与访问凭据、以 GiB 为单位的本地缓存容量，以及 HTTP Origin 允许列表。选择 S3 模式时显示缓存容量；本地模式保留已保存的容量值，供再次启用 S3 时使用。S3 连接设置保存后，在程序运行期间完成切换。保存会写入 daemon 启动时使用的同一个 `agentdrive.json`，并发布完整配置快照。配置文件保持原有顶层结构，保存时仍会省略采用默认值的可选字段。
+在 Dashboard 左侧选择“设置”，或访问 `/settings`，使用管理员 token 认证。页面可以选择本地、S3 或 OpenCSG Codes 存储，修改 S3 连接与凭据、OpenCSG 域名与仓库及 token、本地缓存容量，以及 HTTP Origin 允许列表。两种远程后端均显示缓存容量，本地模式保留已保存的容量值。连接设置保存后，在程序运行期间完成切换。保存会写入 daemon 启动时使用的同一个 `agentdrive.json`，并发布完整配置快照。这些设置适用于该 daemon 的全部工作区。配置文件保持原有顶层结构，保存时仍会省略采用默认值的可选字段。
 
 | 配置 | 生效时间 |
 | --- | --- |
@@ -47,7 +47,7 @@ Origin 使用 HTTP 或 HTTPS 的 `scheme://host[:port]` 格式，不包含路径
 - `GET /api/settings`：返回当前 `runtime`、只读 `startup` 字段、`config_path`、配置版本 `revision` 和 `reload_error`。
 - `PUT /api/settings`：提交 `{ "revision": "<GET 返回的版本>", "runtime": { "cache": { ... }, "allowed_origins": [], "remote": null } }`。需要提供 GET 返回的完整运行配置，成功后返回保存的设置。
 
-两个接口都要求身份属于 `administrators`，工作区授权不会授予设置权限。响应包含 token 文件路径，但不会返回 token 内容或 S3 环境凭据。缺少认证返回 401，设置权限不足返回 403，版本过期或检测到外部文件修改返回 409。校验失败时，当前配置和文件保持原有内容。页面检测到新版本时会保留尚未保存的表单内容，由用户选择重新载入。
+两个接口都要求身份属于 `administrators`，工作区授权不会授予设置权限。响应包含 token 文件路径，但不会返回 token 内容、已保存的 OpenCSG token 或 S3 环境凭据。缺少认证返回 401，设置权限不足返回 403，版本过期或检测到外部文件修改返回 409。校验失败时，当前配置和文件保持原有内容。页面检测到新版本时会保留尚未保存的表单内容，由用户选择重新载入。
 
 ## 本地缓存容量
 
@@ -57,13 +57,53 @@ Origin 使用 HTTP 或 HTTPS 的 `scheme://host[:port]` 格式，不包含路径
 
 ## 运行期间切换存储
 
-在设置页面选择本地或 S3 模式，保存即可切换。`remote.enabled: false` 保留 S3 配置和凭据，便于再次启用。直接修改配置文件也使用相同的切换过程。
+在设置页面选择本地、S3 或 OpenCSG 模式，保存即可切换。`remote.enabled: false` 保留当前远程配置和凭据，便于再次启用。每次保存一份远程后端配置。直接修改配置文件也使用相同的切换过程。
 
-启用 S3 时检查目标的读取、条件写入与删除权限，复制本地已知的历史内容和分支引用，随后保存配置并更换连接。切换回本地时补齐已被缓存清理的历史内容，并停止清理本地历史文件。工作目录和挂载继续使用；待同步操作保留到下一次启用 S3。
+启用远程后端时检查目标连接和条件写入行为，复制本地已知的历史内容和分支引用，随后保存配置并更换连接。S3 与 OpenCSG 之间的切换复用此流程，并保留 AgentDrive revision ID 和历史关系。切换回本地时补齐已被缓存清理的历史内容，并停止清理本地历史文件。工作目录和挂载继续使用；待同步操作保留到下一次启用远程存储。
 
-切换期间部分操作会等待历史内容传输完成。内容缺失、存储空间不足、目标分支已更新、凭据错误或配置保存失败时，当前连接继续有效。目标可能已经收到部分不可变对象和分支引用，重复提交会继续处理。拥有尚未完成的分支所有权转移时，需要完成该操作后才能切换。配置文件的外部修改失败时保留原有运行配置，页面显示错误，后续检查继续尝试。S3 连接检查会创建并删除命名空间内的 `.connection-check/` 临时对象。
+切换期间部分操作会等待历史内容传输完成。内容缺失、存储空间不足、目标分支已更新、凭据错误或配置保存失败时，当前连接继续有效。目标可能已经收到部分不可变对象和分支引用，重复提交会继续处理。拥有尚未完成的分支所有权转移时，需要完成该操作后才能切换。配置文件的外部修改失败时保留原有运行配置，页面显示错误，后续检查继续尝试。S3 连接检查会创建并删除命名空间内的 `.connection-check/` 临时对象。OpenCSG 检查使用 `<prefix>/checks/` 下的临时文件，结束后尝试删除；这些操作仍会保存在仓库的 Git 历史中。
 
-`<data_dir>/meta.db` 是本地 SQLite 数据库，并使用 WAL 文件。S3 同步上传不可变文件内容、目录和 inode 索引、版本历史、已发布的操作结果、工作区控制记录和分支引用；数据库文件本身不会上传。目标 daemon 通过 `sync` 的 `direction: "pull"` 将已发布记录导入自己的数据库。本机身份、分支选择、挂载、缓存保留设置、尚未完成的工作和配置分别由各台机器管理。存储结构见[架构说明](architecture.zh-CN.md)。
+`<data_dir>/meta.db` 是本地 SQLite 数据库，并使用 WAL 文件。远程同步上传不可变文件内容、目录和 inode 索引、版本历史、已发布的操作结果、工作区控制记录和分支引用；数据库文件本身不会上传。目标 daemon 通过 `sync` 的 `direction: "pull"` 将已发布记录导入自己的数据库。本机身份、分支选择、挂载、缓存保留设置、尚未完成的工作和配置分别由各台机器管理。存储结构见[架构说明](architecture.zh-CN.md)。
+
+## OpenCSG Codes 字段
+
+创建专用 Codes 仓库，并通过添加 README 等方式初始化存储分支。在 Dashboard 设置中选择 **OpenCSG Codes**，填写域名、`namespace/repository`、分支和访问 token，保存即可。token 需要仓库文件的读写权限。对应的配置如下：
+
+```json
+{
+  "remote": {
+    "backend": "opencsg",
+    "enabled": true,
+    "endpoint": "https://opencsg-stg.com",
+    "repository": "your-namespace/agentdrive-storage",
+    "branch": "main",
+    "prefix": "agentdrive/v1",
+    "token": "your-access-token",
+    "allow_http": false
+  }
+}
+```
+
+| `remote` 字段 | 必填要求 / 默认值 | 行为 |
+| --- | --- | --- |
+| `backend` | 必填，`opencsg` | 选择 Codes HTTP 适配器。 |
+| `enabled` | `true` | 设置为 `false` 使用本地模式，并保留此配置。 |
+| `endpoint` | 必填 | HTTP(S) 域名，可包含端口。不包含 API 路径、凭据、查询参数或 fragment。HTTP 需要 `allow_http: true`。 |
+| `repository` | 必填 | 已有 Codes 仓库，使用 `namespace/name` 格式。 |
+| `branch` | `main` | 已存在且初始化完成的存储分支，名称不包含 `/`。 |
+| `prefix` | `agentdrive/v1` | 此分支中保存 AgentDrive 数据的目录。 |
+| `token` | 必填 | 仓库访问 token，通过 Bearer 认证发送。 |
+| `allow_http` | `false` | 明确启用 HTTP 开发环境地址。 |
+
+仓库名称的各个部分、分支名和目录的各级名称支持 ASCII 字母、数字、`-`、`_` 和 `.`，拒绝首尾句点、连续句点及 `.lock` 后缀。
+
+Dashboard 将 token 保存在配置文件中，Unix 文件权限为 `0600`。GET 设置接口返回空 token。保存时只有域名和仓库均未改变，空 token 才会保留已有值；修改其中任意字段后，需要重新填写 token。HTTP 请求拒绝跳转，错误信息不会包含服务端响应正文。
+
+适配器使用已有的 Codes 文件 HTTP API。读取指定 Git commit 的内容，写入通过 `start_sha` 检查分支当前版本。连接检查验证正常更新、拒绝过期版本更新和重复创建时保留已有文件的行为。服务行为不兼容或检查结果无法确认时，配置不会启用。启动支持离线工作，首次写入执行相同检查。
+
+AgentDrive 继续管理 workspace、branch、autosave、commit、merge、操作结果和写入所有权。Git commit 记录每次存储操作，因此一个 AgentDrive revision 可以产生多个 Git commit。仓库内容使用 AgentDrive 内部格式：每个不可变对象包含 manifest 和最大 4 MiB 的数据块，通过 SHA-256 校验；base64 文本保证二进制内容经过 JSON 文件接口后保持完整。远程引用沿用 S3 后端使用的 AgentDrive 元数据。
+
+存储分支及其内部文件交由 AgentDrive 管理。远程物理删除尚未启用，Git 历史保留存储修改记录，需要为 base64 编码和 Git 历史增长准备容量。每个对象可能产生多次 HTTP 请求和 Git commit，传输时间受仓库大小和服务响应时间影响。AgentDrive 所在机器无需安装 Git 命令。
 
 ## S3 字段
 
@@ -85,6 +125,7 @@ Origin 使用 HTTP 或 HTTPS 的 `scheme://host[:port]` 格式，不包含路径
 
 | `remote` 字段 | 必填要求 / 默认值 | 行为 |
 | --- | --- | --- |
+| `backend` | `s3` | 已有 S3 配置可以继续省略此字段。 |
 | `enabled` | `true` | 设置为 `false` 使用本地模式，并保留 S3 配置。 |
 | `credentials` | 省略或 `null` | 使用服务环境或 IAM 角色；也可以填写 `access_key_id`、`secret_access_key` 和可选的 `session_token`。 |
 | `bucket` | 必填，非空字符串 | 已存在的 bucket 名称。守护进程不会创建 bucket。 |
@@ -106,7 +147,7 @@ Origin 使用 HTTP 或 HTTPS 的 `scheme://host[:port]` 格式，不包含路径
 }
 ```
 
-## 凭据与环境变量优先级
+## S3 凭据与环境变量优先级
 
 Dashboard 可以编辑并保存 S3 凭据到配置文件，Unix 保存权限为 `0600`。GET 设置接口会清空 `secret_access_key` 和 `session_token`；PUT 中同一个 Access Key ID 的空密钥表示保留已有凭据。修改 Session Token 时同时填写 Secret Access Key；将 `credentials` 设为 `null` 使用环境凭据。配置中的凭据优先于环境凭据。
 
@@ -133,7 +174,7 @@ PowerShell 使用 `$env:AWS_ACCESS_KEY_ID = 'your-access-key-id'` 和 `$env:AWS_
 
 AgentDrive 调用 `AmazonS3Builder::from_env()` 后应用自身配置。配置中的 `bucket`、`region` 和 `allow_http`，包括默认值，都会覆盖对应的 AWS 环境变量。配置中的 `endpoint` 会覆盖 `AWS_ENDPOINT` 和 `AWS_ENDPOINT_URL_S3`。省略 `endpoint` 时沿用环境设置；使用默认 AWS regional endpoint 时，需要移除这两个环境变量。适配器会选择 path-style 请求和基于 ETag 的条件写入。
 
-## 存储要求与验证
+## S3 存储要求与同步验证
 
 存储服务需要支持 GET/HEAD、按前缀列举、对象写入、分段上传和终止上传，以及强一致读取。AgentDrive 使用 `If-None-Match: *` 创建不可变对象，并以相同条件完成分段上传；更新引用时使用携带之前 ETag 的 `If-Match`。条件写入行为见 [AWS S3 文档](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)。大于 8 MiB 的文件使用分段上传，分段大小根据文件大小在 8 至 64 MiB 之间选择。存储凭据权限应限制在选定的 bucket 和命名空间内。
 
@@ -146,14 +187,14 @@ jq -n --arg operation "$(jq -r '.id' "$AGENTDRIVE_DIRECTORY/demo-import.json")" 
   agentdrive call operation_get --json -
 ```
 
-检查原始操作的 `remote_confirmed`。`workspace_status.capabilities.remote_configured` 表示当前是否启用 S3，`pending_jobs` 表示队列长度。保存了 S3 配置但设置 `remote.enabled: false` 时，返回 `remote_configured: false`。启用 S3 后，守护进程每三秒重试待同步任务。`local_saved: true` 的结果记录仍然可能包含远端错误；请保留 operation ID，并参考[恢复说明](operations.zh-CN.md)。
+检查原始操作的 `remote_confirmed`。`workspace_status.capabilities.remote_configured` 表示当前是否启用 S3 或 OpenCSG，`pending_jobs` 表示队列长度。保存配置但设置 `remote.enabled: false` 时，返回 `remote_configured: false`。启用远程存储后，守护进程每三秒重试待同步任务。`local_saved: true` 的结果记录仍然可能包含远端错误；请保留 operation ID，并参考[恢复说明](operations.zh-CN.md)。
 
 要检查条件写入、并发更新、20 MiB 分段内容和两个守护进程之间的同步，请使用隔离的 [S3/RustFS 测试](validation.zh-CN.md)。这些测试使用独立的测试 bucket，不适合作为生产环境健康检查。
 
 ## 多台机器
 
-各守护进程需要配置相同的 S3 endpoint、bucket、prefix 和签名 region。每台机器分别初始化状态目录并获得自己的 `LocationId`，然后使用源守护进程返回的 workspace ID。目标机器上通过身份验证的 principal 需要是工作区所有者，或者获得适当授权。各机器的 token 可以不同。
+各守护进程需要选择相同后端和目标：S3 使用相同的 endpoint、bucket、prefix 和签名 region；OpenCSG 使用相同的域名、仓库、存储分支和 prefix。每台机器分别初始化状态目录并获得自己的 `LocationId`，然后使用源守护进程返回的 workspace ID。目标机器上通过身份验证的 principal 需要是工作区所有者，或者获得适当授权。各机器的 token 可以不同。
 
 在源机器执行推送，然后在目标机器使用相同 workspace ID 调用 `sync`，设置 `direction: "pull"`。拉取会导入历史和远端分支引用。可以使用已保留的版本创建本地分支；需要接管已有可写分支时，完成在线 `ownership_transfer`。详见[操作说明](operations.zh-CN.md)和 [MCP 参考](mcp.zh-CN.md)。
 
-配置定义见[文件结构](../crates/agentdrive-config/src/file.rs)、[运行配置管理](../crates/agentdrive-config/src/store.rs)和 [S3 适配器](../crates/agentdrive-s3/src/lib.rs)，依赖版本见 [Cargo.lock](../Cargo.lock)。
+配置定义见[文件结构](../crates/agentdrive-config/src/file.rs)、[远程配置](../crates/agentdrive-config/src/remote.rs)、[运行配置管理](../crates/agentdrive-config/src/store.rs)、[S3 适配器](../crates/agentdrive-s3/src/lib.rs)和 [OpenCSG 适配器](../crates/agentdrive-opencsg/src/lib.rs)，依赖版本见 [Cargo.lock](../Cargo.lock)。

@@ -1,4 +1,4 @@
-use crate::{CacheConfig, RuntimeConfig, S3Config};
+use crate::{CacheConfig, RemoteConfig, RuntimeConfig};
 use agentdrive_model::*;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -12,7 +12,7 @@ use std::{
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote: Option<S3Config>,
+    pub remote: Option<RemoteConfig>,
     #[serde(flatten)]
     pub startup: StartupConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

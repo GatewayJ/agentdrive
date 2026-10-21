@@ -274,6 +274,10 @@ pub trait RemoteObjectStore: Send + Sync {
 
 #[async_trait]
 pub trait RemoteRefStore: Send + Sync {
+    /// Verify the configured service before applying a storage change.
+    async fn check_connection(&self) -> Result<()> {
+        Ok(())
+    }
     async fn get(&self, key: &RefKey) -> Result<Option<VersionedRef>>;
     async fn compare_exchange(&self, update: RefUpdate) -> Result<CasOutcome>;
     async fn list_branches(&self, workspace: WorkspaceId) -> Result<Vec<BranchId>>;
