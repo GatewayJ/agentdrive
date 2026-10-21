@@ -32,6 +32,8 @@ pub struct LocalCommit {
     pub checkpointed_branches: Vec<BranchId>,
     pub revisions: Vec<Revision>,
     pub operations: Vec<OperationRecord>,
+    /// Published receipts from other locations, addressable by operation ID.
+    pub replicated_operations: Vec<OperationRecord>,
     /// Expected receipts, compared atomically before applying any changes.
     pub operation_guards: Vec<OperationRecord>,
     pub mounts: Vec<MountBinding>,
