@@ -32,6 +32,8 @@ pub struct LocalCommit {
     pub checkpointed_branches: Vec<BranchId>,
     pub revisions: Vec<Revision>,
     pub operations: Vec<OperationRecord>,
+    /// Published receipts from other locations, addressable by operation ID.
+    pub replicated_operations: Vec<OperationRecord>,
     /// Expected receipts, compared atomically before applying any changes.
     pub operation_guards: Vec<OperationRecord>,
     pub mounts: Vec<MountBinding>,
@@ -274,6 +276,10 @@ pub trait RemoteObjectStore: Send + Sync {
 
 #[async_trait]
 pub trait RemoteRefStore: Send + Sync {
+    /// Verify the configured service before applying a storage change.
+    async fn check_connection(&self) -> Result<()> {
+        Ok(())
+    }
     async fn get(&self, key: &RefKey) -> Result<Option<VersionedRef>>;
     async fn compare_exchange(&self, update: RefUpdate) -> Result<CasOutcome>;
     async fn list_branches(&self, workspace: WorkspaceId) -> Result<Vec<BranchId>>;

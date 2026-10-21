@@ -125,9 +125,9 @@ Call `workspace_status` for an existing workspace and inspect `capabilities`:
 | `format_version` | Persisted format version, currently `1`. |
 | `platform_mount` | `linux-fuse`, `windows-winfsp`, `macos-macfuse`, `macos-fuse-t`, or `macos-macfuse-feature-required`, according to the build. This describes the compiled adapter; a successful mount also needs the OS driver and permissions. |
 | `file_operations` | `lookup`, `getattr`, `readdir`, `create`, `mkdir`, `read`, `write`, `truncate`, `chmod`, `rename`, `unlink`, `rmdir`, `fsync`. These describe mounted filesystem operations. |
-| `remote_configured` | Whether S3 is currently enabled; a saved profile with `enabled: false` returns `false`. This flag does not test connectivity or credentials. |
+| `remote_configured` | Whether S3 or OpenCSG is currently enabled; a saved profile with `enabled: false` returns `false`. This flag does not test connectivity or credentials. |
 | `automatic_text_merge` | `false`; conflicts require explicit resolution. |
-| `physical_remote_gc` | `false`; automatic deletion of unreferenced historical objects in S3 is disabled. |
+| `physical_remote_gc` | `false`; automatic deletion of unreferenced historical objects in remote storage is disabled. |
 
 File editing normally uses the mounted native path; the MCP tools manage workspaces, versions, and lifecycle. The catalog marks the ten queries `readOnlyHint: true` and `destructiveHint: false`; commands and cancellation use the opposite values. All tools currently advertise `idempotentHint: true` and `openWorldHint: true`. These annotations describe tool behavior; authentication, grants, request identities, and state checks enforce access and retries.
 

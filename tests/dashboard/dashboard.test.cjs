@@ -102,6 +102,62 @@ async function openRevision(page, id = 'child-autosave') {
 }
 function differenceReads(requests) { return requests.filter(url => /\/(changes|diff)$/.test(url.pathname)); }
 
+test('settings configure OpenCSG credentials, preserve blank tokens and isolate storage forms', async t => {
+  const page = await browser.newPage({viewport:{width:1440,height:1100}});
+  const errors = [], updates = [];
+  page.on('pageerror', error => errors.push(error.message));
+  t.after(async () => { await page.close(); assert.deepEqual(errors, []); });
+  await page.addInitScript(() => sessionStorage.setItem('agentdrive-token', 'test-token'));
+  let settings = {revision:'initial-settings', config_path:'/private/agentdrive.json', reload_error:null,
+    runtime:{remote:null, cache:{max_bytes:2147483648}, allowed_origins:[]},
+    startup:{listen:'127.0.0.1:7421',data_dir:'/private/data',mount_roots:[],directory_roots:[],credentials:[],administrators:['owner']}};
+  await page.route('**/api/**', async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/workspaces') return route.fulfill({json:[]});
+    if (url.pathname !== '/api/settings') return route.fulfill({status:404,json:{error:{message:'Unknown endpoint'}}});
+    if (route.request().method() === 'PUT') {
+      const request = route.request().postDataJSON(); updates.push(request);
+      settings = {...settings,revision:'settings-'+updates.length,runtime:structuredClone(request.runtime)};
+      if (settings.runtime.remote?.backend === 'opencsg') settings.runtime.remote.token = '';
+    }
+    return route.fulfill({json:settings});
+  });
+  await page.goto(endpoint+'/settings');
+  await page.locator('#settings-form').waitFor();
+  await page.locator('#storage-mode').selectOption('opencsg');
+  assert.equal(await page.locator('#s3-fields').isVisible(), false);
+  assert.equal(await page.locator('#s3-bucket').isDisabled(), true);
+  await page.locator('#opencsg-endpoint').fill('https://opencsg-stg.com');
+  await page.locator('#opencsg-repository').fill('owner/storage');
+  await page.locator('#opencsg-token').fill('new-private-token');
+  assert.equal(await page.locator('#opencsg-token').getAttribute('type'), 'password');
+  async function save() {
+    const response = page.waitForResponse(r => r.url().endsWith('/api/settings') && r.request().method() === 'PUT');
+    await page.locator('#settings-save').click(); await response;
+    await page.waitForFunction(() => document.querySelector('#settings-save').disabled);
+  }
+  await save();
+  assert.equal(updates[0].runtime.remote.backend, 'opencsg');
+  assert.equal(updates[0].runtime.remote.token, 'new-private-token');
+  assert.equal(updates[0].runtime.remote.endpoint, 'https://opencsg-stg.com');
+  assert.equal(await page.locator('#opencsg-token').inputValue(), '');
+  await page.locator('#cache-max').fill('3'); await save();
+  assert.equal(updates[1].runtime.remote.token, '');
+  assert.equal(updates[1].runtime.cache.max_bytes, 3221225472);
+  await page.locator('#opencsg-endpoint').fill('https://another.example.com');
+  assert.equal(await page.locator('#opencsg-token').evaluate(input => input.required), true);
+  await page.locator('#opencsg-token').fill('replacement-token'); await save();
+  assert.equal(updates[2].runtime.remote.token, 'replacement-token');
+  await page.locator('#storage-mode').selectOption('local'); await save();
+  assert.equal(updates[3].runtime.remote.enabled, false);
+  assert.equal(await page.locator('#cache-panel').isVisible(), false);
+  await page.locator('#storage-mode').selectOption('s3');
+  await page.locator('#s3-bucket').fill('bucket'); await save();
+  assert.equal(updates[4].runtime.remote.backend, 's3');
+  assert.equal('token' in updates[4].runtime.remote, false);
+  assert.equal(await page.locator('#opencsg-token').isDisabled(), true);
+});
+
 test('history contains only revisions authored on the selected branch, including an empty child', async t => {
   const {page} = await open(t);
   assert.deepEqual(await page.locator('.revision-title').allTextContents(), ['child-autosave']);

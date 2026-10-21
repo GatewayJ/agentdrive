@@ -160,6 +160,117 @@ fn unknown_database_format_is_unchanged() {
 }
 
 #[tokio::test]
+async fn replicated_receipts_preserve_local_request_identity_across_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let backend = LocalBackend::open(directory.path()).unwrap();
+    let workspace = WorkspaceId::new();
+    let mut first = operation("save");
+    first.workspace = Some(workspace);
+    let mut second = first.clone();
+    second.id = OperationId::new();
+    second.fingerprint = object_ref(ObjectKind::RecordIndex, b"second location").id;
+    backend
+        .commit(LocalCommit {
+            replicated_operations: vec![first.clone(), second.clone()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        backend
+            .operation_by_request(&first.principal, "save")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut local = operation("save");
+    local.workspace = Some(workspace);
+    assert!(
+        backend
+            .reserve_operation(local.clone())
+            .await
+            .unwrap()
+            .created
+    );
+    backend
+        .commit(LocalCommit {
+            replicated_operations: vec![first.clone(), second.clone(), local.clone()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    drop(backend);
+    let backend = LocalBackend::open(directory.path()).unwrap();
+    for record in [&first, &second, &local] {
+        assert_eq!(
+            backend.operation(record.id).await.unwrap().as_ref(),
+            Some(record)
+        );
+    }
+    assert_eq!(backend.operations(workspace).await.unwrap().len(), 3);
+    assert_eq!(
+        backend
+            .operation_by_request(&local.principal, "save")
+            .await
+            .unwrap(),
+        Some(local.clone())
+    );
+    let replay = backend.reserve_operation(operation("save")).await.unwrap();
+    assert!(!replay.created);
+    assert_eq!(replay.record.id, local.id);
+    let mut conflict = first.clone();
+    conflict.fingerprint = object_ref(ObjectKind::RecordIndex, b"changed identity").id;
+    assert_eq!(
+        backend
+            .commit(LocalCommit {
+                replicated_operations: vec![conflict],
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::RequestIdConflict
+    );
+}
+
+#[tokio::test]
+async fn existing_databases_add_replication_receipts_without_changing_local_requests() {
+    let directory = tempfile::tempdir().unwrap();
+    let backend = LocalBackend::open(directory.path()).unwrap();
+    let local = operation("existing");
+    backend.reserve_operation(local.clone()).await.unwrap();
+    let location = backend.location().await.unwrap();
+    drop(backend);
+    let database = rusqlite::Connection::open(directory.path().join("meta.db")).unwrap();
+    database
+        .execute_batch("DROP TABLE replicated_operations")
+        .unwrap();
+    drop(database);
+    let backend = LocalBackend::open(directory.path()).unwrap();
+    assert_eq!(backend.location().await.unwrap(), location);
+    assert_eq!(
+        backend
+            .operation_by_request(&local.principal, "existing")
+            .await
+            .unwrap(),
+        Some(local)
+    );
+    let mut imported = operation("existing");
+    imported.workspace = Some(WorkspaceId::new());
+    backend
+        .commit(LocalCommit {
+            replicated_operations: vec![imported.clone()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        backend.operation(imported.id).await.unwrap(),
+        Some(imported)
+    );
+}
+
+#[tokio::test]
 async fn object_usage_survives_duplicates_reopen_and_removal() {
     let dir = tempfile::tempdir().unwrap();
     let backend = LocalBackend::open(dir.path()).unwrap();

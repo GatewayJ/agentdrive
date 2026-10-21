@@ -1,4 +1,4 @@
-# Configuration and S3
+# Configuration and remote storage
 
 [English](configuration.md) | [简体中文](configuration.zh-CN.md)
 
@@ -17,8 +17,8 @@ The generated file contains `data_dir`, `listen`, `mount_roots`, `directory_root
 | `credentials` | Required array of `{ "principal": "owner", "token_file": "/absolute/path/token" }`. At least one credential is required. |
 | `administrators` | Principals allowed to read and change daemon settings, default `["owner"]`. Independent of workspace grants; changes require a restart. |
 | `allowed_origins` | HTTP Origin allowlist, default `[]`. CLI and stdio connections do not send an Origin. |
-| `cache` | Optional object with one setting, `max_bytes`: local immutable-object cache capacity in bytes, default `2147483648` (2 GiB). Must be a positive integer. Used for cache collection while S3 is enabled. |
-| `remote` | S3 configuration below. Omitted or `null` means local storage only. |
+| `cache` | Optional object with one setting, `max_bytes`: local immutable-object cache capacity in bytes, default `2147483648` (2 GiB). Must be a positive integer. Used for cache collection while remote storage is enabled. |
+| `remote` | S3 or OpenCSG configuration below, selected by `backend`. Omitted or `null` means local storage only. Existing configurations without `backend` select S3. |
 
 For example, `"cache": { "max_bytes": 536870912 }` sets a 512 MiB cache capacity. The collector automatically targets 75% of the configured capacity, which is 384 MiB in this example.
 
@@ -28,7 +28,7 @@ Token files must be regular files, at most 4096 bytes, containing at least 32 no
 
 ## Runtime updates and dashboard settings
 
-Open **Settings** in the dashboard sidebar, or visit `/settings`. Authenticate with an administrator token. The form edits S3 connections and credentials, local cache capacity in GiB, and allowed HTTP origins. The cache field appears when S3 mode is selected; local mode retains its saved capacity for future S3 use. Saved S3 connection changes are applied while the daemon runs. Saving persists the changes to the same `agentdrive.json` used to start the daemon and publishes one configuration snapshot. The configuration retains its existing top-level structure; optional defaults remain omitted when saving.
+Open **Settings** in the dashboard sidebar, or visit `/settings`. Authenticate with an administrator token. Select local, S3, or OpenCSG Codes storage. The form edits S3 connections and credentials, OpenCSG domain/repository/token, local cache capacity in GiB, and allowed HTTP origins. The cache field appears for either remote backend; local mode retains its saved capacity. Connection changes apply while the daemon runs. Saving persists the changes to the same `agentdrive.json` used to start the daemon and publishes one configuration snapshot. Settings apply to all workspaces in that daemon. The configuration retains its existing top-level structure; optional defaults remain omitted when saving.
 
 | Configuration | Effective time |
 | --- | --- |
@@ -47,7 +47,7 @@ The authenticated HTTP interface provides:
 - `GET /api/settings`: active `runtime`, read-only `startup` fields, `config_path`, a `revision`, and `reload_error`.
 - `PUT /api/settings`: `{ "revision": "<revision from GET>", "runtime": { "cache": { ... }, "allowed_origins": [], "remote": null } }`. Supply the complete runtime object returned by GET. A successful response returns the saved settings.
 
-Both endpoints require membership in `administrators`; workspace grants do not grant settings access. Responses contain token-file paths but never token contents or S3 environment credentials. Missing authentication returns 401, insufficient settings access returns 403, and a stale revision or a detected external file edit returns 409. Validation failure preserves the active settings and file. The UI preserves unsaved form values when it detects a newer revision and offers an explicit reload action.
+Both endpoints require membership in `administrators`; workspace grants do not grant settings access. Responses contain token-file paths but never token contents, saved OpenCSG tokens, or S3 environment credentials. Missing authentication returns 401, insufficient settings access returns 403, and a stale revision or a detected external file edit returns 409. Validation failure preserves the active settings and file. The UI preserves unsaved form values when it detects a newer revision and offers an explicit reload action.
 
 ## Local cache capacity
 
@@ -57,13 +57,53 @@ Collection removes only remotely confirmed objects without active readers or pro
 
 ## Switching storage while running
 
-Select local or S3 mode in Settings and save. `remote.enabled: false` retains S3 settings and credentials for later use. Direct configuration-file edits use the same transition.
+Select local, S3, or OpenCSG mode in Settings and save. `remote.enabled: false` retains the selected remote profile and credentials for later use. One remote profile is stored at a time. Direct configuration-file edits use the same transition.
 
-Enabling S3 checks read, conditional-write and delete access, copies locally known history and branch references, then persists configuration and replaces the connection. Returning to local storage downloads evicted history and disables historical cache eviction. Mounts and working directories remain available; pending publications are retained until S3 is enabled again.
+Enabling a remote backend verifies its connection and conditional-write behavior, copies locally known history and branch references, then persists configuration and replaces the connection. Switching between S3 and OpenCSG uses this same process and preserves AgentDrive revision IDs and history. Returning to local storage downloads evicted history and disables historical cache eviction. Mounts and working directories remain available; pending publications are retained until remote storage is enabled again.
 
-Some operations wait while history is transferred. Missing content, insufficient local space, an advanced destination branch, credential errors or a configuration write failure retain the active connection. The destination may already contain immutable objects and references; retrying continues safely. Complete pending ownership transfers before changing storage. Failed external file edits retain the active runtime settings, display an error, and are retried by the file watcher. The connection check creates and deletes temporary objects beneath `.connection-check/` in the configured namespace.
+Some operations wait while history is transferred. Missing content, insufficient local space, an advanced destination branch, credential errors or a configuration write failure retain the active connection. The destination may already contain immutable objects and references; retrying continues safely. Complete pending ownership transfers before changing storage. Failed external file edits retain the active runtime settings, display an error, and are retried by the file watcher. S3 connection checks create and delete temporary objects beneath `.connection-check/` in the configured namespace. OpenCSG checks use temporary files beneath `<prefix>/checks/` and attempt cleanup afterward; these operations remain in the repository's Git history.
 
-`<data_dir>/meta.db` is a local SQLite database, with its WAL files. S3 synchronization uploads immutable file contents, directory/inode indexes, revision history, published operation receipts, workspace control records and branch references. It never uploads the database file. A destination daemon imports published records into its own database through `sync` with `direction: "pull"`. Local identity, branch selections, mounts, cache pins, pending work and configuration remain specific to each machine. See [architecture](architecture.md) for the storage layout.
+`<data_dir>/meta.db` is a local SQLite database, with its WAL files. Remote synchronization uploads immutable file contents, directory/inode indexes, revision history, published operation receipts, workspace control records and branch references. It never uploads the database file. A destination daemon imports published records into its own database through `sync` with `direction: "pull"`. Local identity, branch selections, mounts, cache pins, pending work and configuration remain specific to each machine. See [architecture](architecture.md) for the storage layout.
+
+## OpenCSG Codes fields
+
+Create a dedicated Codes repository and initialize its storage branch, for example by adding a README. In Dashboard Settings, select **OpenCSG Codes**, enter the domain, `namespace/repository`, branch and access token, then save. The token needs permission to read and write repository files. The equivalent configuration is:
+
+```json
+{
+  "remote": {
+    "backend": "opencsg",
+    "enabled": true,
+    "endpoint": "https://opencsg-stg.com",
+    "repository": "your-namespace/agentdrive-storage",
+    "branch": "main",
+    "prefix": "agentdrive/v1",
+    "token": "your-access-token",
+    "allow_http": false
+  }
+}
+```
+
+| `remote` field | Required / default | Behavior |
+| --- | --- | --- |
+| `backend` | Required: `opencsg` | Select the Codes HTTP adapter. |
+| `enabled` | `true` | Use `false` for local mode while retaining this profile. |
+| `endpoint` | Required | HTTP(S) origin, including an optional port. No API path, credentials, query or fragment. HTTP requires `allow_http: true`. |
+| `repository` | Required | Existing Codes repository in `namespace/name` form. |
+| `branch` | `main` | Existing, initialized storage branch. Use a simple name without `/`. |
+| `prefix` | `agentdrive/v1` | Directory for AgentDrive data within that branch. |
+| `token` | Required | Repository access token, sent as Bearer authorization. |
+| `allow_http` | `false` | Explicitly enable an HTTP development endpoint. |
+
+Repository components, the branch name, and prefix components accept ASCII letters, digits, `-`, `_`, and `.`. Leading/trailing dots, consecutive dots and `.lock` suffixes are rejected.
+
+The dashboard stores the token in the configuration file with Unix permissions `0600`. GET settings returns an empty token. Saving an empty token retains the saved value only when the domain and repository are unchanged; enter the token again when changing either destination field. HTTP redirects are rejected, and server response bodies are excluded from error messages.
+
+The adapter uses the existing Codes file HTTP API. Reading uses a pinned Git commit; writes supply `start_sha` as the expected branch head. Connection checks verify normal updates, rejection of stale updates, and preservation of existing files during repeated creation. An incompatible or inconclusive service response prevents activation. Startup remains available offline; the first write performs the same check.
+
+AgentDrive continues to manage workspace branches, autosaves, commits, merges, operation receipts and ownership. Git commits record individual storage operations, so an AgentDrive revision can require several Git commits. Repository contents use AgentDrive's internal format. Each immutable object has a manifest and SHA-256-verified chunks of up to 4 MiB; base64 text preserves binary content through the JSON file API. Remote references retain the same AgentDrive metadata used with S3.
+
+Keep the storage branch and its internal files under AgentDrive's control. Remote physical deletion is disabled; Git history retains storage updates. Allow capacity for base64 expansion and Git history growth. Each object can require several HTTP requests and Git commits, so transfer latency depends on repository size and service response time. No Git executable is required on the AgentDrive host.
 
 ## S3 fields
 
@@ -85,6 +125,7 @@ This is a configuration fragment for a local RustFS S3 API endpoint. Keep the ot
 
 | `remote` field | Required / default | Behavior |
 | --- | --- | --- |
+| `backend` | `s3` | Optional for compatibility with existing S3 configurations. |
 | `enabled` | `true` | Use `false` for local mode while retaining S3 settings. |
 | `credentials` | Omitted or `null` | Use the service environment or IAM role, or supply `access_key_id`, `secret_access_key`, and optional `session_token`. |
 | `bucket` | Required, nonempty string | Existing bucket name. The daemon does not create buckets. |
@@ -106,7 +147,7 @@ For AWS S3, replace the bucket and region, and omit a custom endpoint:
 }
 ```
 
-## Credentials and environment precedence
+## S3 credentials and environment precedence
 
 The dashboard can persist S3 credentials in the configuration file, using Unix mode `0600`. GET settings blanks `secret_access_key` and `session_token`; a PUT with the same Access Key ID and a blank secret retains the existing credentials. Supply the secret again when changing a session token. Set `credentials` to `null` to use environment credentials. Configured credentials override environment credentials.
 
@@ -133,7 +174,7 @@ The current adapter does not load `~/.aws/credentials`, `AWS_PROFILE`, or AWS CL
 
 AgentDrive calls `AmazonS3Builder::from_env()` and then applies its configuration. The configured `bucket`, `region`, and `allow_http` values, including their defaults, override the corresponding AWS environment settings. A configured `endpoint` overrides both `AWS_ENDPOINT` and `AWS_ENDPOINT_URL_S3`. When `endpoint` is omitted, environment settings remain effective; remove both environment variables to use the default AWS regional endpoint. Path-style requests and ETag conditional writes are selected by the adapter.
 
-## Storage requirements and verification
+## S3 requirements and synchronization verification
 
 The storage service must support GET/HEAD, listing by prefix, object writes, multipart upload and abort, and strongly consistent reads. AgentDrive creates immutable objects with `If-None-Match: *`, completes multipart uploads with the same condition, and updates references using `If-Match` with the previous ETag. Conditional write behavior is described in the [AWS S3 documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html). Files larger than 8 MiB use multipart upload; part sizes range from 8 to 64 MiB according to file size. Restrict storage credentials to the selected bucket and namespace.
 
@@ -146,14 +187,14 @@ jq -n --arg operation "$(jq -r '.id' "$AGENTDRIVE_DIRECTORY/demo-import.json")" 
   agentdrive call operation_get --json -
 ```
 
-Check `remote_confirmed` on the original operation. `workspace_status.capabilities.remote_configured` reports whether S3 is currently enabled, and `pending_jobs` reports the queue length. A saved profile with `remote.enabled: false` reports `remote_configured: false`. The daemon retries pending synchronization every three seconds while S3 is enabled. A `local_saved: true` receipt can still contain a remote error; retain its operation ID and follow [recovery guidance](operations.md).
+Check `remote_confirmed` on the original operation. `workspace_status.capabilities.remote_configured` reports whether S3 or OpenCSG is currently enabled, and `pending_jobs` reports the queue length. A saved profile with `remote.enabled: false` reports `remote_configured: false`. The daemon retries pending synchronization every three seconds while remote storage is enabled. A `local_saved: true` receipt can still contain a remote error; retain its operation ID and follow [recovery guidance](operations.md).
 
 For a compatibility check covering conditional writes, competing updates, 20 MiB multipart content, and two-daemon replication, use the isolated [S3/RustFS tests](validation.md). Those tests use a separate test bucket and are not a production health check.
 
 ## Multiple machines
 
-Configure each daemon with the same S3 endpoint, bucket, prefix, and signing region. Each machine needs its own initialized state directory and `LocationId`; share the workspace ID returned by the source daemon. The destination's authenticated principal must be the workspace owner or have suitable grants. Tokens can differ between machines.
+Configure each daemon with the same backend and destination: S3 endpoint, bucket, prefix and signing region, or OpenCSG domain, repository, storage branch and prefix. Each machine needs its own initialized state directory and `LocationId`; share the workspace ID returned by the source daemon. The destination's authenticated principal must be the workspace owner or have suitable grants. Tokens can differ between machines.
 
 Push on the source, then call `sync` with `direction: "pull"` and the same workspace ID on the destination. Pull imports history and remote branch references. Use a retained revision to create a local branch, or complete an online `ownership_transfer` before adopting an existing writable branch. See [operations](operations.md) and the [MCP reference](mcp.md).
 
-Configuration definitions: [schema](../crates/agentdrive-config/src/file.rs), [runtime store](../crates/agentdrive-config/src/store.rs), and [S3 adapter](../crates/agentdrive-s3/src/lib.rs). Dependency versions are recorded in [Cargo.lock](../Cargo.lock).
+Configuration definitions: [schema](../crates/agentdrive-config/src/file.rs), [remote profiles](../crates/agentdrive-config/src/remote.rs), [runtime store](../crates/agentdrive-config/src/store.rs), [S3 adapter](../crates/agentdrive-s3/src/lib.rs), and [OpenCSG adapter](../crates/agentdrive-opencsg/src/lib.rs). Dependency versions are recorded in [Cargo.lock](../Cargo.lock).

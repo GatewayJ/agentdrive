@@ -893,6 +893,7 @@ h1 {
 }
 
 .storage-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; }
+.storage-selector { margin-bottom:18px; }
 .storage-fields label { display:flex; flex-direction:column; gap:8px; font-size:13px; color:var(--muted); }
 .storage-fields input,.storage-fields select { width:100%; min-width:0; }
 .storage-check { display:flex; gap:10px; align-items:center; margin-top:18px; font-size:13px; }

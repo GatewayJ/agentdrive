@@ -697,6 +697,100 @@ async fn remote_outage_preserves_local_save_and_sync_confirms_lost_responses() {
 }
 
 #[tokio::test]
+async fn locations_reuse_request_labels_without_blocking_history_replication() {
+    let remote = Arc::new(MemoryRemote::default());
+    let first = Harness::new(Some(remote.clone())).await;
+    let second = Harness::new(Some(remote.clone())).await;
+    let workspace = first.workspace().await;
+    first.sync(workspace.id, SyncDirection::Push).await;
+    let mut receipts = Vec::new();
+    for (harness, name) in [(&first, "first"), (&second, "second")] {
+        harness.sync(workspace.id, SyncDirection::Pull).await;
+        let (binding, fs) = harness.branch_mount(workspace.id, name, None).await;
+        harness.write_new(&fs, "result.txt", name.as_bytes()).await;
+        let branch = harness.local.branch(binding.branch).await.unwrap().unwrap();
+        let receipt = success(
+            harness
+                .engine
+                .services
+                .revisions
+                .commit(
+                    RequestContext {
+                        principal: actor(),
+                        request_id: "save-result".into(),
+                    },
+                    CommitRevision {
+                        guard: BranchGuard::from(&branch),
+                        kind: CommitKind::Commit,
+                        message: Some(name.into()),
+                        durability: Durability::Remote,
+                    },
+                )
+                .await
+                .unwrap(),
+        );
+        assert!(receipt.remote_confirmed);
+        receipts.push(receipt);
+    }
+    first.sync(workspace.id, SyncDirection::Pull).await;
+    assert_eq!(
+        first
+            .engine
+            .services
+            .operations
+            .by_request(&actor(), "save-result")
+            .await
+            .unwrap()
+            .id,
+        receipts[0].id
+    );
+    assert_eq!(
+        second
+            .engine
+            .services
+            .operations
+            .by_request(&actor(), "save-result")
+            .await
+            .unwrap()
+            .id,
+        receipts[1].id
+    );
+    let third = Harness::new(Some(remote)).await;
+    third.sync(workspace.id, SyncDirection::Pull).await;
+    for (receipt, expected) in receipts.iter().zip(["first", "second"]) {
+        assert_eq!(
+            third
+                .engine
+                .services
+                .operations
+                .get(&actor(), receipt.id)
+                .await
+                .unwrap()
+                .result,
+            receipt.result
+        );
+        let Some(CommandResult::Revision { revision, .. }) = receipt.result else {
+            panic!("revision");
+        };
+        let bytes = third
+            .engine
+            .services
+            .revisions
+            .read_file(
+                &actor(),
+                workspace.id,
+                revision,
+                path("/result.txt"),
+                0,
+                1024,
+            )
+            .await
+            .unwrap();
+        assert_eq!(bytes, expected);
+    }
+}
+
+#[tokio::test]
 async fn ownership_transfer_stops_old_writer_and_adopts_on_new_location() {
     let remote = Arc::new(MemoryRemote::default());
     let first = Harness::new(Some(remote.clone())).await;

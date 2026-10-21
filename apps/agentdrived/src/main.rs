@@ -6,7 +6,6 @@ use agentdrive_mcp::{GatewayConfig, router};
 use agentdrive_model::*;
 use agentdrive_platform::{HostDirectories, NativeMountDriver, SystemClock, local_identity};
 use agentdrive_ports::*;
-use agentdrive_s3::S3Backend;
 use clap::{Parser, Subcommand};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
@@ -61,24 +60,14 @@ async fn serve(settings: Arc<ConfigStore>) -> Result<()> {
     let credentials = config.credentials()?;
     let local = Arc::new(LocalBackend::open(&config.data_dir)?);
     let driver = NativeMountDriver::new(config.mount_roots.clone())?;
-    let remote = settings
-        .live()
-        .load()
-        .values
-        .remote
-        .clone()
-        .filter(|remote| remote.enabled)
-        .map(S3Backend::new)
-        .transpose()?;
+    let remote = settings::remote_storage(settings.live().load().values.remote.as_ref())?;
     let engine = Engine::open(
         Adapters {
             state: local.clone(),
             objects: local.clone(),
             working: local.clone(),
-            remote_objects: remote
-                .clone()
-                .map(|store| store as Arc<dyn RemoteObjectStore>),
-            remote_refs: remote.map(|store| store as Arc<dyn RemoteRefStore>),
+            remote_objects: remote.as_ref().map(|store| store.objects.clone()),
+            remote_refs: remote.map(|store| store.refs),
             clock: Arc::new(SystemClock::default()),
             mounts: driver,
             directories: HostDirectories::new(config.directory_roots.clone())?,

@@ -125,9 +125,9 @@ jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 | `format_version` | 持久化格式版本，当前为 `1`。 |
 | `platform_mount` | 根据构建结果返回 `linux-fuse`、`windows-winfsp`、`macos-macfuse`、`macos-fuse-t` 或 `macos-macfuse-feature-required`。该值表示已编译的适配器；挂载成功还需要操作系统驱动和权限。 |
 | `file_operations` | `lookup`、`getattr`、`readdir`、`create`、`mkdir`、`read`、`write`、`truncate`、`chmod`、`rename`、`unlink`、`rmdir`、`fsync`，表示挂载文件系统支持的操作。 |
-| `remote_configured` | 当前是否启用 S3；保存的配置为 `enabled: false` 时返回 `false`。此字段不会测试连接或凭据。 |
+| `remote_configured` | 当前是否启用 S3 或 OpenCSG；保存的配置为 `enabled: false` 时返回 `false`。此字段不会测试连接或凭据。 |
 | `automatic_text_merge` | `false`，冲突需要明确解决。 |
-| `physical_remote_gc` | `false`，自动删除 S3 中不再被引用的历史对象的功能已禁用。 |
+| `physical_remote_gc` | `false`，自动删除远程存储中不再被引用的历史对象的功能已禁用。 |
 
 文件编辑通常通过挂载后的原生路径完成，MCP 工具负责工作区、版本和生命周期管理。工具目录将十个查询标记为 `readOnlyHint: true`、`destructiveHint: false`；命令和取消操作使用相反的值。全部工具当前声明 `idempotentHint: true` 和 `openWorldHint: true`。这些 annotations 描述工具行为，访问和重试由身份验证、授权、请求身份和状态检查控制。
 

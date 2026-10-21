@@ -422,7 +422,7 @@ impl ReplicaService {
                         return Err(Error::integrity("operation belongs to another workspace"));
                     }
                     if self.runtime.state.operation(operation.id).await?.is_none() {
-                        commit.operations.push(*operation);
+                        commit.replicated_operations.push(*operation);
                     }
                 }
             }
