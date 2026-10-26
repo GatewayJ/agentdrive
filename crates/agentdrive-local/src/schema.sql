@@ -22,6 +22,12 @@ CREATE TABLE IF NOT EXISTS operations (
     data BLOB NOT NULL,
     UNIQUE(principal, request_id)
 );
+CREATE TABLE IF NOT EXISTS replicated_operations (
+    id TEXT PRIMARY KEY,
+    workspace TEXT NOT NULL,
+    data BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS replicated_operations_workspace ON replicated_operations(workspace);
 CREATE TABLE IF NOT EXISTS mounts (
     id TEXT PRIMARY KEY,
     path TEXT NOT NULL,

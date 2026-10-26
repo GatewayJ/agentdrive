@@ -420,6 +420,9 @@ impl RemoteObjectStore for S3Backend {
 
 #[async_trait]
 impl RemoteRefStore for S3Backend {
+    async fn check_connection(&self) -> Result<()> {
+        S3Backend::check_connection(self).await
+    }
     async fn get(&self, key: &RefKey) -> Result<Option<VersionedRef>> {
         let result = match self.client.get(&self.ref_key(key)).await {
             Ok(result) => result,

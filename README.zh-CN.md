@@ -18,7 +18,7 @@ AgentDrive 给人和 Agent 一个可以持续使用的项目空间。Agent 在�
 
 | 使用场景 | AgentDrive 帮你完成的事情 |
 | --- | --- |
-| 本地工作，远程保存 | Agent 像使用普通目录一样工作，成果保存在本机，并通过配置的 S3 / RustFS 同步到远端。 |
+| 本地工作，远程保存 | Agent 像使用普通目录一样工作，成果保存在本机，并通过配置的 S3 / RustFS 或 OpenCSG Codes 同步到远端。 |
 | 异地 Agent 接手 | 把任务说明、输入资料、阶段成果与下一步一起保存；目标机器拉取后继续处理。 |
 | 多个 Agent 并行尝试 | 从同一份资料创建分支，各自完成分析或实现，检查差异后合并成果。 |
 | 人随时检查进展 | 在档案室选择项目和分支，直接阅读文件；进入分支与版本查看来源、历史和修改内容。 |
@@ -37,7 +37,7 @@ Agent 通过 MCP 创建、挂载或转换工作区，随后继续使用普通文
 
 ### 2. 将本地成果同步到远端
 
-在 Dashboard 的 **设置** 中连接 S3 或 RustFS，填写 Endpoint、Bucket 和凭据。多台机器使用相同的 Bucket、Prefix 与项目访问身份，各自保留独立的本地配置和数据目录。[连接说明](docs/configuration.zh-CN.md)
+在 Dashboard 的 **设置** 中选择远程后端。S3 / RustFS 填写 Endpoint、Bucket 和凭据，OpenCSG Codes 填写域名、仓库和访问 token。多台机器使用相同的存储目标与项目访问身份，各自保留独立的本地配置和数据目录。[连接说明](docs/configuration.zh-CN.md)
 
 > 将当前分支的成果保存到远端。确认远端保存成功后，告诉我 workspace ID、分支、版本以及交接说明的位置。
 
@@ -95,7 +95,7 @@ Agent 可以通过 `mount_save` 请求远端保存，并通过操作结果检查
 
 目前从源码构建，支持 Linux、macOS 和 Windows。原生目录挂载分别需要 FUSE、FUSE-T / macFUSE 或 WinFsp。[安装、平台依赖与启动命令](docs/installation.zh-CN.md)
 
-- [配置远程存储](docs/configuration.zh-CN.md)：本地模式、S3、RustFS 与多台机器配置。
+- [配置远程存储](docs/configuration.zh-CN.md)：本地模式、S3、RustFS、OpenCSG Codes 与多台机器配置。
 - [操作与恢复](docs/operations.zh-CN.md)：远端确认、交接、分支合并及异常恢复。
 - [文档目录](docs/README.zh-CN.md)：完整使用参考与开发文档。
 

@@ -1,0 +1,32 @@
+[package]
+name = "agentdrive-opencsg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+agentdrive-config.workspace = true
+agentdrive-model.workspace = true
+agentdrive-ports.workspace = true
+async-trait.workspace = true
+base64 = "0.23"
+bytes.workspace = true
+futures.workspace = true
+reqwest = { version = "0.13", features = ["rustls", "json", "stream", "query"], default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+agentdrive-engine.workspace = true
+agentdrive-local.workspace = true
+agentdrive-test-support.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

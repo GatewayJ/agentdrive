@@ -160,6 +160,318 @@ fn unknown_database_format_is_unchanged() {
 }
 
 #[tokio::test]
+async fn replicated_receipts_preserve_local_request_identity_across_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let backend = LocalBackend::open(directory.path()).unwrap();
+    let workspace = WorkspaceId::new();
+    let mut first = operation("save");
+    first.workspace = Some(workspace);
+    let mut second = first.clone();
+    second.id = OperationId::new();
+    second.fingerprint = object_ref(ObjectKind::RecordIndex, b"second location").id;
+    backend
+        .commit(LocalCommit {
+            replicated_operations: vec![first.clone(), second.clone()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        backend
+            .operation_by_request(&first.principal, "save")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut local = operation("save");
+    local.workspace = Some(workspace);
+    assert!(
+        backend
+            .reserve_operation(local.clone())
+            .await
+            .unwrap()
+            .created
+    );
+    backend
+        .commit(LocalCommit {
+            replicated_operations: vec![first.clone(), second.clone(), local.clone()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    drop(backend);
+    let backend = LocalBackend::open(directory.path()).unwrap();
+    for record in [&first, &second, &local] {
+        assert_eq!(
+            backend.operation(record.id).await.unwrap().as_ref(),
+            Some(record)
+        );
+    }
+    assert_eq!(backend.operations(workspace).await.unwrap().len(), 3);
+    assert_eq!(
+        backend
+            .operation_by_request(&local.principal, "save")
+            .await
+            .unwrap(),
+        Some(local.clone())
+    );
+    let replay = backend.reserve_operation(operation("save")).await.unwrap();
+    assert!(!replay.created);
+    assert_eq!(replay.record.id, local.id);
+    let mut conflict = first.clone();
+    conflict.fingerprint = object_ref(ObjectKind::RecordIndex, b"changed identity").id;
+    assert_eq!(
+        backend
+            .commit(LocalCommit {
+                replicated_operations: vec![conflict],
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::RequestIdConflict
+    );
+}
+
+#[tokio::test]
+async fn existing_databases_add_replication_receipts_without_changing_local_requests() {
+    let directory = tempfile::tempdir().unwrap();
+    let backend = LocalBackend::open(directory.path()).unwrap();
+    let local = operation("existing");
+    backend.reserve_operation(local.clone()).await.unwrap();
+    let location = backend.location().await.unwrap();
+    drop(backend);
+    let database = rusqlite::Connection::open(directory.path().join("meta.db")).unwrap();
+    database
+        .execute_batch("DROP TABLE replicated_operations")
+        .unwrap();
+    drop(database);
+    let backend = LocalBackend::open(directory.path()).unwrap();
+    assert_eq!(backend.location().await.unwrap(), location);
+    assert_eq!(
+        backend
+            .operation_by_request(&local.principal, "existing")
+            .await
+            .unwrap(),
+        Some(local)
+    );
+    let mut imported = operation("existing");
+    imported.workspace = Some(WorkspaceId::new());
+    backend
+        .commit(LocalCommit {
+            replicated_operations: vec![imported.clone()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        backend.operation(imported.id).await.unwrap(),
+        Some(imported)
+    );
+}
+
+#[tokio::test]
+async fn legacy_imports_release_request_ids_and_preserve_local_retries() {
+    for has_replication_table in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::open(directory.path()).unwrap();
+        let location = backend.location().await.unwrap();
+        let workspace = WorkspaceId::new();
+        let mut imported = operation("save-result");
+        imported.workspace = Some(workspace);
+        imported.branch = Some(BranchId::new());
+        imported.name = "revision_commit".into();
+        imported.local_saved = true;
+        imported.remote_confirmed = has_replication_table;
+        imported.phase = OperationPhase::LocalSaved;
+
+        let root = backend
+            .put(workspace, ObjectKind::Tree, Bytes::from_static(b"tree"))
+            .await
+            .unwrap();
+        let revision = RevisionId::new();
+        let branch = Branch {
+            id: BranchId::new(),
+            workspace,
+            name: "transferred".into(),
+            owner: LocationId::new(),
+            authority_epoch: 2,
+            generation: 2,
+            mutation_seq: 0,
+            saved_seq: 0,
+            source_generation: 2,
+            formal_head: revision,
+            autosave_head: None,
+            working_root: root,
+            base_revision: revision,
+            source_branch: None,
+            next_inode: 2,
+            dirty: false,
+            state: BranchState::Stopped,
+            protected: false,
+        };
+        let mut local = operation("local-save");
+        local.workspace = Some(workspace);
+        local.branch = Some(branch.id);
+        local.local_saved = true;
+        local.phase = OperationPhase::Complete;
+        // A failed local request can refer to a branch that was never created here.
+        let mut failed = operation("failed-switch");
+        failed.workspace = Some(workspace);
+        failed.branch = imported.branch;
+        failed.phase = OperationPhase::Failed;
+        let mut standalone = operation("workspace-sync");
+        standalone.workspace = Some(workspace);
+        standalone.local_saved = true;
+        standalone.phase = OperationPhase::Complete;
+        let retained = [local, failed, standalone, operation("reserved")];
+        backend
+            .commit(LocalCommit {
+                new_branches: vec![branch],
+                operations: retained.iter().cloned().chain([imported.clone()]).collect(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        drop(backend);
+        let database = rusqlite::Connection::open(directory.path().join("meta.db")).unwrap();
+        database
+            .execute(
+                "DELETE FROM metadata WHERE key='replicated_operations_migrated'",
+                [],
+            )
+            .unwrap();
+        if !has_replication_table {
+            database
+                .execute_batch("DROP TABLE replicated_operations")
+                .unwrap();
+        }
+        drop(database);
+
+        let backend = LocalBackend::open(directory.path()).unwrap();
+        assert_eq!(backend.location().await.unwrap(), location);
+        assert_eq!(
+            backend.operation(imported.id).await.unwrap(),
+            Some(imported.clone())
+        );
+        assert!(
+            backend
+                .operation_by_request(&imported.principal, &imported.request_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        for record in &retained {
+            let retry = backend.reserve_operation(record.clone()).await.unwrap();
+            assert!(!retry.created);
+            assert_eq!(&retry.record, record);
+            let mut conflict = record.clone();
+            conflict.fingerprint = object_ref(ObjectKind::RecordIndex, b"changed request").id;
+            assert_eq!(
+                backend.reserve_operation(conflict).await.unwrap_err().code,
+                ErrorCode::RequestIdConflict
+            );
+        }
+        let mut local = operation("save-result");
+        local.workspace = Some(workspace);
+        local.fingerprint = object_ref(ObjectKind::RecordIndex, b"new local request").id;
+        assert!(
+            backend
+                .reserve_operation(local.clone())
+                .await
+                .unwrap()
+                .created
+        );
+        backend
+            .commit(LocalCommit {
+                replicated_operations: vec![imported.clone()],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        drop(backend);
+
+        let backend = LocalBackend::open(directory.path()).unwrap();
+        assert_eq!(
+            backend.operation(imported.id).await.unwrap(),
+            Some(imported)
+        );
+        let retry = backend.reserve_operation(local.clone()).await.unwrap();
+        assert!(!retry.created);
+        assert_eq!(retry.record, local);
+        assert_eq!(backend.operations(workspace).await.unwrap().len(), 5);
+    }
+}
+
+#[tokio::test]
+async fn failed_receipt_migration_rolls_back_and_can_retry() {
+    let directory = tempfile::tempdir().unwrap();
+    let backend = LocalBackend::open(directory.path()).unwrap();
+    let mut imported = operation("imported");
+    imported.workspace = Some(WorkspaceId::new());
+    imported.branch = Some(BranchId::new());
+    imported.local_saved = true;
+    backend
+        .commit(LocalCommit {
+            operations: vec![imported.clone()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    drop(backend);
+    let database = rusqlite::Connection::open(directory.path().join("meta.db")).unwrap();
+    database
+        .execute_batch(
+            "DELETE FROM metadata WHERE key='replicated_operations_migrated';
+         DROP TABLE replicated_operations;
+         CREATE TRIGGER fail_migration BEFORE DELETE ON operations
+         BEGIN SELECT RAISE(ABORT, 'injected migration failure'); END;",
+        )
+        .unwrap();
+    drop(database);
+    assert_eq!(
+        LocalBackend::open(directory.path()).unwrap_err().code,
+        ErrorCode::Conflict
+    );
+    let database = rusqlite::Connection::open(directory.path().join("meta.db")).unwrap();
+    let data: Vec<u8> = database
+        .query_row(
+            "SELECT data FROM operations WHERE id=?1",
+            [imported.id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(decode::<OperationRecord>(&data).unwrap(), imported);
+    for query in [
+        "SELECT COUNT(*) FROM sqlite_master WHERE name='replicated_operations'",
+        "SELECT COUNT(*) FROM metadata WHERE key='replicated_operations_migrated'",
+    ] {
+        assert_eq!(
+            database
+                .query_row(query, [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+    database
+        .execute_batch("DROP TRIGGER fail_migration")
+        .unwrap();
+    drop(database);
+    let backend = LocalBackend::open(directory.path()).unwrap();
+    assert_eq!(
+        backend.operation(imported.id).await.unwrap(),
+        Some(imported.clone())
+    );
+    assert!(
+        backend
+            .operation_by_request(&imported.principal, &imported.request_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn object_usage_survives_duplicates_reopen_and_removal() {
     let dir = tempfile::tempdir().unwrap();
     let backend = LocalBackend::open(dir.path()).unwrap();

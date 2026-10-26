@@ -36,7 +36,14 @@ pub(crate) fn initialize(connection: &mut Connection, version: u32) -> Result<Lo
                 |row| row.get(0),
             )
             .map_err(sql_error)?;
-        return location.parse();
+        let location = location.parse()?;
+        let transaction = connection.transaction().map_err(sql_error)?;
+        transaction
+            .execute_batch(include_str!("schema.sql"))
+            .map_err(sql_error)?;
+        migrate_replicated_operations(&transaction)?;
+        transaction.commit().map_err(sql_error)?;
+        return Ok(location);
     }
     let transaction = connection.transaction().map_err(sql_error)?;
     transaction
@@ -61,8 +68,69 @@ pub(crate) fn initialize(connection: &mut Connection, version: u32) -> Result<Lo
             [location.to_string()],
         )
         .map_err(sql_error)?;
+    migrate_replicated_operations(&transaction)?;
     transaction.commit().map_err(sql_error)?;
     Ok(location)
+}
+
+fn migrate_replicated_operations(transaction: &Transaction<'_>) -> Result<()> {
+    let migrated: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM metadata WHERE key='replicated_operations_migrated')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    if migrated {
+        return Ok(());
+    }
+    let records: Vec<OperationRecord> = read_many(
+        transaction,
+        "SELECT data FROM operations WHERE workspace IS NOT NULL",
+        &[],
+    )?;
+    for record in records {
+        let (Some(_), Some(branch)) = (record.workspace, record.branch) else {
+            continue;
+        };
+        if !record.local_saved {
+            continue;
+        }
+        // Saved local branch operations always retain a branch row, including after
+        // transfer or deletion. Legacy receipts have no origin field, so receipts
+        // for branches that exist locally must keep their request reservations.
+        let local_branch: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM branches WHERE id=?1)",
+                [branch.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if local_branch {
+            continue;
+        }
+        let id = record.id.to_string();
+        let existing: Option<OperationRecord> = read_one(
+            transaction,
+            "SELECT data FROM replicated_operations WHERE id=?1",
+            std::slice::from_ref(&id),
+        )?;
+        check_operation_identity(existing.as_ref(), &record)?;
+        transaction.execute(
+            "INSERT INTO replicated_operations(id,workspace,data) SELECT id,workspace,data FROM operations WHERE id=?1 ON CONFLICT(id) DO UPDATE SET workspace=excluded.workspace,data=excluded.data",
+            [&id],
+        ).map_err(sql_error)?;
+        transaction
+            .execute("DELETE FROM operations WHERE id=?1", [&id])
+            .map_err(sql_error)?;
+    }
+    transaction
+        .execute(
+            "INSERT INTO metadata(key,value) VALUES('replicated_operations_migrated',1)",
+            [],
+        )
+        .map_err(sql_error)?;
+    Ok(())
 }
 
 pub(crate) fn validate_format(connection: &Connection, version: u32) -> Result<()> {
@@ -391,7 +459,7 @@ impl LocalStateStore for LocalBackend {
     }
     async fn operation(&self, id: OperationId) -> Result<Option<OperationRecord>> {
         self.one(
-            "SELECT data FROM operations WHERE id=?1",
+            "SELECT data FROM operations WHERE id=?1 UNION ALL SELECT data FROM replicated_operations WHERE id=?1 LIMIT 1",
             vec![id.to_string()],
         )
         .await
@@ -409,7 +477,7 @@ impl LocalStateStore for LocalBackend {
     }
     async fn operations(&self, workspace: WorkspaceId) -> Result<Vec<OperationRecord>> {
         self.many(
-            "SELECT data FROM operations WHERE workspace=?1 ORDER BY id",
+            "SELECT data FROM (SELECT id,data FROM operations WHERE workspace=?1 UNION ALL SELECT id,data FROM replicated_operations WHERE workspace=?1 AND id NOT IN (SELECT id FROM operations)) ORDER BY id",
             vec![workspace.to_string()],
         )
         .await
@@ -542,6 +610,16 @@ impl LocalStateStore for LocalBackend {
                 upsert(&transaction, "revisions", revision.id.to_string(), revision.workspace, revision)?;
             }
             for operation in &commit.operations { put_operation(&transaction, operation)?; }
+            for operation in &commit.replicated_operations {
+                let existing: Option<OperationRecord> = read_one(&transaction,
+                    "SELECT data FROM operations WHERE id=?1 UNION ALL SELECT data FROM replicated_operations WHERE id=?1 LIMIT 1",
+                    &[operation.id.to_string()])?;
+                check_operation_identity(existing.as_ref(), operation)?;
+                if existing.is_none() {
+                    transaction.execute("INSERT INTO replicated_operations(id,workspace,data) VALUES(?1,?2,?3)",
+                        params![operation.id.to_string(), operation.workspace.map(|id| id.to_string()), encode(operation)?]).map_err(sql_error)?;
+                }
+            }
             for mount in &commit.mounts {
                 let active = mount.state != MountState::Released;
                 let writable = active && mount.access == AccessMode::ReadWrite;
@@ -598,10 +676,20 @@ fn put_history(transaction: &Transaction<'_>, reference: &BranchRef) -> Result<(
 fn put_operation(transaction: &Transaction<'_>, record: &OperationRecord) -> Result<()> {
     let existing: Option<OperationRecord> = read_one(
         transaction,
-        "SELECT data FROM operations WHERE id=?1",
+        "SELECT data FROM operations WHERE id=?1 UNION ALL SELECT data FROM replicated_operations WHERE id=?1 LIMIT 1",
         &[record.id.to_string()],
     )?;
-    if existing.as_ref().is_some_and(|old| {
+    check_operation_identity(existing.as_ref(), record)?;
+    transaction.execute("INSERT INTO operations(id,principal,request_id,workspace,data) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(id) DO UPDATE SET workspace=excluded.workspace,data=excluded.data",
+        params![record.id.to_string(), record.principal.as_str(), record.request_id, record.workspace.map(|id| id.to_string()), encode(record)?]).map_err(sql_error)?;
+    Ok(())
+}
+
+fn check_operation_identity(
+    existing: Option<&OperationRecord>,
+    record: &OperationRecord,
+) -> Result<()> {
+    if existing.is_some_and(|old| {
         old.principal != record.principal
             || old.request_id != record.request_id
             || old.fingerprint != record.fingerprint
@@ -612,8 +700,6 @@ fn put_operation(transaction: &Transaction<'_>, record: &OperationRecord) -> Res
             "operation identity is immutable",
         ));
     }
-    transaction.execute("INSERT INTO operations(id,principal,request_id,workspace,data) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(id) DO UPDATE SET workspace=excluded.workspace,data=excluded.data",
-        params![record.id.to_string(), record.principal.as_str(), record.request_id, record.workspace.map(|id| id.to_string()), encode(record)?]).map_err(sql_error)?;
     Ok(())
 }
 

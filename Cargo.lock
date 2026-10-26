@@ -46,6 +46,7 @@ dependencies = [
  "bytes",
  "futures",
  "parking_lot",
+ "rusqlite",
  "serde",
  "similar",
  "tempfile",
@@ -107,6 +108,31 @@ dependencies = [
  "unicode-casefold",
  "unicode-normalization",
  "uuid",
+]
+
+[[package]]
+name = "agentdrive-opencsg"
+version = "0.1.0"
+dependencies = [
+ "agentdrive-config",
+ "agentdrive-engine",
+ "agentdrive-local",
+ "agentdrive-model",
+ "agentdrive-ports",
+ "agentdrive-test-support",
+ "async-trait",
+ "axum",
+ "base64",
+ "bytes",
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "url",
 ]
 
 [[package]]
@@ -191,6 +217,7 @@ dependencies = [
  "agentdrive-local",
  "agentdrive-mcp",
  "agentdrive-model",
+ "agentdrive-opencsg",
  "agentdrive-platform",
  "agentdrive-ports",
  "agentdrive-s3",
@@ -1979,6 +2006,7 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",

@@ -4,7 +4,9 @@
 
 ## 请求身份与结果记录
 
-对于命令工具，相同工具和相同参数的重试应复用 `request_id`。请求身份属于当前通过身份验证的 principal，并在重启后保留。冲突复用会返回 `REQUEST_ID_CONFLICT`。命令会在执行记录中的流程前登记操作，`operation_by_request` 和 `operation_get` 可以恢复原始结果记录。`operation_cancel` 直接接收已有 operation ID，详见 [MCP 参数参考](mcp.zh-CN.md)。
+对于命令工具，相同工具和相同参数的重试应复用 `request_id`。请求身份由接收请求的 daemon 和通过身份验证的 principal 确定，并在重启后保留。冲突复用会返回 `REQUEST_ID_CONFLICT`。命令会在执行记录中的流程前登记操作。`operation_by_request` 查询提交给当前 daemon 的请求；`operation_get` 通过 operation ID 查询结果，也支持从其他节点同步的已发布操作。不同节点可以使用相同的请求名称，同步时会保留每条操作记录。`operation_cancel` 直接接收已有 operation ID，详见 [MCP 参数参考](mcp.zh-CN.md)。
+
+升级时，已保存且没有对应本地分支记录的旧操作会转入同步历史，释放请求名称，并保留通过 operation ID 查询的能力。迁移在单个事务中执行一次，也适用于已经创建同步记录表的数据库。旧记录没有来源位置字段；对应分支在本地存在时，包括已经转移或接管的分支，原有请求登记会保留，保证本地命令的幂等性。接管分支中无法确认来源的旧记录仍可能要求新命令使用新的请求名称。
 
 请分别检查以下结果字段：
 
