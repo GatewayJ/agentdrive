@@ -41,6 +41,7 @@ pub(crate) fn initialize(connection: &mut Connection, version: u32) -> Result<Lo
         transaction
             .execute_batch(include_str!("schema.sql"))
             .map_err(sql_error)?;
+        migrate_replicated_operations(&transaction)?;
         transaction.commit().map_err(sql_error)?;
         return Ok(location);
     }
@@ -67,8 +68,69 @@ pub(crate) fn initialize(connection: &mut Connection, version: u32) -> Result<Lo
             [location.to_string()],
         )
         .map_err(sql_error)?;
+    migrate_replicated_operations(&transaction)?;
     transaction.commit().map_err(sql_error)?;
     Ok(location)
+}
+
+fn migrate_replicated_operations(transaction: &Transaction<'_>) -> Result<()> {
+    let migrated: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM metadata WHERE key='replicated_operations_migrated')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_error)?;
+    if migrated {
+        return Ok(());
+    }
+    let records: Vec<OperationRecord> = read_many(
+        transaction,
+        "SELECT data FROM operations WHERE workspace IS NOT NULL",
+        &[],
+    )?;
+    for record in records {
+        let (Some(_), Some(branch)) = (record.workspace, record.branch) else {
+            continue;
+        };
+        if !record.local_saved {
+            continue;
+        }
+        // Saved local branch operations always retain a branch row, including after
+        // transfer or deletion. Legacy receipts have no origin field, so receipts
+        // for branches that exist locally must keep their request reservations.
+        let local_branch: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM branches WHERE id=?1)",
+                [branch.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(sql_error)?;
+        if local_branch {
+            continue;
+        }
+        let id = record.id.to_string();
+        let existing: Option<OperationRecord> = read_one(
+            transaction,
+            "SELECT data FROM replicated_operations WHERE id=?1",
+            std::slice::from_ref(&id),
+        )?;
+        check_operation_identity(existing.as_ref(), &record)?;
+        transaction.execute(
+            "INSERT INTO replicated_operations(id,workspace,data) SELECT id,workspace,data FROM operations WHERE id=?1 ON CONFLICT(id) DO UPDATE SET workspace=excluded.workspace,data=excluded.data",
+            [&id],
+        ).map_err(sql_error)?;
+        transaction
+            .execute("DELETE FROM operations WHERE id=?1", [&id])
+            .map_err(sql_error)?;
+    }
+    transaction
+        .execute(
+            "INSERT INTO metadata(key,value) VALUES('replicated_operations_migrated',1)",
+            [],
+        )
+        .map_err(sql_error)?;
+    Ok(())
 }
 
 pub(crate) fn validate_format(connection: &Connection, version: u32) -> Result<()> {

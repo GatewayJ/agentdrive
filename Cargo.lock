@@ -46,6 +46,7 @@ dependencies = [
  "bytes",
  "futures",
  "parking_lot",
+ "rusqlite",
  "serde",
  "similar",
  "tempfile",

@@ -6,6 +6,8 @@
 
 For command tools, reuse a `request_id` for the same tool and identical arguments. Identity is scoped to the authenticated principal on the receiving daemon and persists across restarts. A conflicting reuse returns `REQUEST_ID_CONFLICT`. Commands reserve their operation before executing the recorded workflow. `operation_by_request` recovers a request submitted to that daemon; `operation_get` also reads published receipts imported from other locations by their operation ID. Independent locations can use the same request label while preserving every receipt during synchronization. `operation_cancel` takes an existing operation ID directly; see the [MCP parameter reference](mcp.md).
 
+On upgrade, saved legacy receipts whose branch has no local branch record move to replicated history, releasing their request labels while preserving lookup by operation ID. The migration runs once in a transaction, including for databases that already have the replicated-receipt table. Legacy receipts have no originating location field. Receipts for branches present locally, including transferred or adopted branches, retain their request reservations so existing local commands remain idempotent. An ambiguous legacy receipt on an adopted branch can therefore still require a fresh request label for a new command.
+
 Read these receipt fields independently:
 
 | Field | Meaning |

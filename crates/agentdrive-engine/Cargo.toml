@@ -26,4 +26,5 @@ workspace = true
 [dev-dependencies]
 agentdrive-local.workspace = true
 agentdrive-test-support.workspace = true
+rusqlite.workspace = true
 tempfile.workspace = true

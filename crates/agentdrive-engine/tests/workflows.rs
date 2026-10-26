@@ -791,6 +791,124 @@ async fn locations_reuse_request_labels_without_blocking_history_replication() {
 }
 
 #[tokio::test]
+async fn legacy_imports_allow_new_commands_after_restart() {
+    let remote = Arc::new(MemoryRemote::default());
+    let first = Harness::new(Some(remote.clone())).await;
+    let workspace = first.workspace().await;
+    let source = first
+        .local
+        .operations(workspace.id)
+        .await
+        .unwrap()
+        .remove(0);
+    first.sync(workspace.id, SyncDirection::Push).await;
+
+    let second = Harness::new(Some(remote.clone())).await;
+    second.sync(workspace.id, SyncDirection::Pull).await;
+    let imported = second.local.operation(source.id).await.unwrap().unwrap();
+    let local_workspace = second.workspace().await;
+    let local_receipt = second
+        .local
+        .operations(local_workspace.id)
+        .await
+        .unwrap()
+        .remove(0);
+    let Harness {
+        directory,
+        local,
+        engine,
+        clock,
+        driver,
+    } = second;
+    drop((local, engine, clock, driver));
+
+    // Reproduce the legacy import path, which wrote foreign receipts into operations.
+    let database = rusqlite::Connection::open(directory.path().join("meta.db")).unwrap();
+    database
+        .execute(
+            "INSERT INTO operations(id,principal,request_id,workspace,data) VALUES(?1,?2,?3,?4,?5)",
+            rusqlite::params![
+                imported.id.to_string(),
+                imported.principal.as_str(),
+                imported.request_id,
+                workspace.id.to_string(),
+                encode(&imported).unwrap()
+            ],
+        )
+        .unwrap();
+    database
+        .execute_batch(
+            "DROP TABLE replicated_operations;
+         DELETE FROM metadata WHERE key='replicated_operations_migrated';",
+        )
+        .unwrap();
+    drop(database);
+
+    let (local, engine, _, _) = open(directory.path(), Some(remote)).await;
+    let request = CreateWorkspace {
+        name: "after-upgrade".into(),
+        grants: vec![],
+        max_file_bytes: None,
+        max_working_bytes: None,
+        max_inodes: None,
+    };
+    let context = RequestContext {
+        principal: actor(),
+        request_id: imported.request_id.clone(),
+    };
+    let created = success(
+        engine
+            .services
+            .workspace
+            .create(context.clone(), request.clone())
+            .await
+            .unwrap(),
+    );
+    assert_ne!(created.id, imported.id);
+    let retried = success(
+        engine
+            .services
+            .workspace
+            .create(context.clone(), request.clone())
+            .await
+            .unwrap(),
+    );
+    assert_eq!(created.id, retried.id);
+    let mut changed = request.clone();
+    changed.name = "different-request".into();
+    assert_eq!(
+        engine
+            .services
+            .workspace
+            .create(context, changed)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::RequestIdConflict
+    );
+    let retried = success(
+        engine
+            .services
+            .workspace
+            .create(
+                RequestContext {
+                    principal: actor(),
+                    request_id: local_receipt.request_id,
+                },
+                CreateWorkspace {
+                    name: "test".into(),
+                    ..request
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(retried.id, local_receipt.id);
+    assert_eq!(local.operation(imported.id).await.unwrap(), Some(imported));
+    assert_eq!(local.workspaces().await.unwrap().len(), 3);
+}
+
+#[tokio::test]
 async fn ownership_transfer_stops_old_writer_and_adopts_on_new_location() {
     let remote = Arc::new(MemoryRemote::default());
     let first = Harness::new(Some(remote.clone())).await;
