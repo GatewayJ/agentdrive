@@ -349,13 +349,13 @@ test('archive opens branch contents directly, preserves the mounted selection, a
   assert.equal(await page.locator('.archive-branch-header h2').textContent(),'main');
   await page.locator('.archive-branch[data-branch="feature"]').click();
   await page.locator('.archive-history-link').click();
-  await page.locator('#history-title').waitFor();
+  await page.waitForFunction(() => document.querySelector('#history-title')?.textContent === 'feature');
   assert.equal(await page.locator('#history-title').textContent(),'feature');
   await page.locator('#archive-nav').click();
   await page.locator('#archive-page .branch-file-content').waitFor();
   assert.equal(await page.locator('.archive-branch-header h2').textContent(),'feature');
   await page.goBack();
-  await page.locator('#history-title').waitFor();
+  await page.waitForFunction(() => document.querySelector('#history-title')?.textContent === 'feature');
   assert.equal(await page.locator('#history-title').textContent(),'feature');
 });
 
