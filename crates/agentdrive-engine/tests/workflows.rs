@@ -2588,7 +2588,7 @@ async fn new_locations_fork_latest_published_root_and_persist_selection() {
     assert_eq!(binding.branch, selected);
     let branch = second.local.branch(selected).await.unwrap().unwrap();
     assert_eq!(branch.source_branch, Some(main.branch));
-    assert_eq!(branch.base_revision, saved.autosave_head.unwrap());
+    assert_eq!(branch.base_revision, saved.formal_head);
     assert_eq!(branch.working_root, saved.working_root);
     assert_eq!(branch.owner, second.engine.runtime.location);
     assert_eq!(
@@ -2696,6 +2696,24 @@ async fn mount_save_is_idempotent_and_can_confirm_remote_without_another_revisio
             .await
             .unwrap(),
     );
+    let CommandResult::Revision { revision, branch } = first.result.as_ref().unwrap() else {
+        panic!("revision result missing");
+    };
+    assert_eq!(*branch, binding.branch);
+    let saved = harness.local.branch(*branch).await.unwrap().unwrap();
+    assert_eq!(saved.formal_head, *revision);
+    assert!(saved.autosave_head.is_none());
+    assert!(!saved.dirty);
+    assert_eq!(
+        harness
+            .local
+            .revision(*revision)
+            .await
+            .unwrap()
+            .unwrap()
+            .kind,
+        RevisionKind::Commit
+    );
     let repeated = success(
         harness
             .engine
@@ -2729,6 +2747,114 @@ async fn mount_save_is_idempotent_and_can_confirm_remote_without_another_revisio
         harness.local.revisions(workspace.id).await.unwrap().len(),
         count
     );
+}
+
+#[tokio::test]
+async fn mount_save_commits_autosaved_changes_for_merge() {
+    let harness = Harness::new(None).await;
+    let workspace = harness.workspace().await;
+    let (target, target_fs) = harness.branch_mount(workspace.id, "target", None).await;
+    let (source, source_fs) = harness.branch_mount(workspace.id, "source", None).await;
+    harness.write_new(&source_fs, "source.txt", b"source").await;
+    let source_revision = harness.commit(source.branch).await;
+    harness.write_new(&target_fs, "target.txt", b"target").await;
+    harness.clock.advance(5_000);
+    assert_eq!(harness.engine.autosave_due().await.unwrap(), 1);
+    let branch = harness.local.branch(target.branch).await.unwrap().unwrap();
+    assert_eq!(branch.formal_head, workspace.initial_revision);
+    assert!(branch.dirty);
+    let autosave = harness
+        .local
+        .revision(branch.autosave_head.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(autosave.kind, RevisionKind::Autosave);
+
+    let saved = success(
+        harness
+            .engine
+            .services
+            .mounts
+            .save(
+                context(),
+                SaveMount {
+                    mount: target.id,
+                    expected_binding_generation: target.generation,
+                    durability: Durability::Local,
+                    wait_for_remote_ms: None,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    let CommandResult::Revision { revision, .. } = saved.result.unwrap() else {
+        panic!("revision result missing");
+    };
+    let branch = harness.local.branch(target.branch).await.unwrap().unwrap();
+    assert_eq!(branch.formal_head, revision);
+    assert!(branch.autosave_head.is_none());
+    assert!(!branch.dirty);
+    let committed = harness.local.revision(revision).await.unwrap().unwrap();
+    assert_eq!(committed.kind, RevisionKind::Commit);
+    assert_eq!(committed.parents, vec![autosave.id]);
+    assert_eq!(committed.root, autosave.root);
+
+    let prepared = success(
+        harness
+            .engine
+            .services
+            .merge
+            .prepare(
+                context(),
+                PrepareMerge {
+                    workspace: workspace.id,
+                    source: source_revision,
+                    target: BranchGuard::from(&branch),
+                    base: None,
+                },
+            )
+            .await
+            .unwrap(),
+    );
+    let CommandResult::Merge { candidate } = prepared.result.unwrap() else {
+        panic!("merge candidate missing");
+    };
+    assert!(candidate.conflicts.is_empty());
+    for (name, expected) in [("/source.txt", "source"), ("/target.txt", "target")] {
+        assert_eq!(
+            harness
+                .engine
+                .services
+                .revisions
+                .read_file(
+                    &actor(),
+                    workspace.id,
+                    candidate.revision,
+                    path(name),
+                    0,
+                    1024
+                )
+                .await
+                .unwrap(),
+            expected
+        );
+    }
+
+    harness.write_new(&target_fs, "later.txt", b"later").await;
+    harness.clock.advance(5_000);
+    assert_eq!(harness.engine.autosave_due().await.unwrap(), 1);
+    let branch = harness.local.branch(target.branch).await.unwrap().unwrap();
+    assert_eq!(branch.formal_head, revision);
+    assert!(branch.dirty);
+    let later = harness
+        .local
+        .revision(branch.autosave_head.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(later.kind, RevisionKind::Autosave);
+    assert_eq!(later.parents, vec![revision]);
 }
 
 #[tokio::test]

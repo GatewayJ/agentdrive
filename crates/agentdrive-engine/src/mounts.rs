@@ -1013,7 +1013,7 @@ impl MountApi for MountService {
                         SaveRevision {
                             message: None,
                             guard: BranchGuard::from(&branch),
-                            kind: RevisionKind::Autosave,
+                            kind: RevisionKind::Commit,
                             parents: None,
                             replace_root: None,
                             durability: request.durability,

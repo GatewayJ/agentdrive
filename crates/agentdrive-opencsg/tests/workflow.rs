@@ -33,8 +33,9 @@ fn identity() -> LocalIdentity {
 async fn open(
     path: &Path,
     backend: Option<Arc<OpenCsgBackend>>,
-) -> (Arc<LocalBackend>, Arc<Engine>) {
+) -> (Arc<LocalBackend>, Arc<Engine>, Arc<ManualClock>) {
     let local = Arc::new(LocalBackend::open(path).unwrap());
+    let clock = Arc::new(ManualClock::default());
     let engine = Engine::open(
         Adapters {
             state: local.clone(),
@@ -42,7 +43,7 @@ async fn open(
             working: local.clone(),
             remote_objects: backend.clone().map(|v| v as Arc<dyn RemoteObjectStore>),
             remote_refs: backend.map(|v| v as Arc<dyn RemoteRefStore>),
-            clock: Arc::new(ManualClock::default()),
+            clock: clock.clone(),
             mounts: Arc::new(MemoryMountDriver::default()),
             directories: Arc::new(NoHostDirectories),
         },
@@ -53,7 +54,7 @@ async fn open(
     )
     .await
     .unwrap();
-    (local, engine)
+    (local, engine, clock)
 }
 
 #[tokio::test]
@@ -61,7 +62,7 @@ async fn storage_switch_preserves_autosaves_commits_and_history_on_a_fresh_locat
     let server = Server::new().await;
     let first_dir = tempfile::tempdir().unwrap();
     let second_dir = tempfile::tempdir().unwrap();
-    let (local, engine) = open(first_dir.path(), None).await;
+    let (local, engine, clock) = open(first_dir.path(), None).await;
     let created = success(
         engine
             .services
@@ -136,7 +137,11 @@ async fn storage_switch_preserves_autosaves_commits_and_history_on_a_fresh_locat
         .await
         .unwrap();
     engine.services.files.release(&fs, handle.id).await.unwrap();
-    success(
+    clock.advance(5_000);
+    assert_eq!(engine.autosave_due().await.unwrap(), 1);
+    let branch = local.branch(binding.branch).await.unwrap().unwrap();
+    let autosave = branch.autosave_head.unwrap();
+    let committed = success(
         engine
             .services
             .mounts
@@ -147,24 +152,6 @@ async fn storage_switch_preserves_autosaves_commits_and_history_on_a_fresh_locat
                     expected_binding_generation: binding.generation,
                     durability: Durability::Local,
                     wait_for_remote_ms: None,
-                },
-            )
-            .await
-            .unwrap(),
-    );
-    let branch = local.branch(binding.branch).await.unwrap().unwrap();
-    let autosave = branch.autosave_head.unwrap();
-    let committed = success(
-        engine
-            .services
-            .revisions
-            .commit(
-                context(),
-                CommitRevision {
-                    message: Some("Save binary file".into()),
-                    guard: BranchGuard::from(&branch),
-                    kind: CommitKind::Commit,
-                    durability: Durability::Local,
                 },
             )
             .await
@@ -190,7 +177,7 @@ async fn storage_switch_preserves_autosaves_commits_and_history_on_a_fresh_locat
         .await
         .unwrap();
     assert!(persisted);
-    let (second_local, second) = open(second_dir.path(), Some(server.backend())).await;
+    let (second_local, second, _) = open(second_dir.path(), Some(server.backend())).await;
     success(
         second
             .services
