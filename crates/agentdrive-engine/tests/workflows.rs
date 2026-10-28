@@ -4,6 +4,8 @@ use agentdrive_config::{
 use agentdrive_engine::*;
 use agentdrive_local::LocalBackend;
 use agentdrive_model::*;
+#[path = "workflows/relationships.rs"]
+mod relationships;
 use agentdrive_ports::*;
 use agentdrive_test_support::*;
 use bytes::Bytes;

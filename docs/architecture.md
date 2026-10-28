@@ -30,7 +30,8 @@
 | `engine/text_diff` | Bounded UTF-8 line comparison and context grouping; independent of HTTP and storage |
 | `local/batch`, `local/queries` | Durable object publication batches and consistent SQLite read views |
 | `engine/snapshots`, `engine/revisions` | Capture working changes, save revisions, create branches and restore content |
-| `engine/workspaces` | Workspace creation, status and host-directory import/export |
+| `engine/workspaces` | Workspace creation, status, relationship queries and host-directory import/export |
+| `engine/relationships` | Relationship authorization, origin visibility, ownership observations, filtering and stable pagination |
 | `engine/mounts` | Select the local branch for a workspace, reuse mount bindings, save mounted files and coordinate mount transitions |
 | `engine/replica`, `engine/ownership` | Synchronization jobs, conditional remote publication and writer ownership transfer |
 | `engine/storage` | Hydrate retained history, copy remote references and switch storage |
@@ -153,3 +154,9 @@ See [configuration and remote storage](configuration.md), [CLI usage](cli.md), a
 Read versions contain the branch ID, authority epoch, generation and mutation sequence. Version checks and metadata reads run under the branch lock. Bounded working-file reads retain that lock; immutable reads hold the object retention barrier and release the branch lock. Browsing creates no file handles, mount bindings, checkpoints or revisions.
 
 The Archive reads current `WorkspaceApi::status` without enumerating revisions. `archive.js` owns branch selection and save-state presentation; `file-browser.js` owns directory pages, reads, cancellation and stale versions; `file-preview.js` renders Markdown through safe DOM text nodes. `branch-files.js` embeds the same browser in the existing dialog.
+
+## Relationship queries
+
+`WorkspaceApi::relationships` uses a `LocalStateStore::relationship_snapshot` read. The local adapter owns the SQLite transaction and indexes; it reads branch creation receipts through indexed result predicates and loads only revisions referenced by origins and mounts. The engine derives ownership and creation origins, enforces branch and ancestry permissions, filters records and builds bounded pages. CLI/MCP and HTTP translate the same request and response types. The dashboard renders this API through `relationships.js`.
+
+Remote publication, history import and ownership transfer persist `ObservedBranchRef` alongside their confirmed reference updates. Its flattened representation keeps existing `BranchRef` reads compatible and permits missing observation fields in old databases. Creation roots are derived from existing operation results; the query adds no separately maintained relationship graph. Pagination fingerprints the authorized result and filters, and rejects a continuation when that view changes.

@@ -251,6 +251,7 @@ impl ReplicaService {
         &self,
         jobs: &[SyncJob],
         remote: BranchRef,
+        storage_version: String,
         progress: &Arc<ProgressMutex<SyncProgress>>,
     ) -> Result<()> {
         let mut completed = progress.lock().clone();
@@ -263,7 +264,11 @@ impl ReplicaService {
                 &ids,
                 LocalCommit {
                     completed_jobs: ids.clone(),
-                    remote_refs: vec![remote.clone()],
+                    remote_refs: vec![ObservedBranchRef::new(
+                        remote.clone(),
+                        storage_version,
+                        self.runtime.clock.now_ns(),
+                    )],
                     ..Default::default()
                 },
                 |operation| {
@@ -339,7 +344,9 @@ impl ReplicaService {
                     decode_branch_ref(reference.workspace, reference.branch, &current.bytes)?;
                 if remote == *reference || self.contains_operation(&remote, &operation).await? {
                     self.verify_batch(&remote, jobs).await?;
-                    return self.acknowledge(jobs, remote, progress).await;
+                    return self
+                        .acknowledge(jobs, remote, current.version.clone(), progress)
+                        .await;
                 }
                 if remote.owner != reference.owner
                     || remote.authority_epoch != reference.authority_epoch
@@ -387,8 +394,10 @@ impl ReplicaService {
                 })
                 .await?
             {
-                CasOutcome::Applied { .. } => {
-                    return self.acknowledge(jobs, reference.clone(), progress).await;
+                CasOutcome::Applied { version } => {
+                    return self
+                        .acknowledge(jobs, reference.clone(), version, progress)
+                        .await;
                 }
                 CasOutcome::Conflict | CasOutcome::Unknown => continue,
             }
@@ -400,7 +409,8 @@ impl ReplicaService {
         .retryable())
     }
 
-    async fn import_history(&self, reference: &BranchRef) -> Result<()> {
+    async fn import_history(&self, observation: ObservedBranchRef) -> Result<()> {
+        let reference = &observation.reference;
         let mut commit = LocalCommit::default();
         for entry in self
             .trees
@@ -442,7 +452,7 @@ impl ReplicaService {
                 "remote formal head is absent from retained history",
             ));
         }
-        commit.remote_refs.push(reference.clone());
+        commit.remote_refs.push(observation);
         self.runtime.state.commit(commit).await
     }
 }
@@ -789,6 +799,11 @@ impl ReplicaPublisher for ReplicaService {
                 continue;
             };
             let reference = decode_branch_ref(workspace, id, &value.bytes)?;
+            let observation = ObservedBranchRef::new(
+                reference.clone(),
+                value.version,
+                self.runtime.clock.now_ns(),
+            );
             let pin = OperationId::new();
             self.content
                 .protect_remote(
@@ -800,7 +815,7 @@ impl ReplicaPublisher for ReplicaService {
                     ],
                 )
                 .await?;
-            self.import_history(&reference).await?;
+            self.import_history(observation).await?;
             self.content
                 .metadata(workspace, &reference.working_root)
                 .await?;

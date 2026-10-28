@@ -94,7 +94,7 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
         .await
         .unwrap();
     let tools = owner.tools().await.unwrap().tools;
-    assert_eq!(tools.len(), 31);
+    assert_eq!(tools.len(), 32);
     let adoption = tools
         .iter()
         .find(|tool| tool.name == "workspace_adopt_directory")
@@ -290,6 +290,85 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
         200
     );
     let branch = view["status"]["branches"][0]["id"].as_str().unwrap();
+    let relationships_url = format!(
+        "{base}/api/workspaces/{}/relationships?branch={branch}&limit=1",
+        workspace.as_str().unwrap()
+    );
+    assert_eq!(
+        http.get(&relationships_url).send().await.unwrap().status(),
+        401
+    );
+    assert_eq!(
+        http.get(&relationships_url)
+            .bearer_auth(visitor_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let response = http
+        .get(&relationships_url)
+        .bearer_auth(owner_token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert!(response.status().is_success());
+    let relationships: Value = response.json().await.unwrap();
+    let tool_result = owner
+        .call(
+            "workspace_relationships".into(),
+            json!({
+                "workspace": workspace, "branch": branch, "limit": 1,
+            }),
+        )
+        .await
+        .unwrap()
+        .structured_content
+        .unwrap();
+    assert_eq!(relationships, tool_result);
+    assert_eq!(relationships["total"], 1);
+    assert_eq!(relationships["entries"][0]["branch"]["id"], branch);
+    assert_eq!(
+        relationships["entries"][0]["branch"]["origin"]["workspace_root"],
+        true
+    );
+    assert_eq!(relationships["remote_mounts_known"], false);
+    assert_eq!(
+        http.get(relationships_url.replace("limit=1", "limit=201"))
+            .bearer_auth(owner_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    assert_eq!(
+        http.get(format!("{relationships_url}&unexpected=true"))
+            .bearer_auth(owner_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    let denied = visitor
+        .call(
+            "workspace_relationships".into(),
+            json!({"workspace": workspace}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.is_error, Some(true));
+    let invalid = owner
+        .call(
+            "workspace_relationships".into(),
+            json!({"workspace": workspace, "unexpected":true}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.is_error, Some(true));
     let files_url = format!(
         "{base}/api/workspaces/{}/branches/{branch}/files?path=%2F",
         workspace.as_str().unwrap()

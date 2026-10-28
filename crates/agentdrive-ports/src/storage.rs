@@ -40,7 +40,7 @@ pub struct LocalCommit {
     pub merges: Vec<MergeCandidate>,
     pub sync_jobs: Vec<SyncJob>,
     pub completed_jobs: Vec<OperationId>,
-    pub remote_refs: Vec<BranchRef>,
+    pub remote_refs: Vec<ObservedBranchRef>,
     pub pin_updates: Vec<PinUpdate>,
 }
 
@@ -110,6 +110,19 @@ pub struct RetentionState {
     pub pins: Vec<CachePin>,
 }
 
+/// Related authoritative records read in one local transaction.
+#[derive(Clone, Debug)]
+pub struct RelationshipSnapshot {
+    pub workspace: Workspace,
+    pub location: LocationId,
+    pub selected_branch: Option<BranchId>,
+    pub branches: Vec<Branch>,
+    pub mounts: Vec<MountBinding>,
+    pub remote_refs: Vec<ObservedBranchRef>,
+    pub creations: Vec<OperationRecord>,
+    pub revisions: Vec<Revision>,
+}
+
 /// 当前工作树统计；与 node_changes 在同一事务中更新。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WorkingTreeUsage {
@@ -120,6 +133,10 @@ pub struct WorkingTreeUsage {
 /// 本地元数据查询与原子提交；权限、配额和发布决策由 engine 负责。
 #[async_trait]
 pub trait LocalStateStore: Send + Sync {
+    async fn relationship_snapshot(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<Option<RelationshipSnapshot>>;
     async fn file_view(&self, mount: MountId, query: FileQuery) -> Result<Option<FileView>>;
     async fn retention_state(&self) -> Result<RetentionState>;
     async fn selected_branch(&self, workspace: WorkspaceId) -> Result<Option<BranchId>>;

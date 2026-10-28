@@ -1,10 +1,9 @@
 export function createWorkspaceView({element, selectBranch, showRevision, showBranchFiles}) {
   const short = id => id?.slice(0, 8) || '—';
   const kinds = {commit:'Commit', autosave:'自动保存', checkpoint:'检查点', candidate:'合并候选'};
-  const states = {ready:'已挂载', preparing:'准备中', paused:'已暂停', recovery_required:'待恢复'};
 
   function render(snapshot, selectedBranch) {
-    const {status, revisions, origins, summary} = snapshot;
+    const {status, revisions, origins} = snapshot;
     const branches = new Map(status.branches.map(branch => [branch.id, branch]));
     const revisionById = new Map(revisions.map(revision => [revision.id, revision]));
     const originById = new Map(origins.map(origin => [origin.branch, origin]));
@@ -91,26 +90,6 @@ export function createWorkspaceView({element, selectBranch, showRevision, showBr
     if (remaining.length) tree.append(group(remaining));
     if (!visible.size) tree.append(element('p', 'panel-empty', '暂无工作分支。'));
 
-    const table = document.getElementById('mount-list'); table.replaceChildren();
-    document.getElementById('mount-total').textContent = summary.mount_count;
-    document.getElementById('mount-empty').hidden = status.mounts.length > 0;
-    document.getElementById('mount-table').hidden = status.mounts.length === 0;
-    for (const mount of status.mounts) {
-      const branch = branches.get(mount.branch);
-      const row = element('tr'); row.dataset.mount = mount.id;
-      const directory = element('td', 'mount-directory');
-      directory.append(element('code', 'mount-path', mount.path));
-      if (mount.revision) directory.append(element('small', 'mount-revision', `版本 ${short(mount.revision)}`));
-      const target = element('td');
-      const link = element('button', 'mount-branch', branch?.name || short(mount.branch)); link.type = 'button';
-      link.id = `mount-branch-${mount.id}`;
-      link.disabled = !branch || branch.state === 'deleted'; link.title = mount.branch;
-      link.onclick = () => { selectBranch(mount.branch); document.getElementById('history-title').scrollIntoView({block:'nearest'}); };
-      target.append(link, element('code', 'mount-branch-id', short(mount.branch)));
-      const access = element('td', 'mount-access', mount.access === 'read_only' ? '只读' : '读写');
-      const state = element('td'); state.append(element('span', `mount-state ${mount.state}`, states[mount.state] || mount.state));
-      row.append(directory, target, access, state); table.append(row);
-    }
   }
   function select(id) {
     for (const button of document.querySelectorAll('.branch-button')) {

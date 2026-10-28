@@ -384,21 +384,10 @@ h1 {
 .tree-footer { padding:14px 20px; border-top:1px solid var(--line); font-size:10px; line-height:1.8; color:#929ca7; background:#fcfdfd; }
 .mounts-panel { grid-column:1/-1; }
 .mount-table-wrap { overflow:auto; }
-#mount-table { width:100%; border-collapse:collapse; table-layout:fixed; text-align:left; }
-#mount-table th { font-size:11px; font-weight:500; color:#85919f; background:#f8fafb; padding:12px 22px; border-top:1px solid var(--line); }
-#mount-table th:nth-child(1) { width:44%; }
-#mount-table th:nth-child(2) { width:30%; }
-#mount-table th:nth-child(3),#mount-table th:nth-child(4) { width:13%; }
-#mount-table td { padding:18px 22px; border-top:1px solid var(--line); vertical-align:middle; font-size:12px; }
 .mount-path { display:block; font:11px/1.8 ui-monospace,monospace; color:#52616d; overflow-wrap:anywhere; }
-.mount-branch { display:block; padding:0; border:0; background:none; color:#277c61; font-size:12px; line-height:1.6; text-align:left; overflow-wrap:anywhere; }
-.mount-branch:hover { text-decoration:underline; }
-.mount-branch:disabled { cursor:default; color:#8994a3; }
-.mount-branch-id,.mount-revision { display:block; font-size:10px; color:#98a1ad; margin-top:5px; }
 .mount-state { display:inline-block; border-radius:4px; padding:4px 6px; font-size:10px; color:#a27b35; background:#fff5e3; white-space:nowrap; }
 .mount-state.ready { color:#30785a; background:#e9f6ef; }
 .mount-state.recovery_required { color:#b45b4f; background:#fff0ed; }
-.mount-access { color:#7b8794; }
 .panel-empty { padding:12px 22px 26px; margin:0; font-size:12px; color:#8994a3; }
 .history-heading {
   padding:23px 25px 20px;
@@ -971,8 +960,6 @@ body:has(.revision-dialog[open]) { overflow:hidden; }
   .origin-timeline { margin-left:8px; padding-left:16px; }
   .origin-fork>.origin-node { margin-left:-23px; }
   .branch-badges { max-width:65px; }
-  #mount-table { min-width:580px; }
-  #mount-table th,#mount-table td { padding:12px 16px; }
   .graph-legend { padding-left:16px; padding-right:16px; }
 }
 
@@ -989,3 +976,18 @@ body:has(.revision-dialog[open]) { overflow:hidden; }
 .branch-file-content {white-space:pre-wrap; overflow-wrap:anywhere; max-height:52vh; overflow:auto; font:13px/1.6 ui-monospace,monospace; background:#f7f9fb; padding:16px; border-radius:8px; tab-size:4;}
 .branch-files-dialog .changes-layout {align-items:start;}
 @media (max-width:700px) {.branch-files-body {padding:16px;} .branch-file-list {max-height:28vh;}}
+
+.relationship-filters { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin:0 20px 14px; }
+.relationship-filters label { display:flex; flex:1 1 150px; flex-direction:column; gap:5px; color:var(--muted); font-size:12px; }
+.relationship-filters input,.relationship-filters select { width:100%; min-width:0; padding:8px 10px; border:1px solid var(--line); border-radius:7px; background:var(--paper); color:var(--ink); font:inherit; }
+.relationship-note,.relationship-status { margin:12px 20px; color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
+.relationship-table { width:100%; min-width:760px; border-collapse:collapse; text-align:left; }
+.relationship-table th,.relationship-table td { padding:12px 16px; border-bottom:1px solid var(--line); vertical-align:top; }
+.relationship-table th { color:var(--muted); font-size:12px; font-weight:500; }
+.relationship-table td { max-width:280px; font-size:13px; overflow-wrap:anywhere; }
+.relationship-table small,.relationship-table .relationship-id,.relationship-table .mount-state { display:block; margin-top:5px; }
+.relationship-table small,.relationship-id { color:var(--muted); font-size:11px; }
+.relationship-table details { margin-top:8px; font-size:11px; }
+.relationship-table summary { cursor:pointer; color:var(--muted); }
+.relationship-root { display:block; margin-top:6px; overflow-wrap:anywhere; }
+.relationship-more { margin:12px 20px 20px; }

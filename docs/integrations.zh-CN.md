@@ -100,7 +100,7 @@ agentdrive integrate --protocol codex-app-server --workspace "$WORKSPACE" \
 
 协议参考：[ACP 会话](https://agentclientprotocol.com/protocol/v1/session-setup)、[ACP 回合](https://agentclientprotocol.com/protocol/v1/prompt-turn)、[Codex app-server](https://developers.openai.com/codex/app-server/)。
 
-顶部显示当前工作区的工作分支数量、本机挂载点数量、被就绪挂载使用的不同分支数量和远程同步状态。挂载点统计排除已释放记录，准备中、暂停和待恢复记录保留并显示状态。分支图按 `source_branch` 与 `base_revision` 连接到创建来源版本，点击版本可查看信息；来源版本可能是 commit、自动保存或检查点。“默认”表示本机未指定 branch 时的选择，“已挂载”显示就绪目录数量。挂载目录表列出完整路径、对应分支、读写模式和状态，点击分支可查看其历史。
+顶部显示当前工作区的工作分支数量、本机挂载点数量、被就绪挂载使用的不同分支数量和远程同步状态。挂载点统计排除已释放记录，准备中、暂停和待恢复记录保留并显示状态。分支图按 `source_branch` 与 `base_revision` 连接到创建来源版本，点击版本可查看信息；来源版本可能是 commit、自动保存或检查点。“默认”表示本机未指定 branch 时的选择，“已挂载”显示就绪目录数量。“分支与挂载关系”面板通过关系查询接口显示写入所属 location、本机挂载路径、principal、访问模式、挂载状态及创建来源。支持按照 branch、挂载状态、mount ID、owner location 和 mount location 筛选。展开记录详情可查看远端观测版本与时间，展开创建来源可查看创建时捕获的内容对象。远端挂载、远端默认分支和机器在线状态标记为未知。每页最多显示 50 条，点击“继续加载”读取后续记录。自动刷新和手动刷新保留筛选条件，并重新读取第一页。
 
 分支提示分为“有未保存修改”（`mutation_seq != saved_seq`）、“已自动保存 · 有未提交修改”（序号相同且 `dirty` 为真）和“已提交”（序号相同且 `dirty` 为假）。已保存表示内容已有本地持久化检查点；检查点已保存、自动保存版本尚未生成时，悬浮说明会解释此状态。远程确认通过同步卡片展示，停止写入的状态单独显示。
 

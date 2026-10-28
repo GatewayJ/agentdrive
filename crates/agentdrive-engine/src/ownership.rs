@@ -155,7 +155,11 @@ impl OwnershipService {
                         guards: vec![request.guard],
                         branches: vec![next],
                         operations: vec![result.clone()],
-                        remote_refs: vec![remote],
+                        remote_refs: vec![ObservedBranchRef::new(
+                            remote,
+                            current.version,
+                            self.runtime.clock.now_ns(),
+                        )],
                         ..Default::default()
                     })
                     .await?;
@@ -193,7 +197,7 @@ impl OwnershipService {
                 })
                 .await?
             {
-                CasOutcome::Applied { .. } => {
+                CasOutcome::Applied { version } => {
                     next.state = BranchState::Stopped;
                     self.runtime
                         .state
@@ -201,7 +205,11 @@ impl OwnershipService {
                             guards: vec![request.guard],
                             branches: vec![next],
                             operations: vec![result.clone()],
-                            remote_refs: vec![job.reference.clone()],
+                            remote_refs: vec![ObservedBranchRef::new(
+                                job.reference.clone(),
+                                version,
+                                self.runtime.clock.now_ns(),
+                            )],
                             ..Default::default()
                         })
                         .await?;
