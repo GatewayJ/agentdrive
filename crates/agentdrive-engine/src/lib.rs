@@ -12,6 +12,7 @@ mod operations;
 mod ownership;
 #[cfg(test)]
 mod query_tests;
+mod relationships;
 mod replica;
 mod revisions;
 mod runtime;

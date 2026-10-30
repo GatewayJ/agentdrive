@@ -428,6 +428,20 @@ impl WorkspaceApi for WorkspaceService {
             .collect())
     }
 
+    async fn relationships(
+        &self,
+        actor: &Principal,
+        query: WorkspaceRelationshipsQuery,
+    ) -> Result<WorkspaceRelationships> {
+        let snapshot = self
+            .runtime
+            .state
+            .relationship_snapshot(query.workspace)
+            .await?
+            .ok_or_else(|| Error::new(ErrorCode::NotFound, "workspace does not exist"))?;
+        crate::relationships::query(snapshot, actor, query.filter)
+    }
+
     async fn status(&self, actor: &Principal, workspace: WorkspaceId) -> Result<WorkspaceStatus> {
         let workspace = self
             .runtime

@@ -51,6 +51,18 @@ function fixture() {
     summary:{branch_count:3, mount_count:0, ready_mount_count:0, mounted_branch_count:0},
   };
 }
+function relationshipFixture(data) {
+  return {
+    workspace:'workspace', observing_location:'local', selected_branch:data.status.selected_branch,
+    remote_mounts_known:false, remote_selections_known:false, total:data.status.branches.length, next:null,
+    entries:data.status.branches.map(branch => ({
+      branch:{id:branch.id, name:branch.name, state:branch.state,
+        ownership:{location:branch.owner || 'local', source:'local_authority', authority_epoch:1, generation:1, storage_version:null, observed_ns:null},
+        origin:{workspace_root:!branch.source_branch, source_branch:branch.source_branch, source_name:branch.source_branch, base_revision:branch.base_revision, captured_working_root:null, status:'available'}},
+      mount:null, mount_location:null,
+    })),
+  };
+}
 async function open(t, data = fixture(), target = '/dashboard') {
   const page = await browser.newPage({viewport:{width:1440, height:1000}});
   const errors = [], requests = [];
@@ -66,6 +78,9 @@ async function open(t, data = fixture(), target = '/dashboard') {
       await route.fulfill({json:data.status});
     } else if (url.pathname === '/api/workspaces/workspace') {
       await route.fulfill({json:data});
+    } else if (url.pathname === '/api/workspaces/workspace/relationships') {
+      const result = typeof data.relationships === 'function' ? await data.relationships(url) : data.relationships || relationshipFixture(data);
+      await route.fulfill(result.error ? {status:409, json:result} : {json:result});
     } else if (url.pathname.endsWith('/files')) {
       const branch = url.pathname.split('/').at(-2);
       const version = `${branch}:1:1:1`;
@@ -542,4 +557,76 @@ test('switching archive branches discards delayed directory and file responses',
   }
   assert.equal(data.status.selected_branch,'feature');
   assert(requests.every(url=>!url.pathname.includes('/mcp')));
+});
+
+test('relationships display ownership, mount principals and exact origins and send filters', async t => {
+  const data = fixture();
+  const result = relationshipFixture(data);
+  const entry = result.entries[1];
+  entry.branch.ownership = {location:'remote-owner',source:'remote_reference',authority_epoch:3,generation:4,storage_version:'storage-v7',observed_ns:1792312200000000000};
+  entry.branch.origin.captured_working_root = {id:'creation-root'};
+  entry.mount = {id:'mount-1',path:'/workspace/current',principal:'reader <script>',access:'read_only',state:'ready',generation:5};
+  entry.mount_location = 'local'; result.entries = [entry]; result.total = 1; data.relationships = result;
+  const {page, requests} = await open(t,data);
+  const panel = page.locator('#relationships-panel');
+  assert.match(await panel.textContent(), /远端观测记录/);
+  assert.match(await panel.textContent(), /reader <script>/);
+  assert.match(await panel.textContent(), /远端挂载、远端默认分支及机器在线状态未知/);
+  assert.equal(await panel.locator('script').count(), 0);
+  await panel.getByText('记录详情', {exact:true}).click();
+  assert.match(await panel.textContent(), /storage-v7/);
+  await panel.getByText('创建时的内容对象', {exact:true}).click();
+  assert.equal(await panel.locator('.relationship-root').textContent(),'creation-root');
+  await page.locator('#relationship-branch').selectOption('feature');
+  await page.locator('#relationship-mount_state').selectOption('released');
+  await page.locator('#relationship-owner_location').fill('remote-owner');
+  await page.locator('#relationship-mount_location').fill('local');
+  await page.locator('#relationship-mount').fill('mount-1');
+  entry.mount.state = 'released';
+  await panel.getByRole('button',{name:'查询',exact:true}).click();
+  await page.waitForFunction(() => document.querySelector('#relationship-list .released'));
+  const request = requests.filter(url => url.pathname.endsWith('/relationships')).at(-1);
+  assert.equal(request.searchParams.get('branch'),'feature');
+  assert.equal(request.searchParams.get('mount_state'),'released');
+  assert.equal(request.searchParams.get('owner_location'),'remote-owner');
+  assert.equal(request.searchParams.get('mount_location'),'local');
+  assert.equal(request.searchParams.get('mount'),'mount-1');
+  await page.setViewportSize({width:390,height:844});
+  const widths = await page.evaluate(() => [document.documentElement.scrollWidth,innerWidth]);
+  assert(widths[0] <= widths[1]);
+});
+
+test('relationships append bounded pages and refresh after the server rejects a changed cursor', async t => {
+  const data = fixture(), result = relationshipFixture(data);
+  const base = result.entries[1];
+  const entry = index => ({...base,mount_location:'local',mount:{id:`mount-${index}`,path:`/mount/${index}`,principal:'owner',access:'read_only',state:'ready',generation:1}});
+  let changed = false;
+  data.relationships = url => url.searchParams.has('cursor')
+    ? changed ? {error:{code:'TARGET_MOVED',message:'relationships changed'}} : {...result,entries:[entry(50)],total:51,next:null}
+    : {...result,entries:Array.from({length:50},(_,index)=>entry(index)),total:51,next:'page-2'};
+  const {page, requests} = await open(t,data);
+  assert.equal(await page.locator('#relationship-list tr').count(),50);
+  await page.locator('#relationship-more').click();
+  await page.waitForFunction(() => document.querySelectorAll('#relationship-list tr').length === 51);
+  assert.equal(await page.locator('#relationship-more').isVisible(),false);
+  await refresh(page);
+  changed = true;
+  await page.locator('#relationship-more').click();
+  await page.waitForFunction(() => document.querySelector('#relationship-status').textContent === '已显示 50 / 51 条已知关系');
+  const calls = requests.filter(url => url.pathname.endsWith('/relationships'));
+  assert.equal(calls.at(-2).searchParams.get('cursor'),'page-2');
+  assert.equal(calls.at(-1).searchParams.has('cursor'),false);
+  assert.equal(await page.locator('#relationship-list tr').count(),50);
+});
+
+test('relationships clear old rows and report query failures without hiding branch history', async t => {
+  const data = fixture();
+  const {page} = await open(t,data);
+  assert.equal(await page.locator('#relationship-list tr').count(),3);
+  data.relationships = {error:{code:'UNAVAILABLE',message:'relationship service unavailable'}};
+  await page.locator('#relationships-panel').getByRole('button',{name:'查询',exact:true}).click();
+  await page.waitForFunction(() => document.querySelector('#relationship-status').textContent.includes('查询失败'));
+  assert.equal(await page.locator('#relationship-list tr').count(),0);
+  assert.equal(await page.locator('#relationship-more').isVisible(),false);
+  assert.equal(await page.locator('#revision-child-autosave').isVisible(),true);
 });

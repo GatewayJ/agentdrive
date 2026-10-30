@@ -7,6 +7,72 @@ use agentdrive_ports::*;
 use rusqlite::OptionalExtension;
 
 impl LocalBackend {
+    pub(crate) async fn read_relationship_snapshot(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<Option<RelationshipSnapshot>> {
+        let location = self.inner.location;
+        self.db(move |connection| {
+            let transaction = connection.transaction().map_err(sql_error)?;
+            let args = [workspace.to_string()];
+            let Some(workspace) = read_one::<Workspace>(
+                &transaction, "SELECT data FROM workspaces WHERE id=?1", &args,
+            )? else {
+                return Ok(None);
+            };
+            let selection: Option<String> = transaction.query_row(
+                "SELECT branch FROM workspace_selections WHERE workspace=?1",
+                [&args[0]], |row| row.get(0),
+            ).optional().map_err(sql_error)?;
+            let branches: Vec<Branch> = read_many(
+                &transaction, "SELECT data FROM branches WHERE workspace=?1 ORDER BY id", &args,
+            )?;
+            let mounts: Vec<MountBinding> = read_many(
+                &transaction,
+                "SELECT m.data FROM mounts m JOIN branches b ON b.id=m.branch WHERE b.workspace=?1 ORDER BY m.id",
+                &args,
+            )?;
+            let creations: Vec<OperationRecord> = read_many(
+                &transaction,
+                "SELECT data FROM operations WHERE workspace=?1 AND json_extract(CAST(data AS TEXT), '$.result.kind')='branch' \
+                 UNION ALL SELECT data FROM replicated_operations WHERE workspace=?1 AND json_extract(CAST(data AS TEXT), '$.result.kind')='branch' \
+                 AND id NOT IN (SELECT id FROM operations)",
+                &args,
+            )?;
+            // Read only revisions referenced by origins or mounts, independent of history size.
+            let mut ids = std::collections::BTreeSet::from([workspace.initial_revision]);
+            ids.extend(branches.iter().map(|branch| branch.base_revision));
+            ids.extend(mounts.iter().filter_map(|mount| mount.revision));
+            for operation in &creations {
+                if let Some(CommandResult::Branch { branch }) = &operation.result {
+                    ids.insert(branch.base_revision);
+                }
+            }
+            let mut revisions = Vec::new();
+            for id in ids {
+                if let Some(revision) = read_one(
+                    &transaction,
+                    "SELECT data FROM revisions WHERE workspace=?1 AND id=?2",
+                    &[args[0].clone(), id.to_string()],
+                )? {
+                    revisions.push(revision);
+                }
+            }
+            Ok(Some(RelationshipSnapshot {
+                workspace,
+                location,
+                selected_branch: selection.map(|value| value.parse()).transpose()?,
+                branches,
+                mounts,
+                remote_refs: read_many(
+                    &transaction, "SELECT data FROM remote_refs WHERE workspace=?1 ORDER BY id", &args,
+                )?,
+                creations,
+                revisions,
+            }))
+        }).await
+    }
+
     pub(crate) async fn read_file_view(
         &self,
         mount: MountId,

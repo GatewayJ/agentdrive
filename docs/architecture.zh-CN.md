@@ -170,3 +170,9 @@ Git 分支 head 作为 `VersionedRef.version` 返回。单文件 POST/PUT 携带
 服务使用分支 ID、authority epoch、generation 和 mutation sequence 生成读取版本。在分支锁内验证版本并读取元数据；未保存文件的有界读取保持分支锁，已保存文件读取期间通过对象保护锁保持对象可用，并释放分支锁。此能力不创建文件句柄、挂载绑定、检查点或 revision。
 
 档案室入口只读取 `WorkspaceApi::status`，无需枚举版本历史。`archive.js` 管理分支选择和保存状态展示；`file-browser.js` 管理目录分页、文件读取、请求取消和过期版本；`file-preview.js` 通过 DOM 文本节点展示 Markdown。`branch-files.js` 将同一个文件浏览器用于原有弹框。
+
+## 关系查询
+
+`WorkspaceApi::relationships` 通过 `LocalStateStore::relationship_snapshot` 获取数据。local adapter 负责 SQLite 事务及索引，通过已建立索引的操作结果条件读取分支创建记录，并只读取来源和挂载引用的版本。engine 负责判断所属 location、创建来源、分支及来源权限、筛选和分页。CLI/MCP 与 HTTP 使用相同的请求和返回类型，Dashboard 通过 `relationships.js` 展示查询结果。
+
+远程发布、历史导入和 ownership transfer 在确认引用更新时保存 `ObservedBranchRef`。该格式兼容已有 `BranchRef` 读取，旧数据库允许缺少观测版本和时间。创建时的 working root 从现有操作结果获取。查询游标关联当前用户有权查看的结果和筛选条件；这些内容变化后，需要重新读取第一页。

@@ -25,7 +25,7 @@ Replace both paths with actual absolute paths; use `agentdrive.exe` on Windows. 
 
 For direct Streamable HTTP, use `http://127.0.0.1:7421/mcp` and `Authorization: Bearer <token-file-contents>`. Use an MCP client that performs initialization and preserves the returned session information. The accepted Host values are the bound address and `localhost:<port>`. A supplied Origin must match the request's own HTTP origin or `allowed_origins`; native CLI/stdio connections omit Origin. The daemon binds only to loopback; access from other machines requires an authenticated TLS proxy preserving an accepted Host value.
 
-The server advertises the MCP `tools` capability. It provides 31 tools, including their input JSON schemas and annotations. Read the connected server's catalog with `tools/list` or:
+The server advertises the MCP `tools` capability. It provides 32 tools, including their input JSON schemas and annotations. Read the connected server's catalog with `tools/list` or:
 
 ```sh
 agentdrive tools > tools.json
@@ -47,7 +47,7 @@ The 19 command tools in the next table require an envelope. For example, the `ar
 
 The equivalent CLI is `agentdrive call workspace_create --request-id create-demo-1 --json '{"name":"demo"}'`. `request_id` must be nonempty, contain no control characters, and be at most 256 UTF-8 bytes. Its identity belongs to the authenticated principal and survives process restarts. Retry with the same ID, tool, and arguments; conflicting reuse returns `REQUEST_ID_CONFLICT`.
 
-The ten query tools receive direct argument objects. `operation_cancel` also receives direct arguments and modifies the referenced operation; it does not accept the command envelope. For `operation_by_request`, use:
+The eleven query tools receive direct argument objects. `operation_cancel` also receives direct arguments and modifies the referenced operation; it does not accept the command envelope. For `operation_by_request`, use:
 
 ```json
 {
@@ -103,6 +103,7 @@ Fields below are inside `request`. A suffix `?` means the field may be omitted. 
 | --- | --- | --- |
 | `workspace_list` | `{}` | Visible workspace array. |
 | `workspace_status` | `workspace` | Workspace, local location, `selected_branch`, branches, remote references, mounts, pending jobs, capabilities, and storage statistics. |
+| `workspace_relationships` | `workspace`, `branch?`, `mount?`, `owner_location?`, `mount_location?`, `mount_state?`, `limit?`, `cursor?` | Authorized branch ownership, local mount bindings and creation origins; bounded pages and explicit remote observation status. |
 | `revision_list` | `workspace`, `branch?` | Retained revision array; optional branch filter. |
 | `revision_diff` | `workspace`, `after`; optional `before`, `cursor`, `limit` | `{entries, next, total}`. Omitted `before` means an empty tree. Default page size 100, maximum 200; pass `next` as `cursor`. Entries contain `path`, `previous_path`, `kind`, `before`, `after`. |
 | `revision_text_diff` | `workspace`, `after`, `path`; optional `before`, `previous_path` | File attributes and UTF-8 line hunks with three context lines, old/new line numbers and final-newline information. Status is `text`, `unchanged`, `binary`, `too_large` or `directory`. Maximum 256 KiB and 10,000 lines per side. |
@@ -129,8 +130,24 @@ Call `workspace_status` for an existing workspace and inspect `capabilities`:
 | `automatic_text_merge` | `false`; conflicts require explicit resolution. |
 | `physical_remote_gc` | `false`; automatic deletion of unreferenced historical objects in remote storage is disabled. |
 
-File editing normally uses the mounted native path; the MCP tools manage workspaces, versions, and lifecycle. The catalog marks the ten queries `readOnlyHint: true` and `destructiveHint: false`; commands and cancellation use the opposite values. All tools currently advertise `idempotentHint: true` and `openWorldHint: true`. These annotations describe tool behavior; authentication, grants, request identities, and state checks enforce access and retries.
+File editing normally uses the mounted native path; the MCP tools manage workspaces, versions, and lifecycle. The catalog marks the eleven queries `readOnlyHint: true` and `destructiveHint: false`; commands and cancellation use the opposite values. All tools currently advertise `idempotentHint: true` and `openWorldHint: true`. These annotations describe tool behavior; authentication, grants, request identities, and state checks enforce access and retries.
 
 Source definitions: [catalog and dispatch](../crates/agentdrive-mcp/src/server.rs), [request types](../crates/agentdrive-ports/src/api.rs), [shared types](../crates/agentdrive-model/src/entities.rs), and [error codes](../crates/agentdrive-model/src/error.rs).
 
 Turn persistence is managed by [agent integrations](integrations.md) through the authenticated lifecycle API. Branches expose `source_branch` and `base_revision` for creation ancestry.
+
+## Workspace relationships
+
+```sh
+agentdrive call workspace_relationships --json '{"workspace":"<workspace-id>","limit":50}'
+```
+
+The same query is available through `WorkspaceApi::relationships` and bearer-authenticated `GET /api/workspaces/{workspace}/relationships`. HTTP uses query parameters for the filters. `workspace` is required; all filters are optional. `owner_location` identifies the location owning the branch, while `mount_location` identifies the daemon hosting the mount. `mount_state` accepts `preparing`, `ready`, `paused`, `released`, or `recovery_required`.
+
+Each entry contains `branch`, optional `mount` and `mount_location`. Branches without current local mounts have a row with `mount: null`. Supplying a mount ID, mount state or mount location restricts results to actual matching bindings. Default listings omit released bindings; an explicit mount ID or `mount_state: "released"` includes retained released bindings. `total` counts authorized matching rows. `selected_branch` reports the observing location's selection when the caller can read that branch.
+
+`branch.ownership` includes `location`, `authority_epoch`, `generation` and its source: `local_authority` for the local owner's record, `remote_reference` for an observed remote reference, or `local_record` for a stored foreign-owner record without an applicable remote observation. Remote observations include `storage_version` and `observed_ns`; these can be null for records saved before observation tracking. Queries read locally retained state. Pull through `sync` to observe remote updates. `remote_mounts_known` and `remote_selections_known` are false; empty local results do not establish remote inventory or machine availability.
+
+`branch.origin` includes the available source branch/name, base revision and captured creation working root. The captured root comes from the creation receipt or the workspace's initial revision and remains independent of later edits. `status` is `available`, `unavailable`, or `restricted`. Missing metadata retains known authorized IDs. Restricted origins omit source IDs, revision IDs and roots. Mount revision IDs are also omitted when the source revision is inaccessible. Workspace and branch read permissions govern all returned identities, paths, ancestry and counts.
+
+`limit` defaults to 50 and accepts 1–200. Rows are ordered by branch ID and then mount ID. Supply `next` as `cursor` with the same filters and limit. The cursor is bound to the authorized view, observing location and principal. A changed view returns retryable `TARGET_MOVED` (HTTP 409); restart from the first page. The local adapter reads selection, branches, mounts, creation receipts, origin revisions and remote observations in one SQLite transaction. Relationship queries do not create mounts, revisions or publication operations.

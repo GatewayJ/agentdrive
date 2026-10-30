@@ -316,6 +316,11 @@ pub trait WorkspaceApi: Send + Sync {
     ) -> Result<OperationRecord>;
     async fn list(&self, actor: &Principal) -> Result<Vec<Workspace>>;
     async fn status(&self, actor: &Principal, workspace: WorkspaceId) -> Result<WorkspaceStatus>;
+    async fn relationships(
+        &self,
+        actor: &Principal,
+        query: crate::WorkspaceRelationshipsQuery,
+    ) -> Result<crate::WorkspaceRelationships>;
     async fn import_directory(
         &self,
         context: RequestContext,

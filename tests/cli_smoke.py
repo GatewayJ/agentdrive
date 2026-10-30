@@ -74,7 +74,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-cli-') as temporary:
     try:
         daemon = start()
         tools = json.loads(subprocess.check_output(client + ['tools'], text=True, encoding='utf-8', timeout=30))
-        assert len(tools['tools']) == 31
+        assert len(tools['tools']) == 32
         names = {tool['name'] for tool in tools['tools']}
         assert 'revision_files' in names and 'merge_validate' not in names
         commit_schema = next(tool['inputSchema'] for tool in tools['tools'] if tool['name'] == 'revision_commit')
@@ -83,6 +83,10 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-cli-') as temporary:
         assert created['local_saved']
         workspace = created['result']['workspace']['id']
         branch = call('workspace_status', {'workspace': workspace})['branches'][0]
+        relationships = call('workspace_relationships', {'workspace': workspace, 'branch': branch['id'], 'limit': 1})
+        assert relationships['total'] == 1 and relationships['selected_branch'] == branch['id'], relationships
+        assert relationships['entries'][0]['branch']['origin']['workspace_root'], relationships
+        assert not relationships['remote_mounts_known'] and not relationships['remote_selections_known'], relationships
         guard = {'branch': branch['id'], 'authority_epoch': branch['authority_epoch'], 'generation': branch['generation'], 'expected_head': branch['formal_head']}
         for kind in ('commit', 'checkpoint'):
             saved = call('revision_commit', {'guard': guard, 'kind': kind}, 'save-' + kind)
@@ -104,7 +108,7 @@ with tempfile.TemporaryDirectory(prefix='agentdrive-cli-') as temporary:
             assert responses.get(timeout=15)['id'] == 1
             send({'method': 'notifications/initialized'})
             send({'id': 2, 'method': 'tools/list', 'params': {}})
-            assert len(responses.get(timeout=15)['result']['tools']) == 31
+            assert len(responses.get(timeout=15)['result']['tools']) == 32
             send({'id': 3, 'method': 'tools/call', 'params': {'name': 'workspace_status', 'arguments': {'workspace': workspace}}})
             assert responses.get(timeout=15)['result']['structuredContent']['workspace']['id'] == workspace
             send({'id': 4, 'method': 'tools/call', 'params': {'name': 'revision_files', 'arguments': {'workspace': workspace, 'revision': branch['formal_head']}}})

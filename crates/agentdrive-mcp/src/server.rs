@@ -70,6 +70,12 @@ impl McpServer {
                         .await?,
                 )
             }
+            "workspace_relationships" => encode(
+                self.services
+                    .workspace
+                    .relationships(&self.principal, parse(arguments)?)
+                    .await?,
+            ),
             "revision_list" => {
                 let input: RevisionList = parse(arguments)?;
                 encode(
@@ -294,6 +300,11 @@ pub fn tool_catalog() -> Vec<Tool> {
         tool::<WorkspaceQuery>(
             "workspace_status",
             "Inspect branches, mounts, location, pending synchronization and capabilities.",
+            true,
+        ),
+        tool::<WorkspaceRelationshipsQuery>(
+            "workspace_relationships",
+            "Query authorized workspace, branch, owner and local mount relationships. Supports branch, mount, owner_location, mount_location and mount_state filters. Default lists unreleased mounts; an explicit mount ID or state can include released bindings. Pages default to 50 rows, maximum 200. Pass next as cursor with the same filters; TARGET_MOVED requires restarting pagination. Remote mounts and selections remain unknown; ownership observations do not indicate whether a machine is online.",
             true,
         ),
         tool::<Command<ImportDirectory>>(

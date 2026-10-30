@@ -443,6 +443,27 @@ pub struct BranchRef {
     pub write_stopped: bool,
 }
 
+/// A locally retained observation. Additional fields are absent in older databases.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObservedBranchRef {
+    #[serde(flatten)]
+    pub reference: BranchRef,
+    #[serde(default)]
+    pub storage_version: Option<String>,
+    #[serde(default)]
+    pub observed_ns: Option<i64>,
+}
+
+impl ObservedBranchRef {
+    pub fn new(reference: BranchRef, storage_version: String, observed_ns: i64) -> Self {
+        Self {
+            reference,
+            storage_version: Some(storage_version),
+            observed_ns: Some(observed_ns),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SyncJob {
     pub operation: OperationId,

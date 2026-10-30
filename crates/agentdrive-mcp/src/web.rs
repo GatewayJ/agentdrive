@@ -19,6 +19,10 @@ pub(crate) fn api(services: Services) -> Router {
         .route("/api/workspaces/{workspace}", get(workspace))
         .route("/api/workspaces/{workspace}/archive", get(archive))
         .route(
+            "/api/workspaces/{workspace}/relationships",
+            get(relationships),
+        )
+        .route(
             "/api/workspaces/{workspace}/revisions/{revision}/changes",
             get(revision_changes),
         )
@@ -72,6 +76,7 @@ pub(crate) fn assets() -> Router {
         .route("/dashboard", get(|| async { Html(include_str!("../dashboard/index.html")) }))
         .route("/dashboard.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/dashboard.js")) }))
         .route("/workspace.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/workspace.js")) }))
+        .route("/relationships.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/relationships.js")) }))
         .route("/settings.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/settings.js")) }))
         .route("/revisions.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/revisions.js")) }))
         .route("/branch-files.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/branch-files.js")) }))
@@ -132,6 +137,20 @@ async fn archive(
     Path(workspace): Path<WorkspaceId>,
 ) -> std::result::Result<Json<WorkspaceStatus>, ApiError> {
     Ok(Json(services.workspace.status(&actor, workspace).await?))
+}
+
+async fn relationships(
+    State(services): State<Services>,
+    Extension(actor): Extension<Principal>,
+    Path(workspace): Path<WorkspaceId>,
+    Query(filter): Query<RelationshipFilter>,
+) -> std::result::Result<Json<WorkspaceRelationships>, ApiError> {
+    Ok(Json(
+        services
+            .workspace
+            .relationships(&actor, WorkspaceRelationshipsQuery { workspace, filter })
+            .await?,
+    ))
 }
 
 #[derive(Deserialize)]

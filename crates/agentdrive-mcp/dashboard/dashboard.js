@@ -3,6 +3,7 @@ import { createBranchFileViewer } from './branch-files.js';
 import { createSettingsPage } from './settings.js';
 import { createRevisionViewer } from './revisions.js';
 import { createWorkspaceView } from './workspace.js';
+import { createRelationshipsView } from './relationships.js';
 const $ = (id) => document.getElementById(id);
 const fragment = new URLSearchParams(location.hash.slice(1));
 if (fragment.has('token')) {
@@ -30,12 +31,12 @@ async function api(path, options = {}) {
   const {binary = false, ...fetchOptions} = options;
   const response = await fetch(path, {...fetchOptions, headers:{...options.headers, Authorization:`Bearer ${token}`}, cache:'no-store'});
   if (response.status === 401) {
-    sessionStorage.removeItem('agentdrive-token'); token = ''; revisionViewer.clear(); branchFileViewer.clear(); archivePage.clear(); showLogin();
+    sessionStorage.removeItem('agentdrive-token'); token = ''; revisionViewer.clear(); branchFileViewer.clear(); archivePage.clear(); relationshipsView.clear(); showLogin();
     throw new Error('访问令牌无效，请重新连接。');
   }
   if (!response.ok) {
     const result = await response.json().catch(() => null);
-    throw Object.assign(new Error(result?.error?.message || `请求失败：${response.status}`), {status:response.status});
+    throw Object.assign(new Error(result?.error?.message || `请求失败：${response.status}`), {status:response.status, code:result?.error?.code});
   }
   return binary ? response.arrayBuffer() : response.json();
 }
@@ -127,13 +128,13 @@ async function refresh(force=false) {
     if (workspaces.some(workspace => workspace.id === selection)) $('workspace').value = selection;
     if ($('workspace').value) sessionStorage.setItem('agentdrive-workspace', $('workspace').value);
     $('empty').hidden = workspaces.length > 0; $('panels').hidden = !workspaces.length;
-    if (!workspaces.length) { snapshot = null; revisionViewer.clear(); branchFileViewer.clear(); archivePage.show(null); $('workspace-name').textContent='暂无工作区'; ['branch-count','mount-count','mounted-branch-count'].forEach(id => $(id).textContent='0'); $('mount-detail').textContent='暂无挂载点'; $('sync-status').textContent='—'; $('sync-detail').textContent='暂无工作区'; }
+    if (!workspaces.length) { snapshot = null; revisionViewer.clear(); branchFileViewer.clear(); relationshipsView.clear(); archivePage.show(null); $('workspace-name').textContent='暂无工作区'; ['branch-count','mount-count','mounted-branch-count'].forEach(id => $(id).textContent='0'); $('mount-detail').textContent='暂无挂载点'; $('sync-status').textContent='—'; $('sync-detail').textContent='暂无工作区'; }
     else {
       const archive = isArchive();
       const data = await api(`/api/workspaces/${encodeURIComponent($('workspace').value)}${archive ? '/archive' : ''}`);
       if (request !== generation) return;
       if (archive) { $('workspace-name').textContent = data.workspace.name; archivePage.show(data); }
-      else { snapshot = data; render(); }
+      else { snapshot = data; render(); await relationshipsView.show(data.status); if (request !== generation) return; }
     }
     $('error').hidden = true; $('updated').textContent = `${new Date().toLocaleTimeString('zh-CN',{hour12:false})} 已刷新`;
     $('connection').textContent = '已连接本地 daemon';
@@ -145,6 +146,7 @@ async function refresh(force=false) {
 const settingsPage = createSettingsPage({api, element, $});
 const revisionViewer = createRevisionViewer({api, element});
 const branchFileViewer = createBranchFileViewer({api, element});
+const relationshipsView = createRelationshipsView({api, element, container:$('relationships-panel')});
 const archivePage = createArchivePage({api, element, container:$('archive-page')});
 const workspaceView = createWorkspaceView({element, selectBranch:chooseBranch, showBranchFiles:branch => branchFileViewer.show(snapshot.status.workspace.id, branch), showRevision:(revision, triggerId) => {
   const branch = snapshot.status.branches.find(value => value.id === revision.branch);
@@ -162,7 +164,7 @@ async function refreshPage() {
 }
 function showPage() {
   generation++; loading = false; $('refresh').disabled = false;
-  revisionViewer.clear(); branchFileViewer.clear(); archivePage.clear();
+  revisionViewer.clear(); branchFileViewer.clear(); archivePage.clear(); relationshipsView.clear();
   selectedBranch = new URLSearchParams(location.search).get('branch');
   const settings = isSettings(), archive = isArchive();
   $('archive-page').hidden = !archive;
@@ -188,10 +190,10 @@ for (const id of ['archive-nav', 'history-nav', 'settings-nav']) $(id).addEventL
 });
 window.addEventListener('popstate', showPage);
 $('login-form').addEventListener('submit', event => { event.preventDefault(); token=$('token').value.trim(); sessionStorage.setItem('agentdrive-token',token); $('token').value=''; settingsPage.clear(); $('login').hidden=true; $('app').hidden=false; showPage(); });
-$('logout').addEventListener('click', () => { generation++; token=''; loading=false; sessionStorage.removeItem('agentdrive-token'); snapshot=null; settingsPage.clear(); revisionViewer.clear(); branchFileViewer.clear(); archivePage.clear(); showLogin(); });
+$('logout').addEventListener('click', () => { generation++; token=''; loading=false; sessionStorage.removeItem('agentdrive-token'); snapshot=null; settingsPage.clear(); revisionViewer.clear(); branchFileViewer.clear(); archivePage.clear(); relationshipsView.clear(); showLogin(); });
 $('workspace').addEventListener('change', () => {
   const url = new URL(location.href); url.searchParams.set('workspace',$('workspace').value); url.searchParams.delete('branch'); url.searchParams.delete('path'); history.replaceState(null,'',url.pathname+url.search);
-  selectedBranch=null; snapshot=null; revisionViewer.clear(); branchFileViewer.clear(); archivePage.clear(); refresh(true);
+  selectedBranch=null; snapshot=null; revisionViewer.clear(); branchFileViewer.clear(); archivePage.clear(); relationshipsView.clear(); refresh(true);
 });
 $('refresh').addEventListener('click', async () => { await refreshPage(); if (isArchive()) archivePage.refresh(); });
 if (location.pathname === '/') history.replaceState(null,'','/archive'+location.search);

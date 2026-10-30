@@ -25,7 +25,7 @@
 
 直接连接 Streamable HTTP 时，使用 `http://127.0.0.1:7421/mcp`，并提供 `Authorization: Bearer <token-file-contents>`。MCP 客户端需要完成初始化并保留返回的会话信息。允许的 Host 为监听地址和 `localhost:<port>`。请求携带 Origin 时，需要与请求地址同源，或匹配 `allowed_origins`；原生 CLI/stdio 连接省略 Origin。守护进程仅监听本机回环地址；其他机器访问时，需要使用经过身份验证的 TLS 代理，并保留允许的 Host 值。
 
-服务声明支持 MCP `tools` 能力，提供 31 个工具及其输入 JSON schema 和 annotations。可以通过 `tools/list` 读取已连接服务的工具目录，或者运行：
+服务声明支持 MCP `tools` 能力，提供 32 个工具及其输入 JSON schema 和 annotations。可以通过 `tools/list` 读取已连接服务的工具目录，或者运行：
 
 ```sh
 agentdrive tools > tools.json
@@ -47,7 +47,7 @@ jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 
 对应 CLI 为 `agentdrive call workspace_create --request-id create-demo-1 --json '{"name":"demo"}'`。`request_id` 必须非空、不含控制字符，且最多为 256 个 UTF-8 字节。请求身份属于当前通过身份验证的 principal，并在进程重启后保留。重试需要使用相同 ID、工具和参数；冲突复用会返回 `REQUEST_ID_CONFLICT`。
 
-十个查询工具直接接收参数对象。`operation_cancel` 也直接接收参数，并修改指定操作的状态，不接受命令工具的外层结构。调用 `operation_by_request` 时使用：
+十一个查询工具直接接收参数对象。`operation_cancel` 也直接接收参数，并修改指定操作的状态，不接受命令工具的外层结构。调用 `operation_by_request` 时使用：
 
 ```json
 {
@@ -103,6 +103,7 @@ jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 | --- | --- | --- |
 | `workspace_list` | `{}` | 当前身份可见的工作区数组。 |
 | `workspace_status` | `workspace` | 工作区、本地 location、`selected_branch`、分支、远端引用、挂载、待处理任务、能力和存储统计。 |
+| `workspace_relationships` | `workspace`, `branch?`, `mount?`, `owner_location?`, `mount_location?`, `mount_state?`, `limit?`, `cursor?` | 查询有权查看的分支所属 location、本机挂载和创建来源；支持分页并明确标记远端观测状态。 |
 | `revision_list` | `workspace`, `branch?` | 已保留的版本数组，可以按分支过滤。 |
 | `revision_diff` | `workspace`, `after`；可选 `before`, `cursor`, `limit` | 返回 `{entries, next, total}`。省略 `before` 表示空目录。默认每页 100 项，最多 200 项；将 `next` 作为下一页的 `cursor`。每项包含 `path`、`previous_path`、`kind`、`before`、`after`。 |
 | `revision_text_diff` | `workspace`, `after`, `path`；可选 `before`, `previous_path` | 返回文件属性与 UTF-8 文本差异，包含三行上下文、前后行号、末尾换行信息。状态为 `text`、`unchanged`、`binary`、`too_large` 或 `directory`。每侧最多 256 KiB、10,000 行。 |
@@ -129,8 +130,24 @@ jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 | `automatic_text_merge` | `false`，冲突需要明确解决。 |
 | `physical_remote_gc` | `false`，自动删除远程存储中不再被引用的历史对象的功能已禁用。 |
 
-文件编辑通常通过挂载后的原生路径完成，MCP 工具负责工作区、版本和生命周期管理。工具目录将十个查询标记为 `readOnlyHint: true`、`destructiveHint: false`；命令和取消操作使用相反的值。全部工具当前声明 `idempotentHint: true` 和 `openWorldHint: true`。这些 annotations 描述工具行为，访问和重试由身份验证、授权、请求身份和状态检查控制。
+文件编辑通常通过挂载后的原生路径完成，MCP 工具负责工作区、版本和生命周期管理。工具目录将十一个查询标记为 `readOnlyHint: true`、`destructiveHint: false`；命令和取消操作使用相反的值。全部工具当前声明 `idempotentHint: true` 和 `openWorldHint: true`。这些 annotations 描述工具行为，访问和重试由身份验证、授权、请求身份和状态检查控制。
 
 源代码定义见[工具目录与调用分发](../crates/agentdrive-mcp/src/server.rs)、[请求类型](../crates/agentdrive-ports/src/api.rs)、[公共类型](../crates/agentdrive-model/src/entities.rs)和[错误代码](../crates/agentdrive-model/src/error.rs)。
 
 回合保存由 [Agent 集成](integrations.zh-CN.md)通过经过身份验证的生命周期 API 管理。分支包含 `source_branch` 和 `base_revision`，用于查询创建关系。
+
+## 工作区关系查询
+
+```sh
+agentdrive call workspace_relationships --json '{"workspace":"<workspace-id>","limit":50}'
+```
+
+同一查询通过 `WorkspaceApi::relationships` 和需要 bearer 认证的 `GET /api/workspaces/{workspace}/relationships` 提供。HTTP 使用查询参数传递筛选条件。`workspace` 必填，其他字段可选。`owner_location` 表示分支的写入所属 location，`mount_location` 表示提供挂载目录的 daemon location。`mount_state` 支持 `preparing`、`ready`、`paused`、`released`、`recovery_required`。
+
+每条记录包含 `branch`、可为空的 `mount` 和 `mount_location`。没有当前本机挂载的分支返回 `mount: null`。指定挂载 ID、挂载状态或挂载 location 时，只返回符合条件的挂载记录。默认列表排除已释放挂载；明确指定挂载 ID 或 `mount_state: "released"` 可以查询保留的已释放记录。`total` 统计当前用户有权查看且符合条件的记录数量。`selected_branch` 返回观测 location 的默认分支；没有读取该分支的权限时，该字段为空。
+
+`branch.ownership` 返回 `location`、`authority_epoch`、`generation` 和记录来源：`local_authority` 表示本机所有者记录，`remote_reference` 表示已观测的远端引用，`local_record` 表示保存在本机且没有适用远端观测的其他 location 所有者记录。远端观测带有 `storage_version` 和 `observed_ns`；旧记录可以缺少这些字段的值。查询使用本机已知信息，通过 `sync` 拉取可以更新远端观测。`remote_mounts_known` 和 `remote_selections_known` 为 false；本机列表为空时，远端挂载、远端选择和机器在线状态仍然未知。
+
+`branch.origin` 返回可用的来源分支、名称、基础版本和创建时捕获的 working root。该 root 来自创建操作记录或工作区初始版本，后续编辑保留这个创建来源。`status` 为 `available`、`unavailable` 或 `restricted`。缺失元数据时保留有权查看的已知 ID；来源权限不足时隐藏来源分支 ID、版本 ID 和 root。挂载所指向的来源版本无权读取时，也会隐藏该版本 ID。工作区及分支读取权限适用于所有返回的身份、路径、来源和统计数量。
+
+`limit` 默认 50，范围为 1–200。记录按分支 ID、挂载 ID 排序。将 `next` 作为下一次的 `cursor`，并保持筛选条件和 limit 一致。游标关联当前用户可查看的内容、观测 location 和 principal。内容发生变化时返回可重试的 `TARGET_MOVED`（HTTP 409），需要从第一页重新读取。local adapter 在同一个 SQLite 事务内读取选择、分支、挂载、创建操作、来源版本和远端观测。关系查询保持只读。

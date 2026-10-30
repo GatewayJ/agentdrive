@@ -28,6 +28,10 @@ CREATE TABLE IF NOT EXISTS replicated_operations (
     data BLOB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS replicated_operations_workspace ON replicated_operations(workspace);
+CREATE INDEX IF NOT EXISTS operations_branch_results ON operations(workspace)
+    WHERE json_extract(CAST(data AS TEXT), '$.result.kind')='branch';
+CREATE INDEX IF NOT EXISTS replicated_operations_branch_results ON replicated_operations(workspace)
+    WHERE json_extract(CAST(data AS TEXT), '$.result.kind')='branch';
 CREATE TABLE IF NOT EXISTS mounts (
     id TEXT PRIMARY KEY,
     path TEXT NOT NULL,
@@ -38,6 +42,7 @@ CREATE TABLE IF NOT EXISTS mounts (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS mounts_path ON mounts(path) WHERE active=1;
 CREATE UNIQUE INDEX IF NOT EXISTS mounts_writer ON mounts(branch) WHERE writable=1;
+CREATE INDEX IF NOT EXISTS mounts_branch ON mounts(branch, id);
 CREATE TABLE IF NOT EXISTS merges (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, data BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS sync_jobs (
     id TEXT PRIMARY KEY,

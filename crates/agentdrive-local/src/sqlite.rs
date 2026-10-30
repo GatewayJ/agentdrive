@@ -298,6 +298,12 @@ fn put_node(transaction: &Transaction<'_>, branch: BranchId, node: &Node) -> Res
 
 #[async_trait]
 impl LocalStateStore for LocalBackend {
+    async fn relationship_snapshot(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<Option<RelationshipSnapshot>> {
+        self.read_relationship_snapshot(workspace).await
+    }
     async fn file_view(&self, mount: MountId, query: FileQuery) -> Result<Option<FileView>> {
         self.read_file_view(mount, query).await
     }
@@ -633,14 +639,15 @@ impl LocalStateStore for LocalBackend {
                     params![job.operation.to_string(), job.reference.workspace.to_string(), job.reference.branch.to_string(), db_integer(job.reference.source_generation)?, encode(job)?]).map_err(sql_error)?;
             }
             for id in &commit.completed_jobs { transaction.execute("DELETE FROM sync_jobs WHERE id=?1", [id.to_string()]).map_err(sql_error)?; }
-            for reference in &commit.remote_refs {
+            for observation in &commit.remote_refs {
+                let reference = &observation.reference;
                 put_history(&transaction, reference)?;
                 let existing: Option<BranchRef> = read_one(&transaction, "SELECT data FROM remote_refs WHERE id=?1", &[reference.branch.to_string()])?;
                 if existing.as_ref().is_some_and(|old| old.source_generation > reference.source_generation) { continue; }
                 if existing.as_ref().is_some_and(|old| old.source_generation == reference.source_generation && old != reference) {
                     return Err(Error::integrity("remote reference reused a publication sequence"));
                 }
-                upsert(&transaction, "remote_refs", reference.branch.to_string(), reference.workspace, reference)?;
+                upsert(&transaction, "remote_refs", reference.branch.to_string(), reference.workspace, observation)?;
             }
             for update in &commit.pin_updates {
                 let key = pin_key(&update.pin)?;
