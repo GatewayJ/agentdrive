@@ -1,0 +1,36 @@
+.management-content { display:grid; gap:24px; }
+.management-heading .location-label { white-space:normal; overflow-wrap:anywhere; }
+.management-create .panel-heading,.management-list .panel-heading { display:flex; align-items:center; gap:12px; }
+.management-form { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; padding:0 24px 24px; align-items:end; }
+.management-field { display:flex; flex-direction:column; gap:8px; min-width:0; font-size:13px; color:var(--muted); }
+.management-field input,.management-field select { width:100%; min-width:0; border:1px solid var(--line); background:var(--paper); border-radius:8px; padding:12px; font:inherit; color:var(--ink); }
+.management-hint { grid-column:1 / -1; margin:0; color:var(--muted); font-size:12px; line-height:1.7; }
+.management-form .primary { justify-self:start; padding:12px 20px; }
+.management-row { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:20px 24px; border-top:1px solid var(--line); }
+.management-row-copy { min-width:0; }
+.management-row h3 { margin:0 0 8px; font-size:15px; overflow-wrap:anywhere; }
+.management-row p { color:var(--muted); font-size:12px; line-height:1.7; margin:0; overflow-wrap:anywhere; }
+.management-id { display:block; margin-top:8px; font-size:11px; color:var(--muted); }
+.management-actions { display:flex; flex-wrap:wrap; align-items:center; gap:10px; flex-shrink:0; }
+.management-actions .secondary { font-size:12px; padding:9px 13px; }
+.management-link { color:var(--accent); text-decoration:none; font-size:12px; padding:8px 0; }
+.management-link:hover { text-decoration:underline; }
+.command-panel { padding:22px 24px; border-left:3px solid var(--accent); }
+.command-panel h2 { margin:0; font-size:17px; }
+.command-status { font-size:14px; line-height:1.7; }
+.command-flags { display:flex; flex-wrap:wrap; gap:8px; }
+.command-error { color:#9b443e; overflow-wrap:anywhere; font-size:13px; line-height:1.7; }
+.command-panel details { font-size:12px; color:var(--muted); margin-top:16px; }
+.command-panel summary { cursor:pointer; }
+.command-details { display:block; white-space:pre-wrap; overflow-wrap:anywhere; margin-top:8px; }
+#relationships-panel { margin-top:24px; }
+.relationship-filters .relationship-search { flex-basis:100%; }
+.relationship-filters .relationship-advanced { flex-basis:100%; color:var(--muted); font-size:12px; }
+.relationship-advanced summary { cursor:pointer; margin:4px 0 12px; }
+.relationship-advanced-fields { display:flex; flex-wrap:wrap; gap:12px; }
+@media(max-width:850px) {
+  .management-form { grid-template-columns:1fr; padding:0 16px 20px; }
+  .management-row { align-items:stretch; flex-direction:column; padding:18px 16px; }
+  .management-actions { flex-shrink:1; }
+  .command-panel { padding:18px 16px; }
+}

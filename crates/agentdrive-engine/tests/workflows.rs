@@ -920,6 +920,7 @@ async fn ownership_transfer_stops_old_writer_and_adopts_on_new_location() {
     first.write_new(&fs, "file", b"handoff").await;
     first.commit(binding.branch).await;
     first.sync(workspace.id, SyncDirection::Push).await;
+    second.sync(workspace.id, SyncDirection::Pull).await;
     success(
         first
             .engine
@@ -947,11 +948,22 @@ async fn ownership_transfer_stops_old_writer_and_adopts_on_new_location() {
             .unwrap(),
     );
     assert!(operation.remote_confirmed);
+    second
+        .engine
+        .services
+        .workspace
+        .refresh_history(&actor(), workspace.id)
+        .await
+        .unwrap();
+    assert!(second.local.branch(binding.branch).await.unwrap().is_none());
     second.sync(workspace.id, SyncDirection::Pull).await;
     let adopted = second.local.branch(binding.branch).await.unwrap().unwrap();
     assert_eq!(adopted.owner, second.engine.runtime.location);
     assert_eq!(adopted.authority_epoch, branch.authority_epoch + 1);
     assert_eq!(adopted.state, BranchState::Writable);
+    assert_eq!(adopted.name, branch.name);
+    assert_eq!(adopted.base_revision, branch.base_revision);
+    assert_eq!(adopted.source_branch, branch.source_branch);
     let old = first.local.branch(binding.branch).await.unwrap().unwrap();
     assert_eq!(old.state, BranchState::Stopped);
     assert_eq!(
@@ -4583,5 +4595,201 @@ async fn branch_file_listing_pages_direct_children_and_rejects_stale_cursors() {
             .unwrap_err()
             .code,
         ErrorCode::TargetMoved
+    );
+}
+
+#[tokio::test]
+async fn workspace_history_includes_remote_branch_metadata_and_legacy_origins() {
+    let remote = Arc::new(MemoryRemote::default());
+    let first = Harness::new(Some(remote.clone())).await;
+    let workspace = first.workspace().await;
+    let root = first.local.branches(workspace.id).await.unwrap().remove(0);
+    let (a_mount, a_fs) = first.branch_mount(workspace.id, "feat/a", None).await;
+    first.write_new(&a_fs, "a.txt", b"A report").await;
+    let a_revision = first.commit(a_mount.branch).await;
+    first.sync(workspace.id, SyncDirection::Push).await;
+    let second = Harness::new(Some(remote.clone())).await;
+    let location_mount = mounted(
+        second
+            .engine
+            .services
+            .mounts
+            .prepare(
+                context(),
+                default_mount(workspace.id, second.directory.path().join("project")),
+            )
+            .await
+            .unwrap(),
+    );
+    let (b_mount, b_fs) = second
+        .branch_mount(workspace.id, "feat/b", Some(a_revision))
+        .await;
+    second.write_new(&b_fs, "b.txt", b"B report").await;
+    second.commit(b_mount.branch).await;
+    second.sync(workspace.id, SyncDirection::Push).await;
+
+    for harness in [&first, &second] {
+        let before = harness.local.branches(workspace.id).await.unwrap();
+        let selection = harness.local.selected_branch(workspace.id).await.unwrap();
+        let mounts = harness.local.mounts().await.unwrap();
+        harness
+            .engine
+            .services
+            .workspace
+            .refresh_history(&actor(), workspace.id)
+            .await
+            .unwrap();
+        let status = harness
+            .engine
+            .services
+            .workspace
+            .status(&actor(), workspace.id)
+            .await
+            .unwrap();
+        assert_eq!(status.branches, before);
+        assert_eq!(status.selected_branch, selection);
+        assert_eq!(harness.local.mounts().await.unwrap(), mounts);
+        assert_eq!(status.remote_branches.len(), 4);
+        let metadata = |id| {
+            status
+                .remote_branches
+                .iter()
+                .find(|reference| reference.branch == id)
+                .unwrap()
+                .metadata
+                .as_ref()
+                .unwrap()
+        };
+        assert_eq!(metadata(root.id), &BranchMetadata::from(&root));
+        assert_eq!(metadata(a_mount.branch).name, "feat/a");
+        assert_eq!(metadata(a_mount.branch).source_branch, Some(root.id));
+        assert_eq!(metadata(b_mount.branch).name, "feat/b");
+        assert_eq!(metadata(b_mount.branch).source_branch, Some(a_mount.branch));
+        assert_eq!(metadata(b_mount.branch).base_revision, a_revision);
+        assert_eq!(metadata(location_mount.branch).source_branch, Some(root.id));
+        let relationships = harness
+            .engine
+            .services
+            .workspace
+            .relationships(
+                &actor(),
+                WorkspaceRelationshipsQuery {
+                    workspace: workspace.id,
+                    filter: RelationshipFilter::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let root_relationship = relationships
+            .entries
+            .iter()
+            .find(|entry| entry.branch.id == root.id)
+            .unwrap();
+        assert_eq!(root_relationship.branch.name.as_deref(), Some("main"));
+        let a_relationship = relationships
+            .entries
+            .iter()
+            .find(|entry| entry.branch.id == a_mount.branch)
+            .unwrap();
+        assert_eq!(
+            a_relationship.branch.origin.source_name.as_deref(),
+            Some("main")
+        );
+        assert_eq!(a_relationship.branch.origin.status, OriginStatus::Available);
+    }
+
+    // 模拟升级前保存的远端引用，创建记录和版本保持原有格式。
+    for id in remote.list_branches(workspace.id).await.unwrap() {
+        let key = RefKey::Branch {
+            workspace: workspace.id,
+            branch: id,
+        };
+        let current = remote.get(&key).await.unwrap().unwrap();
+        let mut value: BranchRef = decode(&current.bytes).unwrap();
+        value.metadata = None;
+        assert!(matches!(
+            remote
+                .compare_exchange(RefUpdate {
+                    key,
+                    expected_version: Some(current.version),
+                    bytes: encode(&value).unwrap().into(),
+                })
+                .await
+                .unwrap(),
+            CasOutcome::Applied { .. }
+        ));
+    }
+    let third = Harness::new(Some(remote.clone())).await;
+    third.sync(workspace.id, SyncDirection::Pull).await;
+    assert!(third.local.branches(workspace.id).await.unwrap().is_empty());
+    let status = third
+        .engine
+        .services
+        .workspace
+        .status(&actor(), workspace.id)
+        .await
+        .unwrap();
+    let expected = first
+        .engine
+        .services
+        .workspace
+        .status(&actor(), workspace.id)
+        .await
+        .unwrap();
+    for reference in &status.remote_branches {
+        let original = expected
+            .remote_branches
+            .iter()
+            .find(|value| value.branch == reference.branch)
+            .unwrap();
+        assert_eq!(reference.metadata, original.metadata);
+        assert!(reference.metadata.is_some());
+    }
+    let relationships = third
+        .engine
+        .services
+        .workspace
+        .relationships(
+            &actor(),
+            WorkspaceRelationshipsQuery {
+                workspace: workspace.id,
+                filter: RelationshipFilter {
+                    search: Some("main".into()),
+                    ..Default::default()
+                },
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(relationships.total, 1);
+    assert_eq!(relationships.entries[0].branch.id, root.id);
+    remote.set_available(false);
+    assert!(
+        third
+            .engine
+            .services
+            .workspace
+            .refresh_history(&actor(), workspace.id)
+            .await
+            .is_err()
+    );
+    let cached = third
+        .engine
+        .services
+        .workspace
+        .status(&actor(), workspace.id)
+        .await
+        .unwrap();
+    assert_eq!(cached.remote_branches, status.remote_branches);
+    assert_eq!(
+        third
+            .engine
+            .services
+            .workspace
+            .refresh_history(&"visitor".to_owned().try_into().unwrap(), workspace.id)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::PermissionDenied
     );
 }

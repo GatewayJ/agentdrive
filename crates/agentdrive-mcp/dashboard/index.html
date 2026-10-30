@@ -7,6 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="/dashboard.css">
   <link rel="stylesheet" href="/archive.css">
+  <link rel="stylesheet" href="/management.css">
   <script src="/dashboard.js" type="module"></script>
 </head>
 <body>
@@ -26,7 +27,7 @@
     <aside class="sidebar">
       <a class="brand" href="/archive"><span class="brand-mark">A</span> AgentDrive <span class="version">LOCAL</span></a>
       <div class="workspace-picker"><label for="workspace">工作区</label><select id="workspace" aria-label="选择工作区"></select></div>
-      <nav aria-label="导航"><a id="archive-nav" class="nav-link" href="/archive"><span class="branch-icon" aria-hidden="true">▤</span> 档案室</a><a id="history-nav" class="nav-link nav-active" href="/dashboard"><span class="branch-icon">⑂</span> 分支与版本</a><a id="settings-nav" class="nav-link" href="/settings"><span class="branch-icon">⚙</span> 设置</a></nav>
+      <nav aria-label="导航"><a id="archive-nav" class="nav-link" href="/archive"><span class="branch-icon" aria-hidden="true">▤</span> 档案室</a><a id="history-nav" class="nav-link nav-active" href="/dashboard"><span class="branch-icon">⑂</span> 分支与版本</a><a id="mounts-nav" class="nav-link" href="/mounts"><span class="branch-icon" aria-hidden="true">▣</span> 挂载点管理</a><a id="branches-nav" class="nav-link" href="/branches"><span class="branch-icon" aria-hidden="true">⑂</span> 分支管理</a><a id="settings-nav" class="nav-link" href="/settings"><span class="branch-icon">⚙</span> 设置</a></nav>
       <div class="sidebar-note"><div class="note-icon">◷</div><strong>共享资料，接力工作</strong><p>把项目资料交给 Agent，让每次工作都有可以继续的起点。</p></div>
       <div class="sidebar-bottom"><span class="connection-dot"></span><span id="connection">已连接本地 daemon</span><button id="logout" title="断开连接" aria-label="断开连接">↪</button></div>
     </aside>
@@ -34,8 +35,10 @@
       <header class="topbar"><div id="history-breadcrumb" class="breadcrumb">工作区 <span>/</span> <strong id="workspace-name">加载中</strong></div><div id="settings-breadcrumb" class="breadcrumb" hidden>AgentDrive <span>/</span> <strong>设置</strong></div><div class="topbar-right"><span id="view-mode" class="read-only">只读浏览</span><span id="updated">正在连接</span><button id="refresh" class="refresh" aria-label="刷新数据">↻</button></div></header>
       <div id="error" class="error-banner global-error" role="alert" hidden></div>
       <div id="archive-page" class="content archive-page" hidden></div>
+      <div id="mounts-page" class="content management-page" hidden><div id="mounts-management"></div><section id="relationships-panel" class="panel" aria-label="分支与挂载关系"></section></div>
+      <div id="branches-page" class="content management-page" hidden></div>
       <div id="history-page" class="content">
-        <div class="page-heading"><div><div class="eyebrow">WORKSPACE HISTORY</div><h1>分支与版本<span class="heading-dot">.</span></h1><p>查看分支从哪个版本创建，以及本机目录正在使用哪个分支。</p></div><div class="location-label"><span class="connection-dot"></span><span id="location">本地存储</span></div></div>
+        <div class="page-heading"><div><div class="eyebrow">WORKSPACE HISTORY</div><h1>分支与版本<span class="heading-dot">.</span></h1><p>查看本机与其他节点已同步的分支、来源版本和本机挂载状态。</p></div><div class="location-label"><span class="connection-dot"></span><span id="location">本地存储</span></div></div>
         <section class="stats" aria-label="工作区统计">
           <div class="stat"><div class="stat-label">工作分支 <span>⑂</span></div><strong id="branch-count">—</strong><small>当前工作区的有效分支</small></div>
           <div class="stat"><div class="stat-label">挂载点 <span>▣</span></div><strong id="mount-count">—</strong><small id="mount-detail">等待挂载数据</small></div>
@@ -44,9 +47,8 @@
         </section>
         <div id="empty" class="empty-state" hidden><span>⑂</span><h2>还没有工作区</h2><p>使用 CLI 创建工作区后，分支与版本会显示在这里。</p></div>
         <div id="panels" class="panels">
-          <section class="tree-panel panel" aria-labelledby="tree-title"><div class="panel-heading"><div><h2 id="tree-title">分支树</h2><p>连接点标明创建分支时的来源版本</p></div></div><div class="graph-legend"><span><i class="legend-commit"></i> 来源版本</span><span>⑂ 工作分支</span><span>点击版本查看详情 · 双击分支预览文件</span></div><div id="branch-tree" class="branch-tree" aria-label="分支来源关系"></div><div class="tree-footer">默认：未指定 branch 时的本机选择。已挂载：正在使用该分支的就绪目录数量。</div></section>
+          <section class="tree-panel panel" aria-labelledby="tree-title"><div class="panel-heading"><div><h2 id="tree-title">分支树</h2><p>连接点标明创建分支时的来源版本</p></div></div><div class="graph-legend"><span><i class="legend-commit"></i> 来源版本</span><span>⑂ 工作分支</span><span>点击分支查看历史 · 双击本机分支预览文件</span></div><div id="branch-tree" class="branch-tree" aria-label="分支来源关系"></div><div class="tree-footer">本机默认：本机未指定分支时的选择。已挂载：本机正在使用该分支的就绪目录数量。其他节点分支显示远端已保存的版本。</div></section>
           <section class="history-panel panel" aria-labelledby="history-title"><div class="history-heading"><div><div class="selected-branch-label">所选分支</div><h2 id="history-title">—</h2><div id="branch-meta" class="branch-meta"></div></div><span id="branch-state" class="pill">—</span></div><div class="history-toolbar"><h3>版本历史 <span id="history-count" class="count-badge">0</span></h3><span class="history-hint">双击版本查看详情</span></div><div id="revision-list" class="revision-list" aria-label="版本列表"></div></section>
-          <section id="relationships-panel" class="mounts-panel panel" aria-label="分支与挂载关系"></section>
         </div>
         <footer class="page-footer"><span>AgentDrive <span class="footer-separator">/</span> 持久化 Agent 工作区</span><span>每 15 秒自动刷新</span></footer>
       </div>

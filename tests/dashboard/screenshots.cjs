@@ -9,14 +9,14 @@ const workspace = '8b700001-0000-4000-8000-000000000001';
 const ids = ['86a70001-0000-4000-8000-000000000001','38b20002-0000-4000-8000-000000000002','58c30003-0000-4000-8000-000000000003'];
 const revisionIds = Array.from({length:6},(_,i)=>`a6bd000${i}-0000-4000-8000-000000000001`);
 const names = ['main','analysis/competitors','analysis/customers'];
-const branches = ids.map((id,i)=>({id,workspace,name:names[i],owner:'local',authority_epoch:1,generation:1,mutation_seq:10+i,saved_seq:10+i,
+const branches = ids.map((id,i)=>({id,workspace,name:names[i],owner:'local',local:true,authority_epoch:1,generation:1,mutation_seq:10+i,saved_seq:10+i,
  formal_head:revisionIds[i+3],autosave_head:null,working_root:{id:'tree-'+i},base_revision:revisionIds[0],source_branch:i ? ids[0] : null,dirty:false,state:'writable'}));
 const messages = ['建立项目资料与任务说明','补充用户访谈与市场数据','确认并行分析的任务范围','汇总调研结果，准备异地交接','完成竞品分析，附上证据来源','完成用户需求分析与建议'];
 const revisions = revisionIds.map((id,i)=>({id,workspace,branch:i>3 ? ids[i-3] : ids[0],kind:'commit',parents:i ? [revisionIds[i>3 ? 0 : i-1]] : [],actor:i>3 ? 'research-agent' : 'owner',root:{id:'tree-'+i},message:messages[i],created_ns:1792312200000000000+i*60000000000}));
 const status = {workspace:{id:workspace,name:'市场调研'},location:'local',selected_branch:ids[0],branches,
  mounts:ids.map((id,i)=>({id:'mount-'+i,branch:id,path:'/projects/market-research/'+['main','competitors','customers'][i],principal:i ? 'research-agent' : 'owner',generation:1,state:'ready',access:'read_write'})),pending_jobs:0,capabilities:{remote_configured:true},
  remote_branches:branches.map(branch=>({branch:branch.id,owner:branch.owner,authority_epoch:1,generation:1,durable_seq:branch.saved_seq,working_root:branch.working_root}))};
-const view = {status,revisions,summary:{branch_count:3,mount_count:3,ready_mount_count:3,mounted_branch_count:3},origins:branches.map((branch,i)=>({branch:branch.id,source_branch:branch.source_branch,revision:revisionIds[0],revision_available:true,workspace_root:i===0}))};
+const view = {status,branches,revisions,summary:{branch_count:3,mount_count:3,ready_mount_count:3,mounted_branch_count:3},origins:branches.map((branch,i)=>({branch:branch.id,source_branch:branch.source_branch,revision:revisionIds[0],revision_available:true,workspace_root:i===0}))};
 const relationships = {workspace,observing_location:status.location,selected_branch:status.selected_branch,remote_mounts_known:false,remote_selections_known:false,total:branches.length,next:null,
  entries:branches.map((branch,i)=>({branch:{id:branch.id,name:branch.name,state:branch.state,
   ownership:{location:branch.owner,source:'local_authority',authority_epoch:branch.authority_epoch,generation:branch.generation,storage_version:null,observed_ns:null},
@@ -48,7 +48,7 @@ function nodes(directory) {
   if (url.pathname===`/api/workspaces/${workspace}/relationships`) return json(relationships);
   if (url.pathname.endsWith('/files')) { const branch=branches.find(b=>url.pathname.includes(b.id));return json({version:`${branch.id}:1:1:${branch.mutation_seq}`,next:null,entries:nodes(url.searchParams.get('path'))}); }
   if (url.pathname.endsWith('/file')) { const bytes=Buffer.from(content[url.searchParams.get('path')] || ''); const offset=Number(url.searchParams.get('offset')),size=Number(url.searchParams.get('size')); return res.writeHead(200,{'Content-Type':'application/octet-stream'}).end(bytes.subarray(offset,offset+size)); }
-  const name=['/archive','/dashboard','/'].includes(url.pathname) ? 'index.html' : url.pathname.slice(1);
+  const name=['/archive','/dashboard','/mounts','/branches','/'].includes(url.pathname) ? 'index.html' : url.pathname.slice(1);
   if (!/^[a-z.-]+$/.test(name)) return res.writeHead(404).end();
   try { const bytes=await fs.readFile(path.join(root,'crates/agentdrive-mcp/dashboard',name)); res.writeHead(200,{'Content-Type':{'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'}[path.extname(name)]}).end(bytes); }
   catch {res.writeHead(404).end();}
@@ -71,8 +71,13 @@ function nodes(directory) {
   await page.screenshot({path:path.join(root,'docs/images/archive.png')});
   await page.goto(endpoint+'/dashboard?'+new URLSearchParams({workspace,branch:ids[0]}));
   await page.getByText('汇总调研结果，准备异地交接',{exact:true}).waitFor();
-  await page.locator('#relationship-list tr').nth(2).waitFor();
   await page.screenshot({path:path.join(root,'docs/images/branches.png')});
+  await page.goto(endpoint+'/mounts?'+new URLSearchParams({workspace}));
+  await page.locator('#relationship-list tr').nth(2).waitFor();
+  await page.screenshot({path:path.join(root,'docs/images/mounts.png'),fullPage:true});
+  await page.goto(endpoint+'/branches?'+new URLSearchParams({workspace}));
+  await page.locator('#branches-list .management-row').nth(2).waitFor();
+  await page.screenshot({path:path.join(root,'docs/images/branch-management.png'),fullPage:true});
   assert.deepEqual(errors,[]); console.log('Product screenshots generated from demo data.');
  } finally {await browser.close();await new Promise(r=>server.close(r));}
 })().catch(error=>{console.error(error);process.exit(1)});

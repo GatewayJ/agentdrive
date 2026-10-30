@@ -10,7 +10,7 @@ before(async () => {
   const directory = path.resolve(__dirname, '../../crates/agentdrive-mcp/dashboard');
   server = createServer(async (request, response) => {
     const pathname = new URL(request.url, 'http://localhost').pathname;
-    const name = ['/', '/dashboard', '/archive', '/settings'].includes(pathname) ? 'index.html' : pathname.slice(1);
+    const name = ['/', '/dashboard', '/archive', '/settings', '/mounts', '/branches'].includes(pathname) ? 'index.html' : pathname.slice(1);
     if (!/^[a-z.-]+$/.test(name)) { response.writeHead(404).end(); return; }
     try {
       const body = await readFile(path.join(directory, name));
@@ -37,14 +37,16 @@ function fixture() {
     revision('child-autosave', 'feature', ['parent-commit'], 'autosave', 3),
     revision('merge-candidate', null, ['parent-commit', 'child-autosave'], 'candidate', 4),
   ];
-  const main = {id:'main', name:'main', formal_head:'parent-commit', autosave_head:null, base_revision:'initial',
+  const main = {id:'main', name:'main', local:true, owner:'local', formal_head:'parent-commit', autosave_head:null, base_revision:'initial',
     source_branch:null, working_root:{id:'tree-parent-commit'}, dirty:false, mutation_seq:1, saved_seq:1, state:'writable', authority_epoch:1, generation:1};
   const child = {...main, id:'feature', name:'feature', source_branch:'main', base_revision:'parent-commit',
     autosave_head:'child-autosave', working_root:{id:'tree-child-autosave'}, dirty:true};
   const empty = {...main, id:'empty', name:'empty', source_branch:'main', base_revision:'parent-commit'};
+  const branches = [main, child, empty];
   return {
+    branches,
     status:{workspace:{id:'workspace', name:'Review workspace'}, location:'local', selected_branch:'feature',
-      branches:[main, child, empty], mounts:[], capabilities:{remote_configured:false}, pending_jobs:0},
+      branches, mounts:[], capabilities:{remote_configured:false}, pending_jobs:0},
     revisions,
     origins:[main, child, empty].map(branch => ({branch:branch.id, source_branch:branch.source_branch,
       revision:branch.base_revision, revision_available:true, workspace_root:branch.id === 'main'})),
@@ -55,24 +57,31 @@ function relationshipFixture(data) {
   return {
     workspace:'workspace', observing_location:'local', selected_branch:data.status.selected_branch,
     remote_mounts_known:false, remote_selections_known:false, total:data.status.branches.length, next:null,
-    entries:data.status.branches.map(branch => ({
+    entries:data.status.branches.flatMap(branch => {
+      const mounts = data.status.mounts.filter(mount => mount.branch === branch.id && mount.state !== 'released');
+      return (mounts.length ? mounts : [null]).map(mount => ({
       branch:{id:branch.id, name:branch.name, state:branch.state,
         ownership:{location:branch.owner || 'local', source:'local_authority', authority_epoch:1, generation:1, storage_version:null, observed_ns:null},
         origin:{workspace_root:!branch.source_branch, source_branch:branch.source_branch, source_name:branch.source_branch, base_revision:branch.base_revision, captured_working_root:null, status:'available'}},
-      mount:null, mount_location:null,
-    })),
+      mount, mount_location:mount ? 'local' : null,
+    })); }),
   };
 }
 async function open(t, data = fixture(), target = '/dashboard') {
   const page = await browser.newPage({viewport:{width:1440, height:1000}});
-  const errors = [], requests = [];
+  const errors = [], requests = [], commands = [];
   page.on('pageerror', error => errors.push(error.message));
   t.after(async () => { await page.close(); assert.deepEqual(errors, []); });
   await page.addInitScript(() => sessionStorage.setItem('agentdrive-token', 'test-token'));
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url());
     requests.push(url);
-    if (url.pathname === '/api/workspaces') {
+    if (url.pathname.startsWith('/api/commands/')) {
+      const tool = url.pathname.split('/').at(-1), input = route.request().postDataJSON();
+      commands.push({tool, input});
+      if (data.command) return data.command(route, tool, input);
+      return route.fulfill({status:403, json:{error:{message:'Command is unavailable'}}});
+    } else if (url.pathname === '/api/workspaces') {
       await route.fulfill({json:[{id:'workspace', name:'Review workspace'}]});
     } else if (url.pathname === '/api/workspaces/workspace/archive') {
       await route.fulfill({json:data.status});
@@ -101,9 +110,9 @@ async function open(t, data = fixture(), target = '/dashboard') {
     } else await route.fulfill({status:404, json:{error:{message:'Unknown test endpoint'}}});
   });
   await page.goto(endpoint+target);
-  await page.locator(target.startsWith('/archive') ? '.archive-branch[data-branch="feature"]' : '#branch-feature').waitFor();
+  await page.locator(target.startsWith('/archive') ? '.archive-branch[data-branch="feature"]' : target.startsWith('/mounts') ? '#mount-create-form' : target.startsWith('/branches') ? '#branch-create-form' : '#branch-feature').waitFor();
   await page.waitForFunction(() => !document.querySelector('#refresh').disabled);
-  return {page, data, requests, branch:data.status.branches[1]};
+  return {page, data, requests, commands, branch:data.status.branches[1]};
 }
 async function refresh(page) {
   const response = page.waitForResponse(url => url.url().endsWith('/api/workspaces/workspace'));
@@ -563,11 +572,12 @@ test('relationships display ownership, mount principals and exact origins and se
   const data = fixture();
   const result = relationshipFixture(data);
   const entry = result.entries[1];
+  data.branches[1].owner = 'remote-owner';
   entry.branch.ownership = {location:'remote-owner',source:'remote_reference',authority_epoch:3,generation:4,storage_version:'storage-v7',observed_ns:1792312200000000000};
   entry.branch.origin.captured_working_root = {id:'creation-root'};
   entry.mount = {id:'mount-1',path:'/workspace/current',principal:'reader <script>',access:'read_only',state:'ready',generation:5};
   entry.mount_location = 'local'; result.entries = [entry]; result.total = 1; data.relationships = result;
-  const {page, requests} = await open(t,data);
+  const {page, requests} = await open(t,data,'/mounts');
   const panel = page.locator('#relationships-panel');
   assert.match(await panel.textContent(), /远端观测记录/);
   assert.match(await panel.textContent(), /reader <script>/);
@@ -578,9 +588,10 @@ test('relationships display ownership, mount principals and exact origins and se
   await panel.getByText('创建时的内容对象', {exact:true}).click();
   assert.equal(await panel.locator('.relationship-root').textContent(),'creation-root');
   await page.locator('#relationship-branch').selectOption('feature');
+  await panel.getByText('更多筛选', {exact:true}).click();
   await page.locator('#relationship-mount_state').selectOption('released');
-  await page.locator('#relationship-owner_location').fill('remote-owner');
-  await page.locator('#relationship-mount_location').fill('local');
+  await page.locator('#relationship-owner_location').selectOption('remote-owner');
+  await page.locator('#relationship-mount_location').selectOption('local');
   await page.locator('#relationship-mount').fill('mount-1');
   entry.mount.state = 'released';
   await panel.getByRole('button',{name:'查询',exact:true}).click();
@@ -604,7 +615,7 @@ test('relationships append bounded pages and refresh after the server rejects a 
   data.relationships = url => url.searchParams.has('cursor')
     ? changed ? {error:{code:'TARGET_MOVED',message:'relationships changed'}} : {...result,entries:[entry(50)],total:51,next:null}
     : {...result,entries:Array.from({length:50},(_,index)=>entry(index)),total:51,next:'page-2'};
-  const {page, requests} = await open(t,data);
+  const {page, requests} = await open(t,data,'/mounts');
   assert.equal(await page.locator('#relationship-list tr').count(),50);
   await page.locator('#relationship-more').click();
   await page.waitForFunction(() => document.querySelectorAll('#relationship-list tr').length === 51);
@@ -621,12 +632,207 @@ test('relationships append bounded pages and refresh after the server rejects a 
 
 test('relationships clear old rows and report query failures without hiding branch history', async t => {
   const data = fixture();
-  const {page} = await open(t,data);
+  const {page} = await open(t,data,'/mounts');
   assert.equal(await page.locator('#relationship-list tr').count(),3);
   data.relationships = {error:{code:'UNAVAILABLE',message:'relationship service unavailable'}};
   await page.locator('#relationships-panel').getByRole('button',{name:'查询',exact:true}).click();
   await page.waitForFunction(() => document.querySelector('#relationship-status').textContent.includes('查询失败'));
   assert.equal(await page.locator('#relationship-list tr').count(),0);
   assert.equal(await page.locator('#relationship-more').isVisible(),false);
-  assert.equal(await page.locator('#revision-child-autosave').isVisible(),true);
+  assert.equal(await page.locator('#mount-create-form').isVisible(),true);
+});
+
+test('workspace tree includes other locations and preserves exact ancestry and local mounts', async t => {
+  const data = fixture();
+  const main = data.branches[0], a = data.branches[1], b = data.branches[2];
+  main.local = false; main.owner = 'location-a';
+  a.local = false; a.owner = 'location-a'; a.name = 'feat/a';
+  Object.assign(b, {name:'feat/b', owner:'location-b', source_branch:'feature', base_revision:'child-autosave'});
+  data.status.location = 'location-b'; data.status.selected_branch = b.id; data.status.branches = [b];
+  data.status.mounts = [{id:'mount-b', branch:b.id, path:'/project', state:'ready', access:'read_write'}];
+  data.summary.mount_count = data.summary.ready_mount_count = data.summary.mounted_branch_count = 1;
+  data.origins.find(origin => origin.branch === b.id).source_branch = a.id;
+  data.origins.find(origin => origin.branch === b.id).revision = 'child-autosave';
+  const {page, requests} = await open(t, data);
+  assert.equal(await page.locator('.branch-button').count(), 3);
+  assert.equal(await page.locator('#branch-count').textContent(), '3');
+  assert.equal(await page.locator('#mount-count').textContent(), '1');
+  assert.equal(await page.locator('#branch-tree').getByText('记录不可用', {exact:false}).count(), 0);
+  assert.equal(await page.locator('#branch-empty .default-mark').last().textContent(), '本机默认');
+  assert.equal(await page.locator('#branch-feature .default-mark').textContent(), '其他节点 location');
+  const hierarchy = await page.locator('#branch-empty').evaluate(button => {
+    const ids = [];
+    for (let item = button.closest('.branch-item'); item; item = item.parentElement?.closest('.branch-item')) {
+      ids.push(item.querySelector(':scope > .branch-button').id);
+    }
+    return ids;
+  });
+  assert.deepEqual(hierarchy, ['branch-empty','branch-feature','branch-main']);
+  await page.locator('#branch-feature').click();
+  assert.equal(await page.locator('#history-title').textContent(), 'feat/a');
+  assert.equal(await page.locator('#branch-state').textContent(), '远端已保存');
+  assert.match(await page.locator('#branch-meta').textContent(), /来源 main/);
+  await page.locator('#branch-feature').dblclick();
+  await page.locator('#revision-dialog[open]').waitFor();
+  assert.equal(await page.locator('#branch-files-dialog[open]').count(), 0);
+  assert.equal(requests.filter(url => url.pathname.includes('/branches/feature/')).length, 0);
+  await page.locator('.revision-dialog-close').first().click();
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => !document.querySelector('#refresh').disabled);
+  assert.equal(await page.locator('#branch-empty .default-mark').last().textContent(), '本机默认');
+  assert.equal(await page.locator('#mount-count').textContent(), '1');
+  data.remote_error = {code:'IO', message:'remote offline'};
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => !document.querySelector('#refresh').disabled);
+  assert.match(await page.locator('#error').textContent(), /上次同步结果/);
+  assert.equal(await page.locator('.branch-button').count(), 3);
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+});
+
+function completedOperation(tool, input, result, mountReady = null) {
+  return {id:'operation-'+input.request_id, request_id:input.request_id, name:tool, phase:'complete', local_saved:true,
+    remote_confirmed:input.request?.durability === 'remote', mount_ready:mountReady, result, error:null, pending:null};
+}
+
+test('management navigation isolates relationship queries and preserves forms during refresh', async t => {
+  const {page, requests, commands} = await open(t);
+  assert.equal(requests.filter(url => url.pathname.endsWith('/relationships')).length, 0);
+  assert.equal(await page.locator('#relationships-panel').isVisible(), false);
+  await page.locator('#mounts-nav').click();
+  await page.locator('#relationship-list tr').first().waitFor();
+  assert.equal(await page.locator('#history-page').isVisible(), false);
+  await page.locator('#mounts-path').fill('/projects/new directory');
+  await refresh(page);
+  assert.equal(await page.locator('#mounts-path').inputValue(), '/projects/new directory');
+  await page.locator('#relationship-search').fill('feat/test');
+  await page.locator('#relationship-mounted').selectOption('false');
+  await page.locator('#relationships-panel').getByRole('button',{name:'查询',exact:true}).click();
+  await page.waitForFunction(() => location.search.includes('rel_search=feat%2Ftest'));
+  assert.equal(requests.filter(url => url.pathname.endsWith('/relationships')).at(-1).searchParams.get('search'),'feat/test');
+  await page.reload();
+  await page.waitForFunction(() => !document.querySelector('#refresh').disabled);
+  assert.equal(await page.locator('#relationship-search').inputValue(),'feat/test');
+  assert.equal(await page.locator('#relationship-mounted').inputValue(),'false');
+  await page.locator('#relationships-panel').getByRole('button',{name:'清空筛选'}).click();
+  assert.equal(await page.locator('#relationship-search').inputValue(),'');
+  const previous = requests.filter(url => url.pathname.endsWith('/relationships')).length;
+  await page.locator('#branches-nav').click();
+  await page.locator('#branches-list .management-row').first().waitFor();
+  await page.waitForFunction(() => !document.querySelector('#refresh').disabled);
+  assert.equal(requests.filter(url => url.pathname.endsWith('/relationships')).length,previous);
+  assert.equal(await page.locator('#relationships-panel').isVisible(),false);
+  assert.equal(commands.length,0);
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),true);
+});
+
+test('branch creation preserves its source and switching is a separate explicit action', async t => {
+  const data = fixture();
+  data.command = async (route, tool, input) => {
+    if (tool === 'branch_create') {
+      const branch = {...data.branches[0],id:'created',name:input.request.name,source_branch:'main',base_revision:'parent-commit'};
+      data.branches.push(branch);
+      return route.fulfill({json:{...completedOperation(tool,input,{kind:'branch',branch}),phase:'local_saved',remote_confirmed:false}});
+    }
+    assert.equal(tool,'branch_switch'); data.status.selected_branch = input.request.branch;
+    return route.fulfill({json:completedOperation(tool,input,{kind:'updated'})});
+  };
+  const {page,commands} = await open(t,data,'/branches');
+  await page.locator('#branches-branch').selectOption('main');
+  await page.locator('#branches-revision').selectOption('parent-commit');
+  await page.locator('#branches-name').fill('feat/next-task');
+  await page.locator('#branch-create-form').getByRole('button',{name:'创建分支',exact:true}).click();
+  await page.locator('#branches-list [data-branch="created"]').waitFor();
+  await page.getByText('本机操作已完成',{exact:true}).waitFor();
+  assert.equal(await page.locator('#branches-name').isDisabled(),false);
+  assert.deepEqual(commands[0].input.request,{workspace:'workspace',name:'feat/next-task',source:'parent-commit'});
+  assert.equal(data.status.selected_branch,'feature');
+  await page.locator('#switch-created').click();
+  await page.waitForFunction(() => document.querySelector('#branches-list [data-branch="created"]').textContent.includes('本机默认分支'));
+  assert.equal(commands[1].tool,'branch_switch');
+  assert.notEqual(commands[0].input.request_id,commands[1].input.request_id);
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),true);
+});
+
+test('remote branch creation uses a saved revision and does not expose a writable remote mount', async t => {
+  const data = fixture();
+  const remote = {...data.branches[0],id:'remote',name:'feat/remote',owner:'another-location',local:false,formal_head:'remote-revision'};
+  data.branches = [...data.branches,remote]; data.revisions.push(revision('remote-revision','remote',[],'commit',8));
+  data.command = (route,tool,input) => route.fulfill({json:completedOperation(tool,input,{kind:'updated'})});
+  const {page,commands} = await open(t,data,'/branches');
+  await page.locator('#branches-list [data-branch="remote"]').getByRole('button',{name:'从此创建'}).click();
+  assert.equal(await page.locator('#branches-revision').inputValue(),'remote-revision');
+  assert.equal(await page.locator('#branches-revision option[value="working"]').count(),0);
+  await page.locator('#branches-name').fill('feat/local-copy');
+  await page.locator('#branch-create-form').getByRole('button',{name:'创建分支',exact:true}).click();
+  await page.getByText('操作已完成',{exact:true}).waitFor();
+  assert.equal(commands[0].input.request.source,'remote-revision');
+  await page.locator('#mounts-nav').click();
+  await page.waitForFunction(() => !document.querySelector('#refresh').disabled);
+  assert.equal(await page.locator('#mounts-branch option[value="remote"]').count(),0);
+});
+
+test('mount page creates, saves and unmounts a directory with the observed generation', async t => {
+  const data = fixture(); data.status.capabilities.remote_configured = true;
+  data.command = async (route, tool, input) => {
+    if (tool === 'mount_prepare') {
+      const binding = {id:'new-mount',generation:7,state:'ready',principal:'owner',...input.request};
+      data.status.mounts.push(binding);
+      return route.fulfill({json:completedOperation(tool,input,{kind:'mount',binding},true)});
+    }
+    if (tool === 'mount_unmount') data.status.mounts = [];
+    return route.fulfill({json:completedOperation(tool,input,{kind:'updated'})});
+  };
+  const {page,commands} = await open(t,data,'/mounts');
+  await page.locator('#mounts-path').fill('/projects/example');
+  await page.locator('#mount-create-form').getByRole('button',{name:'创建挂载点'}).click();
+  await page.locator('#relationship-list [data-mount="new-mount"]').waitFor();
+  await page.getByText('操作已完成',{exact:true}).waitFor();
+  assert.equal(commands[0].input.request.path,'/projects/example');
+  await page.locator('#relationship-list').getByRole('button',{name:'保存版本'}).click();
+  await page.getByText('远端已确认',{exact:true}).waitFor();
+  assert.deepEqual(commands[1].input.request,{mount:'new-mount',expected_binding_generation:7,durability:'remote'});
+  await page.locator('#unmount-new-mount').click();
+  await page.waitForFunction(() => !document.querySelector('#relationship-list [data-mount="new-mount"]'));
+  assert.deepEqual(commands[2].input.request,{mount:'new-mount',generation:7});
+});
+
+test('unknown command outcomes survive reload and retry the original request', async t => {
+  const data = fixture(); let attempts = 0;
+  data.command = async (route, tool, input) => {
+    attempts++;
+    if (attempts === 1) return route.abort('failed');
+    return route.fulfill({json:completedOperation(tool,input,{kind:'updated'})});
+  };
+  const {page,commands} = await open(t,data,'/branches');
+  await page.locator('#branches-name').fill('feat/retry');
+  await page.locator('#branch-create-form').getByRole('button',{name:'创建分支',exact:true}).click();
+  await page.getByRole('button',{name:'重试请求'}).waitFor();
+  await page.waitForFunction(() => document.querySelector('#branches-page .command-error').textContent.length > 0);
+  await page.reload();
+  await page.getByRole('button',{name:'重试请求'}).click();
+  await page.getByText('操作已完成',{exact:true}).waitFor();
+  assert.deepEqual(commands[0],commands[1]);
+  assert.equal(await page.evaluate(() => Object.keys(sessionStorage).filter(key => key.startsWith('agentdrive-action:')).length),1);
+  await page.locator('#logout').click();
+  assert.equal(await page.evaluate(() => Object.keys(sessionStorage).filter(key => key.startsWith('agentdrive-action:')).length),0);
+});
+
+test('busy branch switches report pending state and retain their request identity', async t => {
+  const data = fixture(); let attempts = 0;
+  data.command = (route,tool,input) => {
+    const result = completedOperation(tool,input,{kind:'updated'},true);
+    if (!attempts++) Object.assign(result,{phase:'waiting_for_quiesce',local_saved:false,mount_ready:false,error:{code:'MOUNT_BUSY',message:'Directory is in use',retryable:true},pending:{old:{generation:4}}});
+    else data.status.selected_branch = input.request.branch;
+    return route.fulfill({json:result});
+  };
+  const {page,commands} = await open(t,data,'/branches');
+  await page.locator('#switch-main').click();
+  await page.getByText('需要释放目录占用',{exact:true}).waitFor();
+  assert.equal(await page.getByText('操作已完成',{exact:true}).count(),0);
+  await page.getByRole('button',{name:'重试请求'}).click();
+  await page.getByText('操作已完成',{exact:true}).waitFor();
+  assert.deepEqual(commands[0],commands[1]);
 });

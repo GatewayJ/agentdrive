@@ -759,6 +759,7 @@ impl ReplicaPublisher for ReplicaService {
                 record_index,
                 deleted: branch.state == BranchState::Deleted,
                 write_stopped: branch.state == BranchState::Stopped,
+                metadata: Some(branch.into()),
             },
             attempts: 0,
             error: None,
@@ -766,6 +767,20 @@ impl ReplicaPublisher for ReplicaService {
     }
 
     async fn discover(&self, workspace: WorkspaceId) -> Result<Vec<BranchRef>> {
+        self.discover_references(workspace, true).await
+    }
+
+    async fn refresh_history(&self, workspace: WorkspaceId) -> Result<()> {
+        self.discover_references(workspace, false).await.map(|_| ())
+    }
+}
+
+impl ReplicaService {
+    async fn discover_references(
+        &self,
+        workspace: WorkspaceId,
+        adopt: bool,
+    ) -> Result<Vec<BranchRef>> {
         let ids = {
             let _protection = self.runtime.objects.read().await;
             self.content
@@ -779,6 +794,14 @@ impl ReplicaPublisher for ReplicaService {
                 .list_branches(workspace)
                 .await?
         };
+        let known: BTreeMap<_, _> = self
+            .runtime
+            .state
+            .remote_refs(workspace)
+            .await?
+            .into_iter()
+            .map(|reference| (reference.branch, reference))
+            .collect();
         let mut result = Vec::new();
         for id in ids {
             let _gate = self.runtime.lock_branch(id).await;
@@ -799,6 +822,10 @@ impl ReplicaPublisher for ReplicaService {
                 continue;
             };
             let reference = decode_branch_ref(workspace, id, &value.bytes)?;
+            if !adopt && known.get(&id) == Some(&reference) {
+                result.push(reference);
+                continue;
+            }
             let observation = ObservedBranchRef::new(
                 reference.clone(),
                 value.version,
@@ -828,7 +855,8 @@ impl ReplicaPublisher for ReplicaService {
                     && reference.generation > branch.generation
                     && reference.source_generation > branch.source_generation
             });
-            if reference.owner == self.runtime.location && !reference.deleted && can_adopt {
+            if adopt && reference.owner == self.runtime.location && !reference.deleted && can_adopt
+            {
                 let tree = self.trees.tree(workspace, &reference.working_root).await?;
                 let next_inode = crate::runtime::increment(
                     tree.values().map(|inode| inode.id.0).max().unwrap_or(1),
@@ -840,9 +868,16 @@ impl ReplicaPublisher for ReplicaService {
                 let branch = Branch {
                     id,
                     workspace,
-                    name: existing
-                        .as_ref()
-                        .map_or_else(|| format!("adopted-{id}"), |branch| branch.name.clone()),
+                    name: existing.as_ref().map_or_else(
+                        || {
+                            reference
+                                .metadata
+                                .as_ref()
+                                .map(|metadata| metadata.name.clone())
+                                .unwrap_or_else(|| format!("adopted-{id}"))
+                        },
+                        |branch| branch.name.clone(),
+                    ),
                     owner: reference.owner,
                     authority_epoch: reference.authority_epoch,
                     generation: reference.generation,
@@ -852,10 +887,24 @@ impl ReplicaPublisher for ReplicaService {
                     formal_head: reference.formal_head,
                     autosave_head: reference.autosave_head,
                     working_root: reference.working_root.clone(),
-                    base_revision: existing
-                        .as_ref()
-                        .map_or(reference.formal_head, |branch| branch.base_revision),
-                    source_branch: existing.as_ref().and_then(|branch| branch.source_branch),
+                    base_revision: existing.as_ref().map_or_else(
+                        || {
+                            reference
+                                .metadata
+                                .as_ref()
+                                .map_or(reference.formal_head, |metadata| metadata.base_revision)
+                        },
+                        |branch| branch.base_revision,
+                    ),
+                    source_branch: existing.as_ref().map_or_else(
+                        || {
+                            reference
+                                .metadata
+                                .as_ref()
+                                .and_then(|metadata| metadata.source_branch)
+                        },
+                        |branch| branch.source_branch,
+                    ),
                     next_inode,
                     dirty: formal.root != reference.working_root,
                     state: if reference.write_stopped {

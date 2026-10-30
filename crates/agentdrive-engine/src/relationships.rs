@@ -14,6 +14,10 @@ pub(crate) fn query(
             "relationship limit must be between 1 and 200",
         ));
     }
+    let search = filter.search.as_deref().unwrap_or("").trim().to_lowercase();
+    if search.len() > 1024 {
+        return Err(Error::invalid("relationship search exceeds 1024 bytes"));
+    }
     let can_read = |branch| {
         snapshot
             .workspace
@@ -58,11 +62,31 @@ pub(crate) fn query(
             created.entry(branch.id).or_insert(branch);
         }
     }
-    let metadata: BTreeMap<_, _> = created
+    let mut metadata: BTreeMap<_, _> = remote
         .iter()
-        .chain(local.iter())
-        .map(|(id, value)| (*id, *value))
+        .filter_map(|(id, value)| {
+            value
+                .reference
+                .metadata
+                .clone()
+                .map(|metadata| (*id, metadata))
+        })
         .collect();
+    if let Some(initial) = revisions.get(&snapshot.workspace.initial_revision)
+        && let Some(id) = initial.branch
+    {
+        metadata.entry(id).or_insert_with(|| BranchMetadata {
+            name: "main".into(),
+            base_revision: initial.id,
+            source_branch: None,
+        });
+    }
+    metadata.extend(
+        created
+            .iter()
+            .chain(local.iter())
+            .map(|(id, value)| (*id, BranchMetadata::from(*value))),
+    );
     let mut mounts: BTreeMap<_, Vec<_>> = BTreeMap::new();
     for mount in &snapshot.mounts {
         if mount.workspace == snapshot.workspace.id {
@@ -110,7 +134,9 @@ pub(crate) fn query(
             .filter(|mount| {
                 filter.mount.is_none_or(|id| id == mount.id)
                     && filter.mount_state.map_or(
-                        filter.mount.is_some() || mount.state != MountState::Released,
+                        filter.include_released
+                            || filter.mount.is_some()
+                            || mount.state != MountState::Released,
                         |state| state == mount.state,
                     )
             })
@@ -143,6 +169,33 @@ pub(crate) fn query(
             });
         }
     }
+    entries.retain(|entry| {
+        let mounted = entry
+            .mount
+            .as_ref()
+            .is_some_and(|mount| mount.state == MountState::Ready);
+        if filter.mounted.is_some_and(|expected| expected != mounted) {
+            return false;
+        }
+        if search.is_empty() {
+            return true;
+        }
+        let mut values = vec![
+            entry.branch.name.clone().unwrap_or_default(),
+            entry.branch.id.to_string(),
+            entry.branch.ownership.location.to_string(),
+        ];
+        if let Some(mount) = &entry.mount {
+            values.extend([
+                mount.id.to_string(),
+                mount.path.to_string_lossy().into_owned(),
+                mount.principal.as_str().to_owned(),
+            ]);
+        }
+        values
+            .iter()
+            .any(|value| value.to_lowercase().contains(&search))
+    });
     paginate(
         WorkspaceRelationships {
             workspace: snapshot.workspace.id,
@@ -265,12 +318,13 @@ fn paginate(
 fn origin(
     id: BranchId,
     creation: Option<&Branch>,
-    metadata: &BTreeMap<BranchId, &Branch>,
+    metadata: &BTreeMap<BranchId, BranchMetadata>,
     revisions: &BTreeMap<RevisionId, &Revision>,
     initial: RevisionId,
     can_read: &impl Fn(Option<BranchId>) -> bool,
 ) -> RelationshipOrigin {
-    let branch = creation.or_else(|| metadata.get(&id).copied());
+    let creation_metadata = creation.map(BranchMetadata::from);
+    let branch = creation_metadata.as_ref().or_else(|| metadata.get(&id));
     let initial = revisions
         .get(&initial)
         .filter(|revision| revision.branch == Some(id));

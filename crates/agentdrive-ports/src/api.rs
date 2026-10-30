@@ -321,6 +321,7 @@ pub trait WorkspaceApi: Send + Sync {
         actor: &Principal,
         query: crate::WorkspaceRelationshipsQuery,
     ) -> Result<crate::WorkspaceRelationships>;
+    async fn refresh_history(&self, actor: &Principal, workspace: WorkspaceId) -> Result<()>;
     async fn import_directory(
         &self,
         context: RequestContext,

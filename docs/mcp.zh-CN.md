@@ -103,7 +103,7 @@ jq '.tools[] | select(.name == "mount_prepare") | .inputSchema' tools.json
 | --- | --- | --- |
 | `workspace_list` | `{}` | 当前身份可见的工作区数组。 |
 | `workspace_status` | `workspace` | 工作区、本地 location、`selected_branch`、分支、远端引用、挂载、待处理任务、能力和存储统计。 |
-| `workspace_relationships` | `workspace`, `branch?`, `mount?`, `owner_location?`, `mount_location?`, `mount_state?`, `limit?`, `cursor?` | 查询有权查看的分支所属 location、本机挂载和创建来源；支持分页并明确标记远端观测状态。 |
+| `workspace_relationships` | `workspace`, `search?`, `mounted?`, `include_released?`, `branch?`, `mount?`, `owner_location?`, `mount_location?`, `mount_state?`, `limit?`, `cursor?` | 查询有权查看的分支所属 location、本机挂载和创建来源；支持分页并明确标记远端观测状态。 |
 | `revision_list` | `workspace`, `branch?` | 已保留的版本数组，可以按分支过滤。 |
 | `revision_diff` | `workspace`, `after`；可选 `before`, `cursor`, `limit` | 返回 `{entries, next, total}`。省略 `before` 表示空目录。默认每页 100 项，最多 200 项；将 `next` 作为下一页的 `cursor`。每项包含 `path`、`previous_path`、`kind`、`before`、`after`。 |
 | `revision_text_diff` | `workspace`, `after`, `path`；可选 `before`, `previous_path` | 返回文件属性与 UTF-8 文本差异，包含三行上下文、前后行号、末尾换行信息。状态为 `text`、`unchanged`、`binary`、`too_large` 或 `directory`。每侧最多 256 KiB、10,000 行。 |
@@ -143,6 +143,8 @@ agentdrive call workspace_relationships --json '{"workspace":"<workspace-id>","l
 ```
 
 同一查询通过 `WorkspaceApi::relationships` 和需要 bearer 认证的 `GET /api/workspaces/{workspace}/relationships` 提供。HTTP 使用查询参数传递筛选条件。`workspace` 必填，其他字段可选。`owner_location` 表示分支的写入所属 location，`mount_location` 表示提供挂载目录的 daemon location。`mount_state` 支持 `preparing`、`ready`、`paused`、`released`、`recovery_required`。
+
+`search` 对有权查看的分支名称、本机目录、principal、分支 ID、mount ID 和 owner location ID 进行不区分大小写的部分匹配。`mounted: true` 仅返回本机就绪挂载，`mounted: false` 返回没有本机挂载或挂载尚未就绪的记录。`include_released: true` 将已释放的挂载记录加入查询范围。筛选在统计和分页之前执行。
 
 每条记录包含 `branch`、可为空的 `mount` 和 `mount_location`。没有当前本机挂载的分支返回 `mount: null`。指定挂载 ID、挂载状态或挂载 location 时，只返回符合条件的挂载记录。默认列表排除已释放挂载；明确指定挂载 ID 或 `mount_state: "released"` 可以查询保留的已释放记录。`total` 统计当前用户有权查看且符合条件的记录数量。`selected_branch` 返回观测 location 的默认分支；没有读取该分支的权限时，该字段为空。
 
