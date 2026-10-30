@@ -51,7 +51,7 @@ Ownership transfer is online. Stop writing files and release writable mounts on 
 
 ## Merging files
 
-Use `workspace_status` to obtain a branch's `formal_head`, then `revision_files` to list that version. Pages contain up to 200 paths; pass a returned `next` value as `after` to continue. Optional `path` limits the subtree. Use `revision_read` for bytes and `revision_diff` to compare versions. Commit working-directory edits with `revision_commit` before selecting their returned revision.
+Use `workspace_status` to obtain a branch's `formal_head`, then `revision_files` to list that version. Pages contain up to 200 paths; pass a returned `next` value as `after` to continue. Optional `path` limits the subtree. Use `revision_read` for bytes and `revision_diff` to compare versions. Commit mounted edits with `mount_save`, or use `revision_commit` with a branch guard, then select the returned revision.
 
 `merge_prepare` takes a source revision and target `BranchGuard` and creates a candidate. AI can inspect the candidate using `revision_files` and `revision_read`, then edit any path through `merge_resolve`. Each edit returns a new candidate revision for subsequent requests:
 
@@ -87,7 +87,7 @@ See [configuration and S3](configuration.md) for remote credentials and [CLI usa
 
 ## Checkpoints and synchronization progress
 
-Local fsync persists the current working tree without adding a revision. Use `mount_save` or `revision_commit` for a historical version. Autosave continues on its five-second quiet/thirty-second continuous-write schedule. Remote fsync publishes the checkpoint and waits for confirmation; merged checkpoint jobs guarantee the latest durable state, while explicit revisions remain in history.
+Local fsync persists the current working tree without adding a revision. `mount_save` creates a formal commit and advances `formal_head`; unchanged content reuses the current commit. `revision_commit` also supports an explicit message or checkpoint. Background autosave records `Autosave` revisions on its five-second quiet/thirty-second continuous-write schedule. Remote fsync publishes the checkpoint and waits for confirmation; merged checkpoint jobs guarantee the latest durable state, while explicit revisions remain in history.
 
 `mount_save.wait_for_remote_ms` accepts 0–120000 milliseconds (default 30000). This bounds waiting after the local save, not local capture time. A timeout returns `local_saved: true` with `remote_confirmed: false`; publication continues and the timeout alone is not a failure. Poll `operation_get` using the returned ID, or `operation_by_request` using the original request ID. Do not submit a new save to poll progress. Actual remote failures remain in `error` and persistent jobs are retried. Filesystem remote fsync has no bounded-success shortcut.
 

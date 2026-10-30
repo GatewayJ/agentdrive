@@ -93,7 +93,7 @@ Fields below are inside `request`. A suffix `?` means the field may be omitted. 
 | `merge_resolve` | `merge`, `candidate`, `resolutions` | `candidate` is the current candidate revision ID; edits any candidate path using `source`, `target`, `delete`, `replace` or `copy` and returns a new candidate. |
 | `merge_apply` | `merge`, `candidate`, `target`, `durability?` | Requires resolved conflicts and a clean target matching its `BranchGuard`; may require mount release. |
 | `mount_prepare` | `workspace`, `path`, `branch?`, `access?`, `revision?`, `durability?` | Defaults to `read_write`. An omitted branch reuses this location's selection; a new location imports the workspace and creates its branch from the latest published working root. Identical requests from the same principal reuse the binding. An explicit branch must exist locally; a revision requires `read_only`. |
-| `mount_save` | `mount`, `expected_binding_generation`, `durability?`, `wait_for_remote_ms?` | Save the mounted files and return a revision receipt. A stale binding returns `STALE_BINDING`. |
+| `mount_save` | `mount`, `expected_binding_generation`, `durability?`, `wait_for_remote_ms?` | Save the mounted files as a formal commit, update `formal_head`, and clear `dirty` for the saved content. Unchanged content reuses the current commit. Returns a revision receipt; a stale binding returns `STALE_BINDING`. |
 | `mount_release` | `operation`, `expected_binding_generation` | Continues a pending operation after processes release the original mount. The operation ID comes from the pending receipt. |
 | `mount_unmount` | `mount`, `generation` | Uses the binding ID and generation from `workspace_status.mounts`; requests normal unmount. |
 

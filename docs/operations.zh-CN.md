@@ -51,7 +51,7 @@
 
 ## 合并文件
 
-通过 `workspace_status` 取得分支的 `formal_head`，使用 `revision_files` 列出该版本的文件。每页最多 200 个路径；返回 `next` 时，将它作为下一次请求的 `after`。可选的 `path` 限制目录范围。`revision_read` 读取文件字节，`revision_diff` 比较两个版本。需要包含工作目录修改时，通过 `revision_commit` 保存后使用返回的版本。
+通过 `workspace_status` 取得分支的 `formal_head`，使用 `revision_files` 列出该版本的文件。每页最多 200 个路径；返回 `next` 时，将它作为下一次请求的 `after`。可选的 `path` 限制目录范围。`revision_read` 读取文件字节，`revision_diff` 比较两个版本。需要包含挂载目录的修改时，通过 `mount_save` 提交，也可提供 branch guard 调用 `revision_commit`，随后使用返回的版本。
 
 `merge_prepare` 接收来源版本和目标 `BranchGuard`，生成候选内容。AI 可以使用 `revision_files`、`revision_read` 检查候选版本，再通过 `merge_resolve` 编辑任意文件。每次编辑返回新的候选版本，后续操作使用这个版本：
 
@@ -87,7 +87,7 @@ agentdrive call merge_apply --request-id "$RUN_ID-apply" --json - < merge-apply.
 
 ## 检查点与同步进度
 
-本地 fsync 保存当前工作内容，不增加 revision。需要历史版本时调用 `mount_save` 或 `revision_commit`。自动保存继续遵循五秒无新写入、三十秒持续写入的期限。远端 fsync 发布检查点并等待确认；合并检查点同步任务保证最新持久状态，显式 revision 继续保留在历史中。
+本地 fsync 保存当前工作内容，不增加 revision。`mount_save` 创建正式 commit 并更新 `formal_head`；内容没有变化时复用当前 commit。`revision_commit` 还支持提供提交说明或创建 checkpoint。后台自动保存继续按照五秒无新写入、三十秒持续写入的期限生成 `Autosave` revision。远端 fsync 发布检查点并等待确认；合并检查点同步任务保证最新持久状态，显式 revision 继续保留在历史中。
 
 `mount_save.wait_for_remote_ms` 接受 0–120000 毫秒，默认 30000。该参数限制本地保存完成后的远端等待时间，本地内容捕获耗时单独计算。等待到期时返回 `local_saved: true`、`remote_confirmed: false`，发布继续进行，等待到期本身不代表失败。使用返回的 ID 查询 `operation_get`，或使用原 request ID 查询 `operation_by_request`，无需重复创建保存请求。实际远端错误保留在 `error` 中，持久化任务会继续重试。文件系统的远端 fsync 必须确认完成才能成功返回。
 
