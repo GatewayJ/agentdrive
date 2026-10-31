@@ -86,7 +86,14 @@ async function open(t, data = fixture(), target = '/dashboard') {
     } else if (url.pathname === '/api/workspaces/workspace/archive') {
       await route.fulfill({json:data.status});
     } else if (url.pathname === '/api/workspaces/workspace') {
-      await route.fulfill({json:data});
+      const ids = new Set(data.branches.flatMap(branch => [branch.formal_head, branch.autosave_head, branch.base_revision]));
+      await route.fulfill({json:{...data,revisions:data.revisions.filter(revision => ids.has(revision.id))}});
+    } else if (url.pathname.endsWith('/history')) {
+      const branch = url.pathname.split('/').at(-2), search = (url.searchParams.get('search') || '').toLowerCase();
+      const entries = data.revisions.filter(revision => revision.branch === branch && (!search || (revision.id+' '+revision.message).toLowerCase().includes(search)))
+        .sort((a,b) => b.created_ns-a.created_ns || a.id.localeCompare(b.id));
+      const cursor = Number(url.searchParams.get('cursor') || 0), limit = Number(url.searchParams.get('limit') || 50);
+      await route.fulfill({json:{entries:entries.slice(cursor,cursor+limit),total:entries.length,next:cursor+limit<entries.length ? String(cursor+limit) : null}});
     } else if (url.pathname === '/api/workspaces/workspace/relationships') {
       const result = typeof data.relationships === 'function' ? await data.relationships(url) : data.relationships || relationshipFixture(data);
       await route.fulfill(result.error ? {status:409, json:result} : {json:result});
@@ -187,9 +194,11 @@ test('history contains only revisions authored on the selected branch, including
   assert.deepEqual(await page.locator('.revision-title').allTextContents(), ['child-autosave']);
   assert.equal(await page.locator('#history-count').textContent(), '1');
   await page.locator('#branch-empty').click();
+  await page.locator('.no-revisions').waitFor();
   assert.equal(await page.locator('#history-count').textContent(), '0');
   assert.equal(await page.locator('.no-revisions').textContent(), '此分支尚未生成新版本。');
   await page.locator('#branch-main').click();
+  await page.locator('#revision-parent-commit').waitFor();
   assert.deepEqual(await page.locator('.revision-title').allTextContents(), ['parent-commit', 'initial']);
 });
 
@@ -415,19 +424,22 @@ test('archive renders safe Markdown, filters files, exposes hidden files and kee
   assert(widths[0] <= widths[1]);
 });
 
-test('archive remote confirmation requires matching branch state even with an empty publication queue', async t => {
+test('archive renders saved and remote confirmation states supplied by the daemon', async t => {
   const data = fixture(), branch = data.status.branches[1];
   branch.owner = 'local'; data.status.capabilities.remote_configured = true;
+  data.status.synchronization = {state:'confirmed',branches:[{branch:branch.id,local_saved:true,remote_confirmed:true}]};
   data.status.remote_branches = [{branch:branch.id,owner:'local',authority_epoch:1,generation:1,durable_seq:1,working_root:branch.working_root}];
   const {page} = await open(t,data,'/archive');
   const remote = page.locator('.archive-state').nth(1).locator('strong');
   assert.equal(await remote.textContent(),'远端已保存');
   branch.mutation_seq++;
+  data.status.synchronization = {state:'unsaved',branches:[{branch:branch.id,local_saved:false,remote_confirmed:false}]};
   await page.locator('#refresh').click();
   await page.waitForFunction(()=>!document.querySelector('#refresh').disabled);
-  assert.equal(await remote.textContent(),'等待远端确认');
+  assert.equal(await remote.textContent(),'等待本机保存');
   assert.equal(await page.locator('.archive-state').first().locator('strong').textContent(),'有未保存修改');
   data.status.pending_jobs = 1;
+  data.status.synchronization = {state:'pending',branches:[{branch:branch.id,local_saved:true,remote_confirmed:false}]};
   await page.locator('#refresh').click();
   await page.waitForFunction(()=>!document.querySelector('#refresh').disabled);
   assert.equal(await remote.textContent(),'同步处理中');
@@ -607,7 +619,7 @@ test('relationships display ownership, mount principals and exact origins and se
   assert(widths[0] <= widths[1]);
 });
 
-test('relationships append bounded pages and refresh after the server rejects a changed cursor', async t => {
+test('relationships retain loaded pages and offer reload after the server rejects a changed cursor', async t => {
   const data = fixture(), result = relationshipFixture(data);
   const base = result.entries[1];
   const entry = index => ({...base,mount_location:'local',mount:{id:`mount-${index}`,path:`/mount/${index}`,principal:'owner',access:'read_only',state:'ready',generation:1}});
@@ -621,13 +633,17 @@ test('relationships append bounded pages and refresh after the server rejects a 
   await page.waitForFunction(() => document.querySelectorAll('#relationship-list tr').length === 51);
   assert.equal(await page.locator('#relationship-more').isVisible(),false);
   await refresh(page);
+  assert.equal(await page.locator('#relationship-list tr').count(),51);
   changed = true;
-  await page.locator('#relationship-more').click();
-  await page.waitForFunction(() => document.querySelector('#relationship-status').textContent === '已显示 50 / 51 条已知关系');
+  await refresh(page);
+  assert.equal(await page.locator('#relationship-list tr').count(),51);
+  changed = false;
+  await page.getByRole('button',{name:'重新载入关系',exact:true}).click();
+  await page.waitForFunction(() => document.querySelector('#relationship-status').textContent === '已显示 51 / 51 条已知关系');
   const calls = requests.filter(url => url.pathname.endsWith('/relationships'));
-  assert.equal(calls.at(-2).searchParams.get('cursor'),'page-2');
-  assert.equal(calls.at(-1).searchParams.has('cursor'),false);
-  assert.equal(await page.locator('#relationship-list tr').count(),50);
+  assert.equal(calls.at(-2).searchParams.has('cursor'),false);
+  assert.equal(calls.at(-1).searchParams.get('cursor'),'page-2');
+  assert.equal(await page.locator('#relationship-list tr').count(),51);
 });
 
 test('relationships clear old rows and report query failures without hiding branch history', async t => {
@@ -675,7 +691,7 @@ test('workspace tree includes other locations and preserves exact ancestry and l
   await page.locator('#branch-feature').dblclick();
   await page.locator('#revision-dialog[open]').waitFor();
   assert.equal(await page.locator('#branch-files-dialog[open]').count(), 0);
-  assert.equal(requests.filter(url => url.pathname.includes('/branches/feature/')).length, 0);
+  assert.equal(requests.filter(url => url.pathname.includes('/branches/feature/') && /\/(files|file)$/.test(url.pathname)).length, 0);
   await page.locator('.revision-dialog-close').first().click();
   await page.locator('#refresh').click();
   await page.waitForFunction(() => !document.querySelector('#refresh').disabled);
@@ -835,4 +851,121 @@ test('busy branch switches report pending state and retain their request identit
   await page.getByRole('button',{name:'重试请求'}).click();
   await page.getByText('操作已完成',{exact:true}).waitFor();
   assert.deepEqual(commands[0],commands[1]);
+});
+
+test('history loads bounded pages and preserves loaded rows while new versions arrive', async t => {
+  const data = fixture(), branch = data.branches[1];
+  data.revisions = [...data.revisions.filter(revision => revision.branch !== branch.id),
+    ...Array.from({length:1000},(_,index) => revision(`history-${index}`,branch.id,[],'commit',100+index))];
+  branch.formal_head = 'history-999'; branch.autosave_head = null;
+  const {page, requests} = await open(t,data);
+  assert.equal(await page.locator('.revision-row').count(),50);
+  assert.equal(await page.locator('#history-count').textContent(),'1000');
+  await page.getByRole('button',{name:'加载更多版本',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelectorAll('.revision-row').length===100);
+  await page.evaluate(()=>globalThis.retainedHistoryRow=document.querySelector('.revision-row'));
+  const queries = () => requests.filter(url=>url.pathname.endsWith('/history'));
+  const before = queries().length;
+  await refresh(page);
+  assert.equal(queries().length,before);
+  assert.equal(await page.locator('.revision-row').count(),100);
+  assert.equal(await page.evaluate(()=>globalThis.retainedHistoryRow===document.querySelector('.revision-row')),true);
+  data.revisions.push(revision('new-head',branch.id,[],'commit',2000)); branch.formal_head='new-head';
+  await refresh(page);
+  assert.equal(await page.locator('.revision-row').count(),100);
+  await page.getByRole('button',{name:'有新版本，查看更新',exact:true}).click();
+  await page.locator('#revision-new-head').waitFor();
+  assert.equal(await page.locator('.revision-row').count(),50);
+  assert.equal(await page.locator('#history-count').textContent(),'1001');
+  assert(queries().every(url=>url.searchParams.get('limit')==='50'));
+});
+
+test('management uses bounded history searches and preserves selected source revisions', async t => {
+  const data = fixture(), branch = data.branches[1];
+  data.revisions.push(...Array.from({length:1000},(_,index)=>revision(`source-${index}`,branch.id,[],'commit',100+index)));
+  branch.formal_head='source-999'; branch.autosave_head=null;
+  const {page,requests} = await open(t,data,'/mounts');
+  assert.equal(requests.filter(url=>url.pathname.endsWith('/history')).length,0);
+  await page.locator('#branches-nav').click();
+  await page.locator('#branches-revision option[value="source-950"]').waitFor({state:'attached'});
+  assert((await page.locator('#branches-revision option').count())<=52);
+  await page.getByLabel('查找保存版本',{exact:true}).fill('source-5');
+  await page.locator('#branches-revision option[value="source-559"]').waitFor({state:'attached'});
+  await page.locator('#branches-revision').selectOption('source-559');
+  await refresh(page);
+  assert.equal(await page.locator('#branches-revision').inputValue(),'source-559');
+  assert(requests.some(url=>url.pathname.endsWith('/history') && url.searchParams.get('search')==='source-5'));
+});
+
+test('source selection survives switching branches with the same inherited revision', async t => {
+  const data = fixture(), sibling = {...data.branches[2],id:'sibling',name:'sibling'};
+  data.branches.push(sibling);
+  const {page} = await open(t,data,'/branches');
+  await page.locator('#branches-branch').selectOption('empty');
+  await page.locator('#branches-revision').selectOption('parent-commit');
+  await page.locator('#branches-branch').selectOption('sibling');
+  await page.locator('#branches-revision option[value="parent-commit"]').waitFor({state:'attached'});
+  assert.equal(await page.locator('#branches-revision').inputValue(),'working');
+  assert.equal(await page.getByRole('button',{name:'创建分支',exact:true}).isEnabled(),true);
+});
+
+test('a selected inherited revision stays selected when the branch head advances', async t => {
+  const data = fixture(), branch = data.branches[2];
+  branch.local=false; branch.owner='remote';
+  const {page} = await open(t,data,'/branches');
+  await page.locator('#branches-branch').selectOption('empty');
+  assert.equal(await page.locator('#branches-revision').inputValue(),'parent-commit');
+  await page.locator('#branches-name').fill('feat/continue');
+  data.revisions.push(revision('child-commit','empty',['parent-commit'],'commit',10));
+  branch.formal_head='child-commit';
+  await refresh(page);
+  await page.locator('#branches-revision option[value="child-commit"]').waitFor({state:'attached'});
+  assert.equal(await page.locator('#branches-revision').inputValue(),'parent-commit');
+  assert.equal(await page.locator('#branches-name').inputValue(),'feat/continue');
+});
+
+test('read-only mounts of a transferred branch pin its current published revision', async t => {
+  const data = fixture(), branch = data.branches[1];
+  branch.local=false; branch.local_available=true; branch.owner='other-location';
+  branch.autosave_head=null; branch.formal_head='remote-current';
+  data.command=(route,tool,input)=>route.fulfill({json:completedOperation(tool,input,{kind:'updated'},true)});
+  const {page,commands} = await open(t,data,'/mounts');
+  await page.locator('#mounts-access').selectOption('read_only');
+  await page.locator('#mounts-branch').selectOption('feature');
+  await page.locator('#mounts-path').fill('/workspace/reference');
+  await page.getByRole('button',{name:'创建挂载点',exact:true}).click();
+  await page.getByText('操作已完成',{exact:true}).waitFor();
+  assert.equal(commands[0].input.request.revision,'remote-current');
+  assert.equal(commands[0].input.request.branch,'feature');
+});
+
+test('changing the source branch discards an older history response', async t => {
+  const {page} = await open(t,fixture(),'/branches');
+  let started, release, done;
+  const pending = new Promise(resolve=>{started=resolve;});
+  const blocked = new Promise(resolve=>{release=resolve;});
+  const completed = new Promise(resolve=>{done=resolve;});
+  t.after(()=>release());
+  await page.route('**/branches/main/history?**',async route=>{
+    started(); await blocked;
+    await route.fulfill({json:{entries:[revision('stale-source','main',[],'commit',100)],next:null,total:1}}).catch(()=>{});
+    done();
+  });
+  await page.locator('#branches-branch').selectOption('main'); await pending;
+  await page.locator('#branches-branch').selectOption('empty');
+  release(); await completed;
+  assert.equal(await page.locator('#branches-branch').inputValue(),'empty');
+  assert.equal(await page.locator('#branches-revision option[value="stale-source"]').count(),0);
+  assert.equal(await page.locator('#branches-revision').inputValue(),'working');
+});
+
+test('history and archive use daemon synchronization state even when no jobs are queued', async t => {
+  const data = fixture(); data.status.capabilities.remote_configured=true;
+  data.status.synchronization={state:'unsaved',branches:[{branch:'feature',local_saved:false,remote_confirmed:false}]};
+  const {page} = await open(t,data);
+  assert.equal(await page.locator('#sync-status').textContent(),'有未保存修改');
+  data.status.synchronization.state='unconfirmed'; await refresh(page);
+  assert.equal(await page.locator('#sync-status').textContent(),'等待远端确认');
+  data.status.synchronization.state='confirmed'; await refresh(page);
+  assert.equal(await page.locator('#sync-status').textContent(),'已同步');
 });

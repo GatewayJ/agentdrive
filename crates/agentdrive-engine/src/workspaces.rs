@@ -515,7 +515,17 @@ impl WorkspaceApi for WorkspaceService {
             .await?;
         let branches = self.runtime.state.branches(workspace.id).await?;
         let remote_branches = self.branch_references(&workspace, &branches).await?;
+        let pending_jobs = self.runtime.state.sync_jobs(workspace.id).await?.len();
+        let remote_configured = self.revisions.trees.content.remote().is_some();
+        let synchronization = WorkspaceSynchronization::new(
+            self.runtime.location,
+            &branches,
+            &remote_branches,
+            remote_configured,
+            pending_jobs,
+        );
         Ok(WorkspaceStatus {
+            synchronization,
             selected_branch: self.runtime.state.selected_branch(workspace.id).await?,
             location: self.runtime.location,
             branches,
@@ -528,7 +538,7 @@ impl WorkspaceApi for WorkspaceService {
                 .into_iter()
                 .filter(|mount| mount.workspace == workspace.id)
                 .collect(),
-            pending_jobs: self.runtime.state.sync_jobs(workspace.id).await?.len(),
+            pending_jobs,
             capabilities: Capabilities {
                 format_version: FORMAT_VERSION,
                 platform_mount: self.mount_capability.clone(),
@@ -538,7 +548,7 @@ impl WorkspaceApi for WorkspaceService {
                 ]
                 .map(str::to_owned)
                 .to_vec(),
-                remote_configured: self.revisions.trees.content.remote().is_some(),
+                remote_configured,
                 automatic_text_merge: false,
                 physical_remote_gc: false,
             },
@@ -555,6 +565,17 @@ impl WorkspaceApi for WorkspaceService {
             self.revisions.publisher.refresh_history(workspace).await?;
         }
         Ok(())
+    }
+
+    async fn request_history_refresh(
+        &self,
+        actor: &Principal,
+        workspace: WorkspaceId,
+    ) -> Result<HistoryRefreshStatus> {
+        self.runtime
+            .authorize(actor, workspace, None, Permission::Read)
+            .await?;
+        Ok(self.revisions.publisher.request_history_refresh(workspace))
     }
 
     async fn import_directory(

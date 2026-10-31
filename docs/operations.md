@@ -18,6 +18,9 @@ Read these receipt fields independently:
 | `phase` | Current workflow state |
 | `error` | A typed failure, possibly alongside a completed local save |
 | `sync_progress` | Optional queue, stage and transfer counters for publication |
+| `recovery` | Response-only continuation: `retry_request` or `release_mount` with its expected binding generation |
+
+Recovery actions are derived from the saved workflow independently of `error.retryable`. Repeat `retry_request` with the original command, request ID and arguments. For `release_mount`, keep the release request ID and its original operation and generation across failures or lost responses. A failed release can continue after the directory becomes available; completed requests replay their receipt. Mount readiness and remote publication remain separate outcomes, and a remote publication failure remains visible after the mount recovers.
 
 A remote error can accompany `local_saved: true`. Keep the existing operation ID, restore remote access, and run `sync` or allow the daemon to retry its persistent publication queue. A remote timeout does not establish whether a conditional write committed; the publisher checks the recorded operation identity.
 
@@ -86,6 +89,8 @@ Example `merge-edits.json` arguments:
 See [configuration and S3](configuration.md) for remote credentials and [CLI usage](cli.md) for executable examples.
 
 ## Checkpoints and synchronization progress
+
+Dashboard synchronization status checks local mutation and saved sequences together with the confirmed remote owner, authority epoch, generation, durable sequence, heads and content root. An empty publication queue can still mean that new edits await local saving or remote confirmation. The workspace indicator describes branches written by this location; each archive branch shows its own saved and confirmed state.
 
 Local fsync persists the current working tree without adding a revision. `mount_save` creates a formal commit and advances `formal_head`; unchanged content reuses the current commit. `revision_commit` also supports an explicit message or checkpoint. Background autosave records `Autosave` revisions on its five-second quiet/thirty-second continuous-write schedule. Remote fsync publishes the checkpoint and waits for confirmation; merged checkpoint jobs guarantee the latest durable state, while explicit revisions remain in history.
 

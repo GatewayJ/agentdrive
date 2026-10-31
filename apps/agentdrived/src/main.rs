@@ -125,6 +125,21 @@ async fn serve(settings: Arc<ConfigStore>) -> Result<()> {
             }
         });
     }
+    {
+        let engine = engine.clone();
+        let cancellation = cancellation.clone();
+        workers.spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! { _ = cancellation.cancelled() => break, _ = interval.tick() => {} }
+                tokio::select! {
+                    _ = cancellation.cancelled() => break,
+                    _ = engine.refresh_requested_history() => {}
+                }
+            }
+        });
+    }
     for kind in ["autosave", "sync", "cache"] {
         let engine = engine.clone();
         let cancellation = cancellation.clone();

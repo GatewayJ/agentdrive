@@ -1,6 +1,7 @@
 //! A single local persistence boundary for metadata, objects and working files.
 
 mod batch;
+mod history;
 mod objects;
 mod queries;
 mod sqlite;

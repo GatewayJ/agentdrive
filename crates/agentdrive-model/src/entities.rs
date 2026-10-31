@@ -462,6 +462,33 @@ pub struct BranchRef {
     pub metadata: Option<BranchMetadata>,
 }
 
+impl BranchRef {
+    /// Selects confirmed branch state while retaining this location's working changes.
+    /// A former owner's stopped copy has the transfer's epoch, so equal versions
+    /// still use the current owner's reference. Older observations cannot replace it.
+    pub fn supersedes_local(&self, branch: &Branch, location: LocationId) -> bool {
+        let remote_version = (
+            self.authority_epoch,
+            self.generation,
+            self.source_generation,
+            self.durable_seq,
+        );
+        let local_version = (
+            branch.authority_epoch,
+            branch.generation,
+            branch.source_generation,
+            branch.saved_seq,
+        );
+        if remote_version < local_version {
+            return false;
+        }
+        if self.authority_epoch > branch.authority_epoch || self.deleted {
+            return true;
+        }
+        branch.owner != location && branch.state != BranchState::Deleted
+    }
+}
+
 /// A locally retained observation. Additional fields are absent in older databases.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObservedBranchRef {

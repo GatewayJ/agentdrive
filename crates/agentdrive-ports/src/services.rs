@@ -158,6 +158,7 @@ pub trait ReplicaPublisher: Send + Sync {
     ) -> Result<SyncJob>;
     async fn discover(&self, workspace: WorkspaceId) -> Result<Vec<BranchRef>>;
     async fn refresh_history(&self, workspace: WorkspaceId) -> Result<()>;
+    fn request_history_refresh(&self, workspace: WorkspaceId) -> crate::HistoryRefreshStatus;
 }
 
 #[async_trait]

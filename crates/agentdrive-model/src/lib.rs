@@ -4,12 +4,14 @@ mod entities;
 mod error;
 mod id;
 mod object;
+mod operations;
 mod path;
 
 pub use entities::*;
 pub use error::*;
 pub use id::*;
 pub use object::*;
+pub use operations::*;
 pub use path::*;
 
 pub const FORMAT_VERSION: u32 = 1;

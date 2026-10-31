@@ -839,6 +839,31 @@ impl RevisionApi for VersionService {
         Ok(revisions)
     }
 
+    async fn history(
+        &self,
+        actor: &Principal,
+        query: RevisionHistoryQuery,
+    ) -> Result<RevisionHistoryPage> {
+        crate::revision_history::page(&self.revisions.runtime, actor, query).await
+    }
+
+    async fn metadata(
+        &self,
+        actor: &Principal,
+        workspace: WorkspaceId,
+        ids: Vec<RevisionId>,
+    ) -> Result<Vec<Revision>> {
+        self.revisions
+            .runtime
+            .authorize(actor, workspace, None, Permission::Read)
+            .await?;
+        self.revisions
+            .runtime
+            .state
+            .revision_metadata(workspace, ids)
+            .await
+    }
+
     async fn diff(
         &self,
         actor: &Principal,

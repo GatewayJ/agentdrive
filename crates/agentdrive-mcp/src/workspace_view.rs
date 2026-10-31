@@ -12,6 +12,7 @@ pub(crate) struct WorkspaceView {
     pub summary: WorkspaceSummary,
     pub origins: Vec<BranchOrigin>,
     pub remote_error: Option<Error>,
+    pub remote_refresh: Option<agentdrive_ports::HistoryRefreshStatus>,
 }
 
 #[derive(Serialize)]
@@ -19,7 +20,10 @@ pub(crate) struct WorkspaceBranch {
     pub id: BranchId,
     pub name: String,
     pub owner: LocationId,
+    /// The displayed content comes from a working copy owned by this location.
     pub local: bool,
+    /// A local copy remains available, including after ownership transfers.
+    pub local_available: bool,
     pub state: BranchState,
     pub formal_head: RevisionId,
     pub autosave_head: Option<RevisionId>,
@@ -40,6 +44,7 @@ impl WorkspaceBranch {
             name: branch.name.clone(),
             owner: branch.owner,
             local: true,
+            local_available: true,
             state: branch.state,
             formal_head: branch.formal_head,
             autosave_head: branch.autosave_head,
@@ -54,16 +59,24 @@ impl WorkspaceBranch {
         }
     }
 
-    fn remote(reference: &BranchRef, revisions: &BTreeMap<RevisionId, &Revision>) -> Self {
+    fn remote(
+        reference: &BranchRef,
+        revisions: &BTreeMap<RevisionId, &Revision>,
+        local: Option<&Branch>,
+    ) -> Self {
+        let metadata = reference
+            .metadata
+            .clone()
+            .or_else(|| local.map(BranchMetadata::from));
         Self {
             id: reference.branch,
-            name: reference
-                .metadata
+            name: metadata
                 .as_ref()
                 .map(|metadata| metadata.name.clone())
                 .unwrap_or_else(|| format!("分支 {}", reference.branch)),
             owner: reference.owner,
             local: false,
+            local_available: local.is_some(),
             state: if reference.deleted {
                 BranchState::Deleted
             } else if reference.write_stopped {
@@ -74,12 +87,8 @@ impl WorkspaceBranch {
             formal_head: reference.formal_head,
             autosave_head: reference.autosave_head,
             working_root: reference.working_root.clone(),
-            base_revision: reference
-                .metadata
-                .as_ref()
-                .map(|metadata| metadata.base_revision),
-            source_branch: reference
-                .metadata
+            base_revision: metadata.as_ref().map(|metadata| metadata.base_revision),
+            source_branch: metadata
                 .as_ref()
                 .and_then(|metadata| metadata.source_branch),
             authority_epoch: reference.authority_epoch,
@@ -123,21 +132,31 @@ impl WorkspaceView {
             .iter()
             .map(|revision| (revision.id, revision))
             .collect();
-        let mut branches: BTreeMap<_, _> = status
-            .remote_branches
+        let local: BTreeMap<_, _> = status
+            .branches
             .iter()
-            .map(|reference| (reference.branch, WorkspaceBranch::remote(reference, &by_id)))
+            .map(|branch| (branch.id, branch))
             .collect();
-        for branch in &status.branches {
-            // 本机尚未发布的修改使用当前工作状态。
-            if !branches
-                .get(&branch.id)
-                .is_some_and(|remote| remote.authority_epoch > branch.authority_epoch)
-            {
-                branches.insert(branch.id, WorkspaceBranch::local(branch));
+        let mut branches: BTreeMap<_, _> = local
+            .iter()
+            .map(|(id, branch)| (*id, WorkspaceBranch::local(branch)))
+            .collect();
+        for reference in &status.remote_branches {
+            let branch = local.get(&reference.branch).copied();
+            if branch.is_none_or(|branch| reference.supersedes_local(branch, status.location)) {
+                branches.insert(
+                    reference.branch,
+                    WorkspaceBranch::remote(reference, &by_id, branch),
+                );
             }
         }
-        let branches: Vec<_> = branches.into_values().collect();
+        let branches: Vec<_> = branches
+            .into_values()
+            .map(|mut branch| {
+                branch.local &= branch.owner == status.location;
+                branch
+            })
+            .collect();
         let summary = WorkspaceSummary::new(&branches, &status.mounts);
         let origins = branches
             .iter()
@@ -152,6 +171,7 @@ impl WorkspaceView {
             summary,
             origins,
             remote_error: None,
+            remote_refresh: None,
         }
     }
 }
@@ -202,6 +222,10 @@ impl BranchOrigin {
 }
 
 #[cfg(test)]
+#[path = "workspace_view_tests.rs"]
+mod integration_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -230,6 +254,7 @@ mod tests {
         remote_branches: Vec<BranchRef>,
     ) -> WorkspaceStatus {
         WorkspaceStatus {
+            synchronization: Default::default(),
             location: branches[0].owner,
             selected_branch: Some(branches[0].id),
             branches,
@@ -340,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_remote_metadata_and_newer_ownership_are_displayed_without_invented_origins() {
+    fn missing_remote_metadata_keeps_known_names_and_origins_after_transfer() {
         let root = branch();
         let mut remote = reference(&root);
         remote.metadata = None;
@@ -353,8 +378,40 @@ mod tests {
         assert_eq!(view.branches.len(), 1);
         assert_eq!(view.branches[0].owner, remote.owner);
         assert!(!view.branches[0].local);
+        assert!(view.branches[0].local_available);
+        assert_eq!(view.branches[0].name, root.name);
+        assert_eq!(view.origins[0].revision, root.base_revision);
+        assert!(!view.origins[0].revision_available);
+        assert_eq!(view.status.branches, vec![root.clone()]);
+
+        let mut unknown = status(&root, vec![root.clone()], vec![remote]);
+        unknown.branches.clear();
+        let view = WorkspaceView::new(unknown, vec![]);
+        assert!(!view.branches[0].local_available);
+        assert!(view.branches[0].name.starts_with("分支 "));
         assert!(view.origins.is_empty());
-        assert_eq!(view.status.branches, vec![root]);
+    }
+
+    #[test]
+    fn former_owner_retains_local_copy_without_offering_it_as_current_work() {
+        let root = Branch {
+            authority_epoch: 2,
+            generation: 3,
+            state: BranchState::Stopped,
+            ..branch()
+        };
+        let mut outdated = reference(&root);
+        outdated.authority_epoch = 1;
+        outdated.owner = LocationId::new();
+        outdated.formal_head = RevisionId::new();
+        let mut status = status(&root, vec![root.clone()], vec![outdated]);
+        status.location = LocationId::new();
+        let view = WorkspaceView::new(status, vec![]);
+        assert_eq!(view.branches[0].owner, root.owner);
+        assert_eq!(view.branches[0].formal_head, root.formal_head);
+        assert_eq!(view.branches[0].state, BranchState::Stopped);
+        assert!(!view.branches[0].local);
+        assert!(view.branches[0].local_available);
     }
 
     fn branch() -> Branch {

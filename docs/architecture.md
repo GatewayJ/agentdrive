@@ -50,7 +50,11 @@
 
 Both remote backends implement `RemoteObjectStore` and `RemoteRefStore`. The engine reuses its existing publication order, durable retries, history import, ownership and storage-switching workflows. OpenCSG-specific HTTP paths, Bearer authentication, response parsing, chunk encoding and Git branch version checks remain inside `agentdrive-opencsg`; domain objects and MCP tools retain their existing version semantics.
 
-The HTTP workspace presenter in `mcp/workspace_view` derives typed dashboard statistics and creation origins from `WorkspaceApi::status` and `RevisionApi::list`. It performs no storage reads of its own. The browser workspace module draws the source-revision connections and mount inventory; the revision viewer owns metadata and diff dialogs.
+The HTTP workspace presenter in `mcp/workspace_view` derives dashboard statistics and creation origins from `WorkspaceApi::status` and bounded `RevisionApi::metadata` lookups for branch heads and origins. Global views and relationship queries share the model's branch-observation selection rule. `local` identifies the current owner's local content; `local_available` separately records whether a local copy exists. Read-only mounts of a foreign branch select an explicit published revision.
+
+Workspace reads request a background history refresh and return the current local observations immediately. The engine combines requests per workspace for 15 seconds and runs at most two workspace refreshes concurrently when requested. The daemon owns the cancellable worker. History observation holds object retention protection while importing immutable records and conditionally publishing observations, without taking a branch mutation lock. Explicit pull retains its working-tree adoption protections. Responses report refresh progress, last attempt, last success and errors.
+
+`GET /api/workspaces/{workspace}/branches/{branch}/history` returns up to 200 revisions per page (50 by default), with message/ID search and a cursor bound to the principal and query. The local adapter uses a workspace/branch/time index and keyset pagination. History and source selectors fetch pages as needed; unchanged refreshes preserve loaded rows and selected immutable revisions. Relationship refreshes preserve the loaded range, open details and scroll position, and retain the current view when an outdated cursor requires reloading.
 
 ## File interfaces and transaction boundaries
 

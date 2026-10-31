@@ -18,7 +18,8 @@ export function createCommandPanel({api, element, container, scope, changed, set
   function render() {
     panel.hidden = !ticket;
     const record = ticket?.record;
-    const terminal = complete(record) || record && ['failed','cancelled'].includes(record.phase);
+    const recovery = record?.recovery;
+    const terminal = complete(record) || record && !recovery && ['failed','cancelled'].includes(record.phase);
     setBusy(running || !!ticket && !terminal && !ticket.rejected);
     if (!ticket) return;
     title.textContent = ticket.label;
@@ -35,9 +36,12 @@ export function createCommandPanel({api, element, container, scope, changed, set
     }
     error.textContent = ticket.message || record?.error?.message || '';
     if (record?.phase === 'waiting_for_quiesce') error.textContent += ' 请关闭使用该目录的文件，让终端退出该目录后继续。';
-    retry.hidden = !!record && (!record.error?.retryable || complete(record));
+    retry.hidden = !!record && (complete(record) || recovery?.kind === 'release_mount' ||
+      recovery?.kind !== 'retry_request' && (!record.error?.retryable || terminal));
     check.hidden = !record && !!ticket.rejected;
-    release.hidden = record?.phase !== 'waiting_for_quiesce' || ticket.tool === 'branch_switch' || !record.pending?.old;
+    const legacyRelease = record && !('recovery' in record) && record.phase === 'waiting_for_quiesce' && ticket.tool !== 'branch_switch' && record.pending?.old;
+    release.hidden = recovery?.kind !== 'release_mount' && !legacyRelease;
+    release.textContent = record?.phase === 'waiting_for_quiesce' ? '已关闭占用，继续操作' : '恢复挂载';
     for (const button of [retry,check,release]) button.disabled = running;
     details.textContent = `request_id: ${ticket.request_id}${record ? `\noperation: ${record.id}\nphase: ${record.phase}` : ''}`;
   }
@@ -55,10 +59,14 @@ export function createCommandPanel({api, element, container, scope, changed, set
     try {
       let record;
       if (mode === 'release') {
-        active.release_request_id ||= crypto.randomUUID(); persist();
-        const response = await post('mount_release', {request_id:active.release_request_id, request:{operation:active.record.id, expected_binding_generation:active.record.pending.old.generation}});
-        if (response.error) throw new Error(response.error.message);
+        active.release_request_id ||= crypto.randomUUID();
+        active.release_request ||= {operation:active.record.id,
+          expected_binding_generation:active.record.recovery?.expected_binding_generation ?? active.record.pending.old.generation};
+        persist();
+        const response = await post('mount_release', {request_id:active.release_request_id, request:active.release_request});
+        if (request !== generation) return;
         record = await post('operation_get', {operation:active.record.id});
+        if (response.error) active.message = response.error.message;
       } else if (mode === 'check') {
         record = await post(active.record ? 'operation_get' : 'operation_by_request', active.record ? {operation:active.record.id} : {request_id:active.request_id});
         if (!record) throw new Error('服务尚未记录此请求，可以重试原请求。');
@@ -84,6 +92,7 @@ export function createCommandPanel({api, element, container, scope, changed, set
     if (id) {
       try { ticket = JSON.parse(sessionStorage.getItem(key())); } catch { ticket = null; }
       render(); schedule();
+      if (ticket?.record && !('recovery' in ticket.record) && ticket.record.pending) execute('check');
     }
   }
   async function run(tool, request, label) {

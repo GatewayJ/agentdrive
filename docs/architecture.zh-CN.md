@@ -49,7 +49,11 @@
 
 两种远程后端均实现 `RemoteObjectStore` 和 `RemoteRefStore`。engine 复用已有的发布顺序、持久化重试、历史导入、所有权和存储切换流程。OpenCSG HTTP 路径、Bearer 认证、响应解析、数据块编码及 Git 分支版本检查由 `agentdrive-opencsg` 管理，领域对象和 MCP 工具继续使用原有版本含义。
 
-HTTP 工作区展示模块 `mcp/workspace_view` 通过 `WorkspaceApi::status` 与 `RevisionApi::list` 的结果生成有类型的统计和创建来源信息。数据读取继续由应用接口负责。浏览器的 workspace 模块负责来源版本连接图及挂载目录表，revision viewer 负责版本信息与差异弹框。
+HTTP 工作区展示模块 `mcp/workspace_view` 通过 `WorkspaceApi::status` 和 `RevisionApi::metadata` 查询分支版本与创建来源，生成页面统计。全局视图和关系查询共用 model 中的分支观察选择规则。`local` 表示当前 owner 在本机的工作内容，`local_available` 单独表示本机保留了副本。其他 location 分支的只读挂载明确指定已发布版本。
+
+工作区查询提交后台刷新请求，立即返回已有本地观察。engine 在 15 秒内合并同一 workspace 的请求，最多同时刷新两个 workspace；daemon 管理可取消的后台任务。历史观察持有对象保留保护，导入不可变记录并通过条件提交更新观察，不取得文件修改使用的分支锁。显式 pull 继续使用工作树接管所需的保护。响应提供刷新进度、最近尝试时间、成功时间和错误。
+
+`GET /api/workspaces/{workspace}/branches/{branch}/history` 按分支分页，每页默认 50 项、最多 200 项，支持说明与 ID 搜索，游标关联用户和查询条件。本地适配器使用 workspace、branch、时间索引及记录位置分页。历史和来源版本选择按需读取页面，无变化刷新保留已加载记录及选中的不可变版本。关系刷新保留已加载范围、展开详情和滚动位置，游标过期时保留现有内容并提示重新读取。
 
 ## 文件操作接口与事务边界
 

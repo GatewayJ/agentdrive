@@ -1,4 +1,5 @@
 import { createFileBrowser } from './file-browser.js';
+import { branchSyncStatus } from './sync-status.js';
 
 export function createArchivePage({api, element, container}) {
   const heading = element('div', 'page-heading archive-heading');
@@ -32,10 +33,7 @@ export function createArchivePage({api, element, container}) {
     globalThis.history.replaceState(null,'',url.pathname+url.search);
   }});
   function status(branch) {
-    const saved = branch.mutation_seq === branch.saved_seq;
-    const remote = snapshot.remote_branches?.find(value => value.branch === branch.id && !value.deleted);
-    const confirmed = saved && remote && remote.owner === branch.owner && remote.authority_epoch === branch.authority_epoch && remote.generation === branch.generation && remote.durable_seq === branch.saved_seq && remote.working_root.id === branch.working_root.id;
-    return {saved, remote:!snapshot.capabilities.remote_configured ? '未启用远程同步' : confirmed ? '远端已保存' : snapshot.pending_jobs ? '同步处理中' : '等待远端确认', confirmed};
+    return branchSyncStatus(snapshot, branch);
   }
   function renderBranches() {
     const focused = branches.contains(document.activeElement) ? document.activeElement.dataset.branch : null;

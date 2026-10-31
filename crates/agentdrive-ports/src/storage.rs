@@ -165,6 +165,15 @@ pub trait LocalStateStore: Send + Sync {
     async fn node_at(&self, branch: BranchId, path: &WorkspacePath) -> Result<Option<Node>>;
     async fn revision(&self, id: RevisionId) -> Result<Option<Revision>>;
     async fn revisions(&self, workspace: WorkspaceId) -> Result<Vec<Revision>>;
+    async fn revision_metadata(
+        &self,
+        workspace: WorkspaceId,
+        ids: Vec<RevisionId>,
+    ) -> Result<Vec<Revision>>;
+    async fn revision_history(
+        &self,
+        query: crate::RevisionHistoryScan,
+    ) -> Result<(Vec<Revision>, usize)>;
     async fn operation(&self, id: OperationId) -> Result<Option<OperationRecord>>;
     async fn operation_by_request(
         &self,

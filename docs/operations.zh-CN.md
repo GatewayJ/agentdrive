@@ -18,6 +18,9 @@
 | `phase` | 当前操作阶段 |
 | `error` | 具有明确类型的失败信息，可能与已完成的本地保存同时存在 |
 | `sync_progress` | 可选的同步队列、阶段和传输计数 |
+| `recovery` | 响应中的继续操作方式：`retry_request`，或携带预期挂载 generation 的 `release_mount` |
+
+`recovery` 根据已保存的操作流程生成，独立于 `error.retryable`。`retry_request` 使用原命令、request ID 和参数继续操作。`release_mount` 在失败或响应丢失后保留原 request ID、operation 和 generation；目录恢复可用后，失败的释放操作可以继续执行，已完成请求返回已有结果。挂载就绪和远端发布分别报告，挂载恢复后仍保留远端发布失败信息。
 
 远端错误可能伴随 `local_saved: true`。请保留已有 operation ID，恢复远端连接，然后运行 `sync`，或者等待守护进程重试持久化的发布队列。远端超时无法确认条件写入是否已提交，发布程序会检查已记录的操作身份。
 
@@ -86,6 +89,8 @@ agentdrive call merge_apply --request-id "$RUN_ID-apply" --json - < merge-apply.
 远端凭据见[配置与 S3](configuration.zh-CN.md)，可执行示例见 [CLI 使用](cli.zh-CN.md)。
 
 ## 检查点与同步进度
+
+Dashboard 同步状态同时核验本机修改与保存序号，以及远端确认的 owner、authority epoch、generation、保存序号、版本和内容对象。发布队列为空时，新修改仍可能等待本机保存或远端确认。工作区状态表示本机负责写入的分支，档案室分别显示每个分支的保存与确认状态。
 
 本地 fsync 保存当前工作内容，不增加 revision。`mount_save` 创建正式 commit 并更新 `formal_head`；内容没有变化时复用当前 commit。`revision_commit` 还支持提供提交说明或创建 checkpoint。后台自动保存继续按照五秒无新写入、三十秒持续写入的期限生成 `Autosave` revision。远端 fsync 发布检查点并等待确认；合并检查点同步任务保证最新持久状态，显式 revision 继续保留在历史中。
 

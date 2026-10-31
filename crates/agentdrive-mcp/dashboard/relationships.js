@@ -45,13 +45,15 @@ export function createRelationshipsView({api, element, container, onSave, onUnmo
   const body = element('tbody'); body.id = 'relationship-list'; table.append(head, body); wrap.append(table);
   const more = element('button', 'secondary relationship-more', '继续加载'); more.type = 'button'; more.hidden = true;
   more.id = 'relationship-more';
-  container.replaceChildren(heading, form, note, status, wrap, more);
-  let workspace = null, current = null, next = null, generation = 0, controller = null, applied = {}, busy = false;
+  const reload = element('button', 'secondary', '重新载入关系'); reload.type = 'button'; reload.id = 'relationship-reload'; reload.hidden = true;
+  container.replaceChildren(heading, form, note, status, reload, wrap, more);
+  let workspace = null, current = null, next = null, generation = 0, controller = null, applied = {}, busy = false, loading = false;
+  let rendered = new Map();
 
   function clear() {
     generation++; controller?.abort(); controller = null;
-    workspace = null; current = null; next = null; body.replaceChildren(); count.textContent = '0';
-    more.hidden = true; status.textContent = ''; selection.textContent = '';
+    workspace = null; current = null; next = null; loading = false; rendered.clear(); body.replaceChildren(); count.textContent = '0';
+    more.hidden = true; reload.hidden = true; status.textContent = ''; selection.textContent = '';
     for (const input of Object.values(fields)) input.value = '';
     applied = {};
   }
@@ -88,6 +90,7 @@ export function createRelationshipsView({api, element, container, onSave, onUnmo
       directory.append(element('code', 'mount-path', mount.path)); identifier(directory, mount.id, 'ID ');
       value(directory, `挂载于 ${entry.mount_location === location ? '本机' : entry.mount_location}`);
       value(directory, `generation: ${mount.generation} · ${mount.access === 'read_only' ? '只读' : '读写'}`);
+      if (mount.revision) identifier(directory, mount.revision, '固定版本 ');
       state.append(element('span', '', mount.principal), element('span', `mount-state ${mount.state}`, states[mount.state] || mount.state));
     } else {
       directory.append(element('span', '', '本机暂无挂载'));
@@ -121,33 +124,72 @@ export function createRelationshipsView({api, element, container, onSave, onUnmo
     }
     return row;
   }
-  async function load(append = false) {
-    if (!workspace) return;
+  function display(result, mode) {
+    const previous = current;
+    current = result; next = result.next;
+    const selected = result.entries.find(entry => entry.branch.id === result.selected_branch)?.branch.name;
+    selection.textContent = `本机 location ${result.observing_location} · 默认分支 ${selected || result.selected_branch || '未选择'}`;
+    const scroll = {left:window.scrollX, top:window.scrollY};
+    const focus = document.activeElement;
+    const updated = new Map();
+    const nodes = result.entries.map(entry => {
+      const key = `${entry.branch.id}:${entry.mount?.id || ''}`;
+      const signature = JSON.stringify([entry, result.selected_branch]);
+      const old = rendered.get(key);
+      const node = old?.signature === signature ? old.node : row(entry, result.observing_location);
+      if (old && node !== old.node) {
+        const opened = [...old.node.querySelectorAll('details')].map(details => details.open);
+        node.querySelectorAll('details').forEach((details, index) => { details.open = opened[index] || false; });
+      }
+      updated.set(key, {node, signature});
+      return node;
+    });
+    const changed = rendered.size !== updated.size || [...updated].some(([key, value]) => rendered.get(key)?.signature !== value.signature);
+    if (changed || mode === 'replace') {
+      body.replaceChildren(...nodes);
+      if (focus?.isConnected) focus.focus({preventScroll:true});
+      window.scrollTo(scroll);
+    }
+    rendered = updated;
+    count.textContent = result.total;
+    const summary = result.total ? `已显示 ${result.entries.length} / ${result.total} 条已知关系` : '没有符合条件的已知关系。';
+    status.textContent = mode === 'refresh' && previous && changed ? `关系已更新；${summary}` : summary;
+    more.hidden = !next; reload.hidden = true;
+  }
+  async function load(mode = 'replace') {
+    if (!workspace || mode === 'refresh' && loading) return;
+    const append = mode === 'append';
     const request = ++generation; controller?.abort(); controller = new AbortController();
+    const signal = controller.signal;
     const params = new URLSearchParams({limit:'50'});
     for (const [name, value] of Object.entries(applied)) if (value) params.set(name, value);
     if (append && next) params.set('cursor', next);
-    if (!append) { next = null; body.replaceChildren(); count.textContent = '0'; more.hidden = true; }
-    status.textContent = '正在读取关系…'; more.disabled = true;
+    if (mode === 'replace') { current = null; next = null; rendered.clear(); body.replaceChildren(); count.textContent = '0'; more.hidden = true; }
+    status.textContent = mode === 'refresh' ? '正在更新关系，当前列表保持显示…' : '正在读取关系…'; more.disabled = true; reload.disabled = true; loading = true;
     try {
-      const result = await api(`/api/workspaces/${encodeURIComponent(workspace)}/relationships?${params}`, {signal:controller.signal});
+      const endpoint = `/api/workspaces/${encodeURIComponent(workspace)}/relationships`;
+      const result = await api(`${endpoint}?${params}`, {signal});
       if (request !== generation) return;
-      current = result; next = result.next;
-      const selected = result.entries.find(entry => entry.branch.id === result.selected_branch)?.branch.name;
-      selection.textContent = `本机 location ${result.observing_location} · 默认分支 ${selected || result.selected_branch || '未选择'}`;
-      for (const entry of result.entries) body.append(row(entry, result.observing_location));
-      count.textContent = result.total;
-      status.textContent = result.total ? `已显示 ${body.children.length} / ${result.total} 条已知关系` : '没有符合条件的已知关系。';
-      more.hidden = !next;
+      if (mode === 'refresh') {
+        const visible = current?.entries.length || 0;
+        while (result.next && result.entries.length < visible) {
+          params.set('cursor', result.next);
+          const page = await api(`${endpoint}?${params}`, {signal});
+          if (request !== generation) return;
+          result.entries.push(...page.entries); result.next = page.next;
+        }
+      } else if (append) result.entries = [...(current?.entries || []), ...result.entries];
+      display(result, mode);
     } catch (error) {
       if (request !== generation || error.name === 'AbortError') return;
-      if (append && error.code === 'TARGET_MOVED') {
-        await load();
-        return;
+      if (error.code === 'TARGET_MOVED' && current) {
+        status.textContent = '关系已变化，当前列表保持显示，请重新载入。';
+        reload.hidden = false; more.hidden = true;
+      } else {
+        status.textContent = `关系查询失败：${error.message}${current ? '；保留当前列表。' : ''}`;
+        reload.hidden = false;
       }
-      next = null; more.hidden = true;
-      status.textContent = `关系查询失败：${error.message}`;
-    } finally { if (request === generation) more.disabled = false; }
+    } finally { if (request === generation) { loading = false; more.disabled = false; reload.disabled = false; } }
   }
   async function show(snapshot) {
     if (!snapshot) { clear(); return; }
@@ -174,7 +216,7 @@ export function createRelationshipsView({api, element, container, onSave, onUnmo
       applied = Object.fromEntries(Object.entries(fields).map(([name, input]) => [name, input.value.trim()]));
       advanced.open = ['mount_state', 'mount_location', 'mount', 'include_released'].some(name => applied[name]);
     }
-    await load();
+    await load(changed || !current ? 'replace' : 'refresh');
   }
   function applyFilters() {
     applied = Object.fromEntries(Object.entries(fields).map(([name, input]) => [name, input.value.trim()]));
@@ -186,7 +228,8 @@ export function createRelationshipsView({api, element, container, onSave, onUnmo
   }
   form.onsubmit = event => { event.preventDefault(); applyFilters(); };
   reset.onclick = () => { for (const input of Object.values(fields)) input.value = ''; applyFilters(); };
-  more.onclick = () => load(true);
+  more.onclick = () => load('append');
+  reload.onclick = () => load(current ? 'refresh' : 'replace');
   function setBusy(value) { busy = value; for (const button of body.querySelectorAll('[data-mount-action]')) button.disabled = value; }
   return {show, clear, setBusy};
 }

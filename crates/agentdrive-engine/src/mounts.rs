@@ -468,10 +468,6 @@ impl MountService {
                         operation = self
                             .apply_replacement(operation.clone(), target, revision, merge)
                             .await?;
-                        operation = self
-                            .revisions
-                            .finish_durability(operation.clone(), durability)
-                            .await?;
                     }
                     if let Some(old) = mount {
                         let branch = self.runtime.branch(target.branch).await?;
@@ -497,6 +493,7 @@ impl MountService {
                         .operations
                         .update(&[operation.id], commit, |current| {
                             current.pending = None;
+                            current.error = None;
                             current.mount_ready = Some(true);
                             current.phase = if current.remote_confirmed {
                                 OperationPhase::Complete
@@ -505,7 +502,9 @@ impl MountService {
                             };
                         })
                         .await?;
-                    Ok(records.remove(0))
+                    self.revisions
+                        .finish_durability(records.remove(0), durability)
+                        .await
                 }
                 PendingAction::Transfer { .. } => {
                     Err(Error::invalid("ownership transfer is not a mount action"))
@@ -1053,7 +1052,15 @@ impl MountApi for MountService {
             )
             .await?
         {
-            OperationStart::Existing(record) => return Ok(record),
+            OperationStart::Existing(record)
+                if matches!(
+                    record.phase,
+                    OperationPhase::Complete | OperationPhase::Cancelled
+                ) =>
+            {
+                return Ok(record);
+            }
+            OperationStart::Existing(record) => OperationContext { operation: record },
             OperationStart::New(context) => context,
         };
         let result = async {

@@ -19,6 +19,7 @@ pub struct ReplicaService {
     pub(crate) publication: RwLock<()>,
     workspaces: ProgressMutex<BTreeMap<WorkspaceId, Weak<Mutex<()>>>>,
     uploads: Semaphore,
+    history_refresh: Arc<crate::history_refresh::HistoryRefreshCoordinator>,
 }
 
 fn compatible(previous: &BranchRef, next: &BranchRef) -> bool {
@@ -90,6 +91,7 @@ impl ReplicaService {
             publication: RwLock::new(()),
             workspaces: ProgressMutex::new(BTreeMap::new()),
             uploads: Semaphore::new(4),
+            history_refresh: Arc::new(crate::history_refresh::HistoryRefreshCoordinator::default()),
         })
     }
 
@@ -773,9 +775,31 @@ impl ReplicaPublisher for ReplicaService {
     async fn refresh_history(&self, workspace: WorkspaceId) -> Result<()> {
         self.discover_references(workspace, false).await.map(|_| ())
     }
+
+    fn request_history_refresh(&self, workspace: WorkspaceId) -> HistoryRefreshStatus {
+        self.history_refresh.request(
+            self.content.storage.load_full().as_ref(),
+            workspace,
+            self.runtime.clock.monotonic_ms(),
+        )
+    }
 }
 
 impl ReplicaService {
+    pub(crate) async fn refresh_requested_history(&self) {
+        let attempts = self.history_refresh.begin(
+            self.content.storage.load_full().as_ref(),
+            self.runtime.clock.monotonic_ms(),
+            self.runtime.clock.now_ns(),
+        );
+        futures::stream::iter(attempts)
+            .for_each_concurrent(2, |attempt| async move {
+                let result = self.refresh_history(attempt.workspace).await;
+                attempt.finish(result, self.runtime.clock.now_ns());
+            })
+            .await;
+    }
+
     async fn discover_references(
         &self,
         workspace: WorkspaceId,
@@ -804,7 +828,13 @@ impl ReplicaService {
             .collect();
         let mut result = Vec::new();
         for id in ids {
-            let _gate = self.runtime.lock_branch(id).await;
+            // 观察历史只提交不可变记录和远端引用，引用的新旧由本地事务检查。
+            // 只有接管工作树的显式 pull 需要阻止同一分支的文件修改。
+            let _gate = if adopt {
+                Some(self.runtime.lock_branch(id).await)
+            } else {
+                None
+            };
             let _protection = self.runtime.objects.read().await;
             let refs = self.content.refs().ok_or_else(|| {
                 Error::new(

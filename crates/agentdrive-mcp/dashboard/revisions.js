@@ -59,8 +59,8 @@ export function createRevisionViewer({api, element}) {
   }
   function update(workspace, revisions, branches) {
     if (!dialogContext) return;
-    const revision = revisions.find(revision => revision.id === dialogContext.revision.id);
-    if (dialogContext.workspace !== workspace || !revision) { closeDialog(false); return; }
+    const revision = revisions.find(revision => revision.id === dialogContext.revision.id) || dialogContext.revision;
+    if (dialogContext.workspace !== workspace) { closeDialog(false); return; }
     const branch = branches.find(branch => branch.id === revision.branch);
     const sourceBranch = branch?.name || revision.branch?.slice(0, 8) || '—';
     const isHead = revision.id === branch?.formal_head;
