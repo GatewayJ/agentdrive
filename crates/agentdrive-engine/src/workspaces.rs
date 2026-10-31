@@ -45,6 +45,72 @@ impl WorkspaceService {
         })
     }
 
+    async fn branch_references(
+        &self,
+        workspace: &Workspace,
+        branches: &[Branch],
+    ) -> Result<Vec<BranchRef>> {
+        let mut references = self.runtime.state.remote_refs(workspace.id).await?;
+        for reference in &mut references {
+            if reference.metadata.is_none()
+                && let Some(branch) = branches.iter().find(|branch| branch.id == reference.branch)
+            {
+                reference.metadata = Some(branch.into());
+            }
+        }
+        if references
+            .iter()
+            .any(|reference| reference.metadata.is_none())
+        {
+            // 旧引用的名称和创建来源保存在已同步的操作记录中。
+            let operations = self.runtime.state.operations(workspace.id).await?;
+            let initial = self
+                .runtime
+                .state
+                .revision(workspace.initial_revision)
+                .await?;
+            for reference in references
+                .iter_mut()
+                .filter(|reference| reference.metadata.is_none())
+            {
+                if let Some(branch) = operations
+                    .iter()
+                    .filter(|operation| {
+                        operation.local_saved && operation.workspace == Some(workspace.id)
+                    })
+                    .filter_map(|operation| match &operation.result {
+                        Some(CommandResult::Branch { branch })
+                            if branch.id == reference.branch
+                                && branch.workspace == workspace.id =>
+                        {
+                            Some(branch)
+                        }
+                        _ => None,
+                    })
+                    .max_by_key(|branch| {
+                        (
+                            branch.authority_epoch,
+                            branch.generation,
+                            branch.source_generation,
+                        )
+                    })
+                {
+                    reference.metadata = Some(branch.into());
+                } else if initial
+                    .as_ref()
+                    .is_some_and(|revision| revision.branch == Some(reference.branch))
+                {
+                    reference.metadata = Some(BranchMetadata {
+                        name: "main".into(),
+                        base_revision: workspace.initial_revision,
+                        source_branch: None,
+                    });
+                }
+            }
+        }
+        Ok(references)
+    }
+
     async fn create_workspace(
         &self,
         context: OperationContext,
@@ -447,11 +513,13 @@ impl WorkspaceApi for WorkspaceService {
             .runtime
             .authorize(actor, workspace, None, Permission::Read)
             .await?;
+        let branches = self.runtime.state.branches(workspace.id).await?;
+        let remote_branches = self.branch_references(&workspace, &branches).await?;
         Ok(WorkspaceStatus {
             selected_branch: self.runtime.state.selected_branch(workspace.id).await?,
             location: self.runtime.location,
-            branches: self.runtime.state.branches(workspace.id).await?,
-            remote_branches: self.runtime.state.remote_refs(workspace.id).await?,
+            branches,
+            remote_branches,
             mounts: self
                 .runtime
                 .state
@@ -477,6 +545,16 @@ impl WorkspaceApi for WorkspaceService {
             storage: self.revisions.trees.content.local.stats().await?,
             workspace,
         })
+    }
+
+    async fn refresh_history(&self, actor: &Principal, workspace: WorkspaceId) -> Result<()> {
+        self.runtime
+            .authorize(actor, workspace, None, Permission::Read)
+            .await?;
+        if self.revisions.trees.content.remote().is_some() {
+            self.revisions.publisher.refresh_history(workspace).await?;
+        }
+        Ok(())
     }
 
     async fn import_directory(

@@ -4,7 +4,7 @@ export function createWorkspaceView({element, selectBranch, showRevision, showBr
 
   function render(snapshot, selectedBranch) {
     const {status, revisions, origins} = snapshot;
-    const branches = new Map(status.branches.map(branch => [branch.id, branch]));
+    const branches = new Map(snapshot.branches.map(branch => [branch.id, branch]));
     const revisionById = new Map(revisions.map(revision => [revision.id, revision]));
     const originById = new Map(origins.map(origin => [origin.branch, origin]));
     const mounted = new Map();
@@ -12,7 +12,7 @@ export function createWorkspaceView({element, selectBranch, showRevision, showBr
       if (mount.state === 'ready') mounted.set(mount.branch, (mounted.get(mount.branch) || 0) + 1);
     }
     const visible = new Set();
-    for (const branch of status.branches.filter(branch => branch.state !== 'deleted')) {
+    for (const branch of snapshot.branches.filter(branch => branch.state !== 'deleted')) {
       let id = branch.id;
       while (id && !visible.has(id) && branches.has(id)) {
         visible.add(id); id = originById.get(id)?.source_branch;
@@ -52,14 +52,16 @@ export function createWorkspaceView({element, selectBranch, showRevision, showBr
         }
         const button = element('button', `branch-button${branch.id === selectedBranch ? ' selected' : ''}`);
         button.id = `branch-${branch.id}`; button.type = 'button'; button.setAttribute('aria-pressed', String(branch.id === selectedBranch));
-        button.disabled = branch.state === 'deleted'; button.title = `${branch.name} · 双击预览当前文件`;
-        button.setAttribute('aria-haspopup', 'dialog'); button.setAttribute('aria-controls', 'branch-files-dialog');
+        button.disabled = branch.state === 'deleted'; button.title = `${branch.name} · ${branch.local ? '双击预览当前文件' : '双击查看最近保存的版本'}`;
+        button.setAttribute('aria-haspopup', 'dialog'); button.setAttribute('aria-controls', branch.local ? 'branch-files-dialog' : 'revision-dialog');
         const symbol = element('span', 'branch-symbol', '⑂'); symbol.setAttribute('aria-hidden', 'true');
         const copy = element('span', 'branch-copy');
         copy.append(element('span', 'branch-name', branch.name));
         const badges = element('span', 'branch-badges');
+        const location = element('span', 'default-mark', branch.owner === status.location ? '本机' : `其他节点 ${short(branch.owner)}`);
+        location.title = `location：${branch.owner}`; badges.append(location);
         if (branch.id === status.selected_branch) {
-          const badge = element('span', 'default-mark', '默认'); badge.title = '未指定分支时的本机选择'; badges.append(badge);
+          const badge = element('span', 'default-mark', '本机默认'); badge.title = '未指定分支时的本机选择'; badges.append(badge);
         }
         if (mounted.has(branch.id)) badges.append(element('span', 'mount-mark', `已挂载 ${mounted.get(branch.id)}`));
         if (branch.state === 'deleted') badges.append(element('span', 'branch-unavailable', '已删除'));

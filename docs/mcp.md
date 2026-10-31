@@ -103,7 +103,7 @@ Fields below are inside `request`. A suffix `?` means the field may be omitted. 
 | --- | --- | --- |
 | `workspace_list` | `{}` | Visible workspace array. |
 | `workspace_status` | `workspace` | Workspace, local location, `selected_branch`, branches, remote references, mounts, pending jobs, capabilities, and storage statistics. |
-| `workspace_relationships` | `workspace`, `branch?`, `mount?`, `owner_location?`, `mount_location?`, `mount_state?`, `limit?`, `cursor?` | Authorized branch ownership, local mount bindings and creation origins; bounded pages and explicit remote observation status. |
+| `workspace_relationships` | `workspace`, `search?`, `mounted?`, `include_released?`, `branch?`, `mount?`, `owner_location?`, `mount_location?`, `mount_state?`, `limit?`, `cursor?` | Authorized branch ownership, local mount bindings and creation origins; bounded pages and explicit remote observation status. |
 | `revision_list` | `workspace`, `branch?` | Retained revision array; optional branch filter. |
 | `revision_diff` | `workspace`, `after`; optional `before`, `cursor`, `limit` | `{entries, next, total}`. Omitted `before` means an empty tree. Default page size 100, maximum 200; pass `next` as `cursor`. Entries contain `path`, `previous_path`, `kind`, `before`, `after`. |
 | `revision_text_diff` | `workspace`, `after`, `path`; optional `before`, `previous_path` | File attributes and UTF-8 line hunks with three context lines, old/new line numbers and final-newline information. Status is `text`, `unchanged`, `binary`, `too_large` or `directory`. Maximum 256 KiB and 10,000 lines per side. |
@@ -143,6 +143,8 @@ agentdrive call workspace_relationships --json '{"workspace":"<workspace-id>","l
 ```
 
 The same query is available through `WorkspaceApi::relationships` and bearer-authenticated `GET /api/workspaces/{workspace}/relationships`. HTTP uses query parameters for the filters. `workspace` is required; all filters are optional. `owner_location` identifies the location owning the branch, while `mount_location` identifies the daemon hosting the mount. `mount_state` accepts `preparing`, `ready`, `paused`, `released`, or `recovery_required`.
+
+`search` matches authorized branch names, local paths, principals, branch IDs, mount IDs and owner location IDs using case-insensitive substrings. `mounted: true` selects ready local bindings; `mounted: false` selects rows without a local binding or with a binding that is not ready. `include_released: true` includes retained released bindings. Filtering precedes counts and pagination.
 
 Each entry contains `branch`, optional `mount` and `mount_location`. Branches without current local mounts have a row with `mount: null`. Supplying a mount ID, mount state or mount location restricts results to actual matching bindings. Default listings omit released bindings; an explicit mount ID or `mount_state: "released"` includes retained released bindings. `total` counts authorized matching rows. `selected_branch` reports the observing location's selection when the caller can read that branch.
 

@@ -39,10 +39,14 @@ impl LocalBackend {
                  AND id NOT IN (SELECT id FROM operations)",
                 &args,
             )?;
+            let remote_refs: Vec<ObservedBranchRef> = read_many(
+                &transaction, "SELECT data FROM remote_refs WHERE workspace=?1 ORDER BY id", &args,
+            )?;
             // Read only revisions referenced by origins or mounts, independent of history size.
             let mut ids = std::collections::BTreeSet::from([workspace.initial_revision]);
             ids.extend(branches.iter().map(|branch| branch.base_revision));
             ids.extend(mounts.iter().filter_map(|mount| mount.revision));
+            ids.extend(remote_refs.iter().filter_map(|value| value.reference.metadata.as_ref().map(|metadata| metadata.base_revision)));
             for operation in &creations {
                 if let Some(CommandResult::Branch { branch }) = &operation.result {
                     ids.insert(branch.base_revision);
@@ -64,9 +68,7 @@ impl LocalBackend {
                 selected_branch: selection.map(|value| value.parse()).transpose()?,
                 branches,
                 mounts,
-                remote_refs: read_many(
-                    &transaction, "SELECT data FROM remote_refs WHERE workspace=?1 ORDER BY id", &args,
-                )?,
+                remote_refs,
                 creations,
                 revisions,
             }))

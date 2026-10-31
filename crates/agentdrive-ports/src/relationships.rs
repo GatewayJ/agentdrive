@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct RelationshipFilter {
+    pub search: Option<String>,
+    pub mounted: Option<bool>,
+    pub include_released: bool,
     pub branch: Option<BranchId>,
     pub mount: Option<MountId>,
     pub owner_location: Option<LocationId>,

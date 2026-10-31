@@ -427,6 +427,23 @@ pub enum HistoryRecord {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct BranchMetadata {
+    pub name: String,
+    pub base_revision: RevisionId,
+    pub source_branch: Option<BranchId>,
+}
+
+impl From<&Branch> for BranchMetadata {
+    fn from(branch: &Branch) -> Self {
+        Self {
+            name: branch.name.clone(),
+            base_revision: branch.base_revision,
+            source_branch: branch.source_branch,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BranchRef {
     pub workspace: WorkspaceId,
     pub branch: BranchId,
@@ -441,6 +458,8 @@ pub struct BranchRef {
     pub record_index: ObjectRef,
     pub deleted: bool,
     pub write_stopped: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<BranchMetadata>,
 }
 
 /// A locally retained observation. Additional fields are absent in older databases.

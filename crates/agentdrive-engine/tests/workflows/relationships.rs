@@ -117,6 +117,49 @@ async fn relationships_keep_creation_roots_and_filter_mount_identities() {
     .await;
     assert_eq!(remote_mounts.total, 0);
     assert!(!remote_mounts.remote_mounts_known);
+    for search in [
+        "CHILD".to_owned(),
+        mount.id.to_string()[..8].to_owned(),
+        mount.path.to_string_lossy().into_owned(),
+    ] {
+        let found = query(
+            &harness,
+            workspace.id,
+            RelationshipFilter {
+                search: Some(search),
+                mounted: Some(true),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(found.total, 1);
+        assert_eq!(found.entries[0].mount.as_ref().unwrap().id, mount.id);
+    }
+    let unmounted = query(
+        &harness,
+        workspace.id,
+        RelationshipFilter {
+            mounted: Some(false),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(unmounted.entries.iter().all(|entry| {
+        entry
+            .mount
+            .as_ref()
+            .is_none_or(|mount| mount.state != MountState::Ready)
+    }));
+    let none = query(
+        &harness,
+        workspace.id,
+        RelationshipFilter {
+            search: Some("unknown-directory".into()),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(none.total, 0);
 }
 
 #[tokio::test]

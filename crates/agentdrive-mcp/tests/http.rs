@@ -857,6 +857,128 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
     );
     owner.close().await.unwrap();
     visitor.close().await.unwrap();
+    for page in [
+        "/mounts",
+        "/branches",
+        "/management.js",
+        "/commands.js",
+        "/management.css",
+    ] {
+        assert_eq!(
+            http.get(format!("{base}{page}"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+    }
+    let command_url = format!("{base}/api/commands/branch_create");
+    let create = json!({"request_id":"dashboard-create", "request":{
+        "workspace":workspace, "source_branch":branch, "name":"feat/dashboard"}});
+    assert_eq!(
+        http.post(&command_url)
+            .json(&create)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    assert_eq!(
+        http.post(&command_url)
+            .bearer_auth(visitor_token)
+            .json(&create)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    assert_eq!(
+        http.post(&command_url)
+            .bearer_auth(owner_token)
+            .header("Origin", "https://untrusted.example")
+            .json(&create)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let created: Value = http
+        .post(&command_url)
+        .bearer_auth(owner_token)
+        .json(&create)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(created["local_saved"], true);
+    let repeated: Value = http
+        .post(&command_url)
+        .bearer_auth(owner_token)
+        .json(&create)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(created["id"], repeated["id"]);
+    let mut forged = create.clone();
+    forged["principal"] = json!("owner");
+    assert_eq!(
+        http.post(&command_url)
+            .bearer_auth(owner_token)
+            .json(&forged)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    assert_eq!(
+        http.post(format!("{base}/api/commands/workspace_create"))
+            .bearer_auth(owner_token)
+            .json(&create)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    let child = created["result"]["branch"]["id"].clone();
+    let prepared: Value = http.post(format!("{base}/api/commands/mount_prepare")).bearer_auth(owner_token)
+        .json(&json!({"request_id":"dashboard-mount", "request":{"workspace":workspace,"branch":child,"path":temporary.path().join("dashboard-mount")}}))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(prepared["mount_ready"], true, "{prepared}");
+    let binding = &prepared["result"]["binding"];
+    let saved: Value = http.post(format!("{base}/api/commands/mount_save")).bearer_auth(owner_token)
+        .json(&json!({"request_id":"dashboard-save", "request":{"mount":binding["id"],"expected_binding_generation":binding["generation"]}}))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(saved["local_saved"], true);
+    let unmounted: Value = http.post(format!("{base}/api/commands/mount_unmount")).bearer_auth(owner_token)
+        .json(&json!({"request_id":"dashboard-unmount", "request":{"mount":binding["id"],"generation":binding["generation"]}}))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(unmounted["phase"], "complete", "{unmounted}");
+    let switched: Value = http.post(format!("{base}/api/commands/branch_switch")).bearer_auth(owner_token)
+        .json(&json!({"request_id":"dashboard-switch", "request":{"workspace":workspace,"branch":child}}))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(switched["phase"], "complete", "{switched}");
+    let inspected: Value = http
+        .post(format!("{base}/api/commands/operation_get"))
+        .bearer_auth(owner_token)
+        .json(&json!({"operation":created["id"]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(inspected["id"], created["id"]);
     cancellation.cancel();
     server.abort();
 }

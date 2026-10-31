@@ -100,7 +100,15 @@ agentdrive integrate --protocol codex-app-server --workspace "$WORKSPACE" \
 
 协议参考：[ACP 会话](https://agentclientprotocol.com/protocol/v1/session-setup)、[ACP 回合](https://agentclientprotocol.com/protocol/v1/prompt-turn)、[Codex app-server](https://developers.openai.com/codex/app-server/)。
 
-顶部显示当前工作区的工作分支数量、本机挂载点数量、被就绪挂载使用的不同分支数量和远程同步状态。挂载点统计排除已释放记录，准备中、暂停和待恢复记录保留并显示状态。分支图按 `source_branch` 与 `base_revision` 连接到创建来源版本，点击版本可查看信息；来源版本可能是 commit、自动保存或检查点。“默认”表示本机未指定 branch 时的选择，“已挂载”显示就绪目录数量。“分支与挂载关系”面板通过关系查询接口显示写入所属 location、本机挂载路径、principal、访问模式、挂载状态及创建来源。支持按照 branch、挂载状态、mount ID、owner location 和 mount location 筛选。展开记录详情可查看远端观测版本与时间，展开创建来源可查看创建时捕获的内容对象。远端挂载、远端默认分支和机器在线状态标记为未知。每页最多显示 50 条，点击“继续加载”读取后续记录。自动刷新和手动刷新保留筛选条件，并重新读取第一页。
+顶部显示当前工作区的工作分支数量、本机挂载点数量、被就绪挂载使用的不同分支数量和远程同步状态。挂载点统计排除已释放记录，准备中、暂停和待恢复记录保留并显示状态。分支图按 `source_branch` 与 `base_revision` 连接到创建来源版本，点击版本可查看信息；来源版本可能是 commit、自动保存或检查点。“默认”表示本机未指定 branch 时的选择，“已挂载”显示就绪目录数量。
+
+**挂载点管理**（`/mounts`）提供分支、本机目录和访问方式选择，支持创建挂载点、保存目录内容和卸载。一个分支在本机只能有一个读写挂载点。目录需要位于 daemon 配置的 `mount_roots` 中；这里只管理当前 AgentDrive 所在机器的目录。
+
+页面中的 **分支与挂载关系** 通过关系查询接口显示写入所属 location、本机挂载路径、principal、访问模式、挂载状态和创建来源。支持搜索分支名称、本机目录、使用者和短 ID，以及按照分支、写入所属 location、本机挂载情况筛选。“更多筛选”提供具体挂载状态、挂载位置、完整 mount ID 和已释放记录。查询条件保存在 URL 中，清空筛选恢复全部分支。每页最多显示 50 条，点击“继续加载”读取后续记录；刷新保留条件并重新读取第一页。展开记录详情可查看远端观测版本与时间，展开创建来源可查看创建时捕获的内容对象。远端挂载、远端默认分支和机器在线状态标记为未知。
+
+**分支管理**（`/branches`）支持选择来源分支、来源内容和名称创建分支。本机分支可通过 `source_branch` 捕获当前工作内容，包括尚未提交的修改；指定已保存版本时使用 `source`，其他 location 的分支也使用此方式。两个来源参数互斥。列表展示全部已知分支及其来源，本机可写分支提供切换和挂载入口。切换使用会更新本机默认分支，并切换原默认分支正在使用的挂载目录。
+
+页面通过 `POST /api/commands/{command}` 调用现有 MCP 服务。允许的操作为 `branch_create`、`branch_switch`、`mount_prepare`、`mount_save`、`mount_unmount`、`mount_release`、`operation_get` 和 `operation_by_request`，参数结构与对应 MCP 工具一致。请求需要 Bearer 认证，权限和 binding generation 校验由原有服务执行。操作进度分别显示 `local_saved`、`remote_confirmed` 和 `mount_ready`。页面为每次操作保存稳定的 `request_id`，刷新或请求中断后可查询结果、重试原请求。目录被占用时显示释放占用提示与继续操作按钮；退出登录会清除浏览器保存的操作记录。
 
 分支提示分为“有未保存修改”（`mutation_seq != saved_seq`）、“已自动保存 · 有未提交修改”（序号相同且 `dirty` 为真）和“已提交”（序号相同且 `dirty` 为假）。已保存表示内容已有本地持久化检查点；检查点已保存、自动保存版本尚未生成时，悬浮说明会解释此状态。远程确认通过同步卡片展示，停止写入的状态单独显示。
 

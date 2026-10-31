@@ -39,7 +39,34 @@ pub(crate) fn api(services: Services) -> Router {
             get(branch_file),
         )
         .route("/api/lifecycle", post(lifecycle))
+        .route("/api/commands/{command}", post(management_command))
         .with_state(services)
+}
+
+async fn management_command(
+    State(services): State<Services>,
+    Extension(actor): Extension<Principal>,
+    Path(command): Path<String>,
+    Json(arguments): Json<Value>,
+) -> std::result::Result<Json<Value>, ApiError> {
+    if !matches!(
+        command.as_str(),
+        "branch_create"
+            | "branch_switch"
+            | "mount_prepare"
+            | "mount_save"
+            | "mount_unmount"
+            | "mount_release"
+            | "operation_get"
+            | "operation_by_request"
+    ) {
+        return Err(Error::new(ErrorCode::NotFound, "unknown management command").into());
+    }
+    Ok(Json(
+        crate::McpServer::new(services, actor)
+            .dispatch(&command, arguments)
+            .await?,
+    ))
 }
 
 pub(crate) fn settings_api(settings: Arc<ConfigStore>) -> Router {
@@ -74,6 +101,11 @@ pub(crate) fn assets() -> Router {
         .route("/archive", get(|| async { Html(include_str!("../dashboard/index.html")) }))
         .route("/settings", get(|| async { Html(include_str!("../dashboard/index.html")) }))
         .route("/dashboard", get(|| async { Html(include_str!("../dashboard/index.html")) }))
+        .route("/mounts", get(|| async { Html(include_str!("../dashboard/index.html")) }))
+        .route("/branches", get(|| async { Html(include_str!("../dashboard/index.html")) }))
+        .route("/management.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/management.js")) }))
+        .route("/commands.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/commands.js")) }))
+        .route("/management.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], include_str!("../dashboard/management.css")) }))
         .route("/dashboard.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/dashboard.js")) }))
         .route("/workspace.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/workspace.js")) }))
         .route("/relationships.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/relationships.js")) }))
@@ -125,9 +157,16 @@ async fn workspace(
     Extension(actor): Extension<Principal>,
     Path(workspace): Path<WorkspaceId>,
 ) -> std::result::Result<Json<WorkspaceView>, ApiError> {
+    let remote_error = services
+        .workspace
+        .refresh_history(&actor, workspace)
+        .await
+        .err();
     let status = services.workspace.status(&actor, workspace).await?;
     let revisions = services.revisions.list(&actor, workspace, None).await?;
-    Ok(Json(WorkspaceView::new(status, revisions)))
+    let mut view = WorkspaceView::new(status, revisions);
+    view.remote_error = remote_error;
+    Ok(Json(view))
 }
 
 // File browsing only needs current workspace state, independent of history size.

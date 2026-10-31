@@ -157,6 +157,7 @@ pub trait ReplicaPublisher: Send + Sync {
         operation: &OperationRecord,
     ) -> Result<SyncJob>;
     async fn discover(&self, workspace: WorkspaceId) -> Result<Vec<BranchRef>>;
+    async fn refresh_history(&self, workspace: WorkspaceId) -> Result<()>;
 }
 
 #[async_trait]

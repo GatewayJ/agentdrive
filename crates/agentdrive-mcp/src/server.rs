@@ -26,7 +26,7 @@ impl McpServer {
         }
     }
 
-    async fn dispatch(&self, name: &str, arguments: Value) -> Result<Value> {
+    pub(crate) async fn dispatch(&self, name: &str, arguments: Value) -> Result<Value> {
         macro_rules! command {
             ($request:ty, $api:ident, $method:ident) => {{
                 let input: Command<$request> = parse(arguments)?;
