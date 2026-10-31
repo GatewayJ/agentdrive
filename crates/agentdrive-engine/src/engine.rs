@@ -196,6 +196,11 @@ impl Engine {
         first_error.map_or(Ok(()), Err)
     }
 
+    /// 仅处理 Dashboard 已请求的工作区，各工作区共享刷新结果。
+    pub async fn refresh_requested_history(&self) {
+        self.publisher.refresh_requested_history().await;
+    }
+
     pub async fn flush_local(&self) -> Result<()> {
         for workspace in self.runtime.state.workspaces().await? {
             for branch in self.runtime.state.branches(workspace.id).await? {

@@ -19,6 +19,10 @@ pub(crate) fn api(services: Services) -> Router {
         .route("/api/workspaces/{workspace}", get(workspace))
         .route("/api/workspaces/{workspace}/archive", get(archive))
         .route(
+            "/api/workspaces/{workspace}/branches/{branch}/history",
+            get(branch_history),
+        )
+        .route(
             "/api/workspaces/{workspace}/relationships",
             get(relationships),
         )
@@ -107,6 +111,8 @@ pub(crate) fn assets() -> Router {
         .route("/commands.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/commands.js")) }))
         .route("/management.css", get(|| async { ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], include_str!("../dashboard/management.css")) }))
         .route("/dashboard.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/dashboard.js")) }))
+        .route("/history.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/history.js")) }))
+        .route("/sync-status.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/sync-status.js")) }))
         .route("/workspace.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/workspace.js")) }))
         .route("/relationships.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/relationships.js")) }))
         .route("/settings.js", get(|| async { ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8")], include_str!("../dashboard/settings.js")) }))
@@ -157,16 +163,65 @@ async fn workspace(
     Extension(actor): Extension<Principal>,
     Path(workspace): Path<WorkspaceId>,
 ) -> std::result::Result<Json<WorkspaceView>, ApiError> {
-    let remote_error = services
+    let remote_refresh = services
         .workspace
-        .refresh_history(&actor, workspace)
-        .await
-        .err();
+        .request_history_refresh(&actor, workspace)
+        .await?;
     let status = services.workspace.status(&actor, workspace).await?;
-    let revisions = services.revisions.list(&actor, workspace, None).await?;
+    let mut ids = std::collections::BTreeSet::from([status.workspace.initial_revision]);
+    for branch in &status.branches {
+        ids.extend([branch.formal_head, branch.base_revision]);
+        ids.extend(branch.autosave_head);
+    }
+    for branch in &status.remote_branches {
+        ids.insert(branch.formal_head);
+        ids.extend(branch.autosave_head);
+        ids.extend(
+            branch
+                .metadata
+                .as_ref()
+                .map(|metadata| metadata.base_revision),
+        );
+    }
+    let revisions = services
+        .revisions
+        .metadata(&actor, workspace, ids.into_iter().collect())
+        .await?;
     let mut view = WorkspaceView::new(status, revisions);
-    view.remote_error = remote_error;
+    view.remote_error = remote_refresh.error.clone();
+    view.remote_refresh = Some(remote_refresh);
     Ok(Json(view))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoryQuery {
+    search: Option<String>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn branch_history(
+    State(services): State<Services>,
+    Extension(actor): Extension<Principal>,
+    Path((workspace, branch)): Path<(WorkspaceId, BranchId)>,
+    Query(query): Query<HistoryQuery>,
+) -> std::result::Result<Json<RevisionHistoryPage>, ApiError> {
+    Ok(Json(
+        services
+            .revisions
+            .history(
+                &actor,
+                RevisionHistoryQuery {
+                    workspace,
+                    branch,
+                    search: query.search,
+                    cursor: query.cursor,
+                    limit: query.limit,
+                },
+            )
+            .await?,
+    ))
 }
 
 // File browsing only needs current workspace state, independent of history size.

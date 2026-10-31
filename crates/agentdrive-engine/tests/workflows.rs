@@ -4,6 +4,8 @@ use agentdrive_config::{
 use agentdrive_engine::*;
 use agentdrive_local::LocalBackend;
 use agentdrive_model::*;
+#[path = "workflows/history.rs"]
+mod history;
 #[path = "workflows/relationships.rs"]
 mod relationships;
 use agentdrive_ports::*;

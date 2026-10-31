@@ -2,7 +2,7 @@
   "name": "agentdrive-dashboard-tests",
   "private": true,
   "scripts": {
-    "test": "node --test dashboard.test.cjs",
+    "test": "node --test *.test.cjs",
     "screenshots": "node screenshots.cjs"
   },
   "devDependencies": {

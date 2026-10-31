@@ -56,6 +56,7 @@ pub struct WorkspaceStatus {
     pub pending_jobs: usize,
     pub capabilities: Capabilities,
     pub storage: StorageStats,
+    pub synchronization: crate::WorkspaceSynchronization,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
@@ -322,6 +323,11 @@ pub trait WorkspaceApi: Send + Sync {
         query: crate::WorkspaceRelationshipsQuery,
     ) -> Result<crate::WorkspaceRelationships>;
     async fn refresh_history(&self, actor: &Principal, workspace: WorkspaceId) -> Result<()>;
+    async fn request_history_refresh(
+        &self,
+        actor: &Principal,
+        workspace: WorkspaceId,
+    ) -> Result<crate::HistoryRefreshStatus>;
     async fn import_directory(
         &self,
         context: RequestContext,
@@ -352,6 +358,17 @@ pub trait RevisionApi: Send + Sync {
         actor: &Principal,
         workspace: WorkspaceId,
         branch: Option<BranchId>,
+    ) -> Result<Vec<Revision>>;
+    async fn history(
+        &self,
+        actor: &Principal,
+        query: crate::RevisionHistoryQuery,
+    ) -> Result<crate::RevisionHistoryPage>;
+    async fn metadata(
+        &self,
+        actor: &Principal,
+        workspace: WorkspaceId,
+        ids: Vec<RevisionId>,
     ) -> Result<Vec<Revision>>;
     async fn diff(
         &self,

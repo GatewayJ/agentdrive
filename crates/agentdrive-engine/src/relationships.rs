@@ -221,10 +221,7 @@ fn ownership(
     location: LocationId,
 ) -> Result<(RelationshipOwnership, BranchState)> {
     let use_remote = observation.is_some_and(|observation| {
-        branch.is_none_or(|branch| {
-            branch.owner != location
-                || observation.reference.source_generation > branch.source_generation
-        })
+        branch.is_none_or(|branch| observation.reference.supersedes_local(branch, location))
     });
     let result = if use_remote {
         let observation = observation.unwrap();

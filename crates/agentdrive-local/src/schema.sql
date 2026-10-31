@@ -14,6 +14,11 @@ CREATE TABLE IF NOT EXISTS nodes (
     FOREIGN KEY(branch) REFERENCES branches(id)
 );
 CREATE TABLE IF NOT EXISTS revisions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, data BLOB NOT NULL);
+CREATE INDEX IF NOT EXISTS revisions_workspace ON revisions(workspace,id);
+CREATE INDEX IF NOT EXISTS revisions_branch_history ON revisions(
+    workspace,json_extract(CAST(data AS TEXT),'$.branch'),
+    json_extract(CAST(data AS TEXT),'$.created_ns') DESC,id
+);
 CREATE TABLE IF NOT EXISTS operations (
     id TEXT PRIMARY KEY,
     principal TEXT NOT NULL,

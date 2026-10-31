@@ -446,6 +446,49 @@ async fn concurrent_mcp_clients_share_operations_and_enforce_principals() {
         400
     );
     let revision = view["revisions"][0]["id"].as_str().unwrap();
+    let history_url = format!(
+        "{base}/api/workspaces/{}/branches/{branch}/history?limit=1",
+        workspace.as_str().unwrap()
+    );
+    assert_eq!(http.get(&history_url).send().await.unwrap().status(), 401);
+    assert_eq!(
+        http.get(&history_url)
+            .bearer_auth(visitor_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let history_response = http
+        .get(&history_url)
+        .bearer_auth(owner_token)
+        .send()
+        .await
+        .unwrap();
+    assert!(history_response.status().is_success());
+    assert_eq!(history_response.headers()["cache-control"], "no-store");
+    let history: Value = history_response.json().await.unwrap();
+    assert_eq!(history["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(history["entries"][0]["branch"], branch);
+    assert_eq!(
+        http.get(history_url.replace("limit=1", "limit=201"))
+            .bearer_auth(owner_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    assert_eq!(
+        http.get(format!("{history_url}&unknown=true"))
+            .bearer_auth(owner_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
     let changes_url = format!(
         "{base}/api/workspaces/{}/revisions/{revision}/changes",
         workspace.as_str().unwrap()

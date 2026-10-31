@@ -1,4 +1,5 @@
 import { createCommandPanel } from './commands.js';
+import { createRevisionSource } from './history.js';
 
 export function createManagementPage({api, element, container, kind, changed, onBusy = () => {}}) {
   const mounts = kind === 'mounts';
@@ -38,6 +39,7 @@ export function createManagementPage({api, element, container, kind, changed, on
   const rows = element('div', 'management-rows'); rows.id = `${kind}-list`; listing.append(listHeader, rows);
   content.append(operationHost, formPanel); if (!mounts) content.append(listing); container.append(heading, empty, content);
   let snapshot = null, project = null, busy = false;
+  const source = !mounts && createRevisionSource({api, element, select:revisionInput, form, changed:updateBusy});
   const runner = createCommandPanel({api, element, container:operationHost, scope:kind, changed,
     setBusy:value => { busy = value; updateBusy(); onBusy(value); }});
   function updateBusy() {
@@ -48,7 +50,7 @@ export function createManagementPage({api, element, container, kind, changed, on
   function eligible() {
     if (!snapshot) return [];
     return snapshot.branches.filter(branch => branch.state !== 'deleted' &&
-      (!mounts || branch.local && (inputs.access.value === 'read_only' || branch.owner === snapshot.status.location && branch.state === 'writable')));
+      (!mounts || (branch.local_available ?? branch.local) && (inputs.access.value === 'read_only' || branch.owner === snapshot.status.location && branch.state === 'writable')));
   }
   function options(input, values, fallback) {
     const selected = input.value;
@@ -59,14 +61,15 @@ export function createManagementPage({api, element, container, kind, changed, on
     input.value = values.some(([id]) => id === selected) ? selected : values.some(([id]) => id === fallback) ? fallback : values[0]?.[0] || '';
   }
   function sourceOptions() {
-    if (!snapshot || mounts) return;
+    if (!snapshot) return;
     const branch = snapshot.branches.find(branch => branch.id === branchInput.value);
-    const revisions = snapshot.revisions.filter(revision => revision.branch === branch?.id || revision.id === branch?.formal_head || revision.id === branch?.autosave_head)
-      .sort((a,b) => b.created_ns-a.created_ns);
-    const values = revisions.map(revision => [revision.id, `${revision.message || {commit:'提交',autosave:'自动保存',checkpoint:'检查点'}[revision.kind] || '版本'} · ${revision.id.slice(0,8)}`]);
-    if (branch?.local) values.unshift(['working', '当前工作内容（包含尚未提交的修改）']);
-    options(revisionInput, values, branch?.local ? 'working' : branch?.autosave_head || branch?.formal_head);
-    submit.disabled = busy || !values.length;
+    if (mounts) {
+      hint.textContent = inputs.access.value === 'read_only' && branch && !branch.local
+        ? `只读挂载固定到保存版本 ${(branch.autosave_head || branch.formal_head).slice(0,8)}。`
+        : '目录位于当前 AgentDrive 所在机器。一个分支在本机只能有一个读写挂载点。';
+      return;
+    }
+    source.show(project, branch, snapshot.revisions);
   }
   function action(parent, label, callback, unavailable = false) {
     const button = element('button', 'secondary', label); button.type = 'button';
@@ -104,7 +107,7 @@ export function createManagementPage({api, element, container, kind, changed, on
   function show(data) {
     const previous = project; snapshot = data; project = data?.status.workspace.id || null;
     content.hidden = !data; empty.hidden = !!data;
-    if (!data) { runner.clear(); return; }
+    if (!data) { runner.clear(); if (source) source.clear(); return; }
     if (previous !== project) { form.reset(); for (const input of Object.values(inputs)) delete input.dataset.options; }
     locationLabel.textContent = `本机 location ${data.status.location.slice(0,8)}`;
     const requested = new URLSearchParams(location.search).get('branch');
@@ -112,13 +115,17 @@ export function createManagementPage({api, element, container, kind, changed, on
     hint.textContent = mounts ? '目录位于当前 AgentDrive 所在机器。一个分支在本机只能有一个读写挂载点。' : '选择准确的来源内容；创建完成后，可以切换使用或挂载到本机目录。';
     sourceOptions(); if (!mounts) renderRows(); runner.show(project); updateBusy();
   }
-  function clear() { snapshot = null; project = null; rows.replaceChildren(); form.reset(); runner.clear(); content.hidden = true; }
+  function clear() { snapshot = null; project = null; rows.replaceChildren(); form.reset(); if (source) source.clear(); runner.clear(); content.hidden = true; }
   form.onsubmit = event => {
     event.preventDefault(); if (busy || !snapshot) return;
     const textInput = mounts ? inputs.path : inputs.name;
     textInput.setCustomValidity(textInput.value.trim() ? '' : '请填写有效内容。');
     if (!form.reportValidity()) return;
-    if (mounts) runner.run('mount_prepare', {workspace:project, branch:branchInput.value, path:inputs.path.value.trim(), access:inputs.access.value, durability:'local'}, '创建挂载点');
+    if (mounts) {
+      const branch = snapshot.branches.find(branch => branch.id === branchInput.value);
+      const revision = inputs.access.value === 'read_only' && !branch.local ? branch.autosave_head || branch.formal_head : undefined;
+      runner.run('mount_prepare', {workspace:project, branch:branchInput.value, revision, path:inputs.path.value.trim(), access:inputs.access.value, durability:'local'}, '创建挂载点');
+    }
     else {
       const source = revisionInput.value === 'working' ? {source_branch:branchInput.value} : {source:revisionInput.value};
       runner.run('branch_create', {workspace:project, name:inputs.name.value.trim(), ...source}, '创建分支');

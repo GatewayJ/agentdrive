@@ -463,6 +463,16 @@ impl LocalStateStore for LocalBackend {
         )
         .await
     }
+    async fn revision_metadata(
+        &self,
+        workspace: WorkspaceId,
+        ids: Vec<RevisionId>,
+    ) -> Result<Vec<Revision>> {
+        self.read_revision_metadata(workspace, ids).await
+    }
+    async fn revision_history(&self, query: RevisionHistoryScan) -> Result<(Vec<Revision>, usize)> {
+        self.read_revision_history(query).await
+    }
     async fn operation(&self, id: OperationId) -> Result<Option<OperationRecord>> {
         self.one(
             "SELECT data FROM operations WHERE id=?1 UNION ALL SELECT data FROM replicated_operations WHERE id=?1 LIMIT 1",

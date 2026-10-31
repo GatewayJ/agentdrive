@@ -35,7 +35,7 @@ impl McpServer {
                     request_id: input.request_id,
                 };
                 context.validate()?;
-                encode(self.services.$api.$method(context, input.request).await?)
+                encode_operation(self.services.$api.$method(context, input.request).await?)
             }};
         }
         match name {
@@ -136,7 +136,7 @@ impl McpServer {
             }
             "operation_get" => {
                 let input: OperationQuery = parse(arguments)?;
-                encode(
+                encode_operation(
                     self.services
                         .operations
                         .get(&self.principal, input.operation)
@@ -145,7 +145,7 @@ impl McpServer {
             }
             "operation_by_request" => {
                 let input: RequestQuery = parse(arguments)?;
-                encode(
+                encode_operation(
                     self.services
                         .operations
                         .by_request(&self.principal, &input.request_id)
@@ -154,7 +154,7 @@ impl McpServer {
             }
             "operation_cancel" => {
                 let input: OperationQuery = parse(arguments)?;
-                encode(
+                encode_operation(
                     self.services
                         .operations
                         .cancel(&self.principal, input.operation)
@@ -168,7 +168,7 @@ impl McpServer {
                     request_id: input.request_id,
                 };
                 context.validate()?;
-                encode(
+                encode_operation(
                     self.services
                         .mounts
                         .unmount(context, input.request.mount, input.request.generation)
@@ -184,6 +184,19 @@ fn parse<T: DeserializeOwned>(value: Value) -> Result<T> {
 }
 fn encode(value: impl Serialize) -> Result<Value> {
     serde_json::to_value(value).map_err(|error| Error::integrity(error.to_string()))
+}
+
+fn encode_operation(record: OperationRecord) -> Result<Value> {
+    #[derive(Serialize)]
+    struct Response {
+        #[serde(flatten)]
+        record: OperationRecord,
+        recovery: Option<OperationRecovery>,
+    }
+    encode(Response {
+        recovery: record.recovery(),
+        record,
+    })
 }
 
 impl ServerHandler for McpServer {
@@ -444,3 +457,7 @@ pub fn tool_catalog() -> Vec<Tool> {
         ),
     ]
 }
+
+#[cfg(test)]
+#[path = "recovery_tests.rs"]
+mod recovery_tests;
